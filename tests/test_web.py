@@ -19,7 +19,7 @@ STATE = {
                                                     "resets_at": "2026-10-17T16:40:00+00:00",
                                                     "observed_at": (NOW - dt.timedelta(minutes=3)).isoformat(),
                                                     "from": "worker-a"}},
-                           "tokens_today": {"worker-a": 12345}}},
+                           "tokens_today": {"worker-a": {"new": 12345, "cached": 800000}}}},
     "approvals": {"pending": [], "grants": {"worker-a": [{"kind": "domain", "value": "arxiv.org",
                                                           "granted_by": "alice",
                                                           "expires": "2026-10-17T16:00:00+00:00"}]}},
@@ -29,8 +29,10 @@ STATE = {
 def test_render():
     page = web.render(STATE)
     assert "<script>alert(1)</script>" not in page and "&lt;script&gt;" in page
-    assert "62%" in page and "3 min ago" in page and "from worker-a" in page
-    assert "arxiv.org" in page and "12,345" in page and "busy" in page
+    assert "62% used" in page and "3 min ago" in page and "from worker-a" in page
+    assert "Current session" in page and "resets in" in page
+    assert "arxiv.org" in page and "12k" in page and "800k" in page and "busy" in page
+    assert "aria-valuenow='62'" in page
     assert web.render(None).startswith("<!doctype html>")
 
 
@@ -78,3 +80,15 @@ def test_event_log(tmp_path):
     evs = log.read(since=dt.timedelta(hours=1))
     assert evs[0]["text"] == "Bash: nvidia-smi" and evs[0]["task"] == "t-1"
     assert "more characters" in evs[1]["text"] and len(evs[1]["text"]) < 2100
+
+
+def test_meter_without_percentage():
+    html = web._meter("five_hour", {"status": "allowed", "utilization": None,
+                                    "resets_at": (NOW + dt.timedelta(hours=2, minutes=52)).isoformat(),
+                                    "observed_at": NOW.isoformat(), "from": "mgr"})
+    assert "Within limit" in html and "no percentage reported" in html and "meter" not in html.split("mstatus")[0].split("mhead")[0]
+    assert "resets in 2 h 5" in html
+
+
+def test_human_numbers():
+    assert web.human(888114) == "888k" and web.human(1_234_567) == "1.2M" and web.human(42) == "42"

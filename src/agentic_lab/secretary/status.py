@@ -86,8 +86,10 @@ async def collect(lab, workers: Workers, broker=None, local_units=None, managers
                 if kind not in limits or lim.get("observed_at", "") > limits[kind].get("observed_at", ""):
                     limits[kind] = {**lim, "from": aid}
             for model, t in ((u.get("days") or {}).get(today) or {}).items():
-                acc = tokens_today.setdefault(aid, 0)
-                tokens_today[aid] = acc + sum(t.values())
+                acc = tokens_today.setdefault(aid, {"new": 0, "cached": 0})
+                acc["cached"] += t.get("cacheReadInputTokens", 0)
+                acc["new"] += (t.get("inputTokens", 0) + t.get("outputTokens", 0)
+                               + t.get("cacheCreationInputTokens", 0))
         accounts[hid] = {"name": (h or {}).get("name") or hid, "agents": mine,
                          "limits": limits, "tokens_today": tokens_today}
 

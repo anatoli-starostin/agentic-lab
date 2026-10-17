@@ -58,6 +58,7 @@ class UsageLog:
                 "resets_at": (dt.datetime.fromtimestamp(resets, dt.timezone.utc).isoformat()
                               if resets else None),
                 "observed_at": _now().isoformat(timespec="seconds"),
+                "raw": get("raw"),          # everything the CLI sent, for later fields
             }
             self._save(data)
 

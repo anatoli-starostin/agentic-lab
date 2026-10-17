@@ -17,10 +17,12 @@ from starlette.routing import Route
 REFRESH_S = 20
 CSS = """
 :root{--bg:#f6f7f9;--card:#fff;--fg:#1d2330;--muted:#6b7280;--line:#e3e6eb;--ok:#1f8a4c;
---warn:#b7791f;--bad:#c53030;--bar:#3b82f6;--barbg:#e5e7eb}
+--warn:#b7791f;--bad:#c53030;--bar:#3b82f6;--barbg:#e5e7eb;
+--meter:#2a78d6;--good:#0ca30c;--warning:#b7791f;--critical:#d03b3b;--tnew:#1c5cab;
+--tcache:#86b6ef}
 @media (prefers-color-scheme:dark){:root{--bg:#12151b;--card:#1a1f27;--fg:#e6e9ef;
 --muted:#9aa3b2;--line:#2a313c;--ok:#48bb78;--warn:#ecc94b;--bad:#fc8181;--bar:#60a5fa;
---barbg:#2a313c}}
+--barbg:#2a313c;--meter:#3987e5;--warning:#fab219;--tnew:#6da7ec;--tcache:#184f95}}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);
 font:14px/1.45 system-ui,-apple-system,Segoe UI,sans-serif}
 header{padding:18px 24px;border-bottom:1px solid var(--line);display:flex;
@@ -34,6 +36,19 @@ td,th{text-align:left;padding:5px 6px;border-top:1px solid var(--line);vertical-
 th{font-weight:600;color:var(--muted);font-size:12px;border-top:none}
 .bar{height:8px;background:var(--barbg);border-radius:4px;overflow:hidden;margin:4px 0}
 .bar>i{display:block;height:100%;background:var(--bar)}
+a{color:inherit}h3{font-size:14px;margin:14px 0 6px}.account+.account{border-top:1px solid var(--line);
+margin-top:14px;padding-top:6px}.mblock{margin:12px 0}.mhead{display:flex;
+justify-content:space-between;gap:8px}.meter{height:10px;background:var(--barbg);
+border-radius:5px;overflow:hidden;margin:6px 0 4px}.meter>i{display:block;height:100%;
+border-radius:5px}.mfoot{font-size:13px}.mstatus{margin:6px 0 2px}.mstatus.good{color:var(--good)}
+.mstatus.warning,.warning{color:var(--warning)}.mstatus.critical,.critical{color:var(--critical)}
+.legend{display:flex;gap:14px;flex-wrap:wrap;margin:4px 0 8px;color:var(--muted)}
+.sw{display:inline-block;width:10px;height:10px;border-radius:2px;margin-right:5px;
+vertical-align:-1px}.trow{display:grid;grid-template-columns:120px 1fr;gap:2px 10px;
+align-items:center;margin:6px 0}.tname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tbar{display:flex;gap:2px;height:12px}.tbar>i{display:block;height:100%}
+.tbar>i:first-child{border-radius:4px 0 0 4px}.tbar>i:last-child{border-radius:0 4px 4px 0}
+.tnew{background:var(--tnew)}.tcache{background:var(--tcache)}.tval{grid-column:2}
 a{color:inherit}.pill{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--line);
 font-size:12px}code{font-size:12px;word-break:break-all}
 @media (max-width:420px){main{padding:12px;grid-template-columns:1fr}header{padding:14px 16px}}
@@ -68,37 +83,93 @@ def ago(iso, now=None):
     return f"{s // 86400} days ago"
 
 
+WINDOWS = [("five_hour", "Current session", "5-hour window"),
+           ("seven_day", "Weekly", "all models"),
+           ("seven_day_opus", "Weekly", "Opus"),
+           ("seven_day_sonnet", "Weekly", "Sonnet")]
+STATUS = {"allowed": ("✓", "Within limit", "good"),
+          "allowed_warning": ("⚠", "Close to the limit", "warning"),
+          "rejected": ("⛔", "Limit reached", "critical")}
+
+
+def resets_in(iso, now=None):
+    """'2 h 52 min' until an ISO time."""
+    if not iso:
+        return None
+    try:
+        t = dt.datetime.fromisoformat(iso)
+    except ValueError:
+        return None
+    s = int((t - (now or dt.datetime.now(dt.timezone.utc))).total_seconds())
+    if s <= 0:
+        return "now"
+    d, h, m = s // 86400, s % 86400 // 3600, s % 3600 // 60
+    return f"{d} d {h} h" if d else (f"{h} h {m} min" if h else f"{m} min")
+
+
+def human(n):
+    return f"{n / 1e6:.1f}M" if n >= 1e6 else (f"{n / 1e3:.0f}k" if n >= 1e3 else str(n))
+
+
+def _meter(kind, lim):
+    title, sub = next(((t, s) for k, t, s in WINDOWS if k == kind), (kind, ""))
+    icon, word, role = STATUS.get(lim.get("status"), ("", lim.get("status") or "", "good"))
+    util = lim.get("utilization")
+    left = resets_in(lim.get("resets_at"))
+    head = (f"<div class='mhead'><span><b>{e(title)}</b> <span class='muted small'>{e(sub)}"
+            f"</span></span><span class='small'>{f'resets in {e(left)}' if left else ''}</span></div>")
+    if util is None:
+        # only the status came with this reading: no percentage to draw
+        body = (f"<div class='mstatus {role}'>{icon} {e(word)} "
+                f"<span class='muted small'>(no percentage reported)</span></div>")
+    else:
+        pct = max(0, min(100, round(100 * util)))
+        fill = "var(--meter)" if role == "good" else f"var(--{role})"
+        body = (f"<div class='meter' role='meter' aria-valuenow='{pct}' aria-valuemin='0' "
+                f"aria-valuemax='100' title='{pct}% used'><i style='width:{pct}%;background:{fill}'>"
+                f"</i></div><div class='mfoot'><b>{pct}% used</b>"
+                + (f" <span class='{role}'>{icon} {e(word)}</span>" if role != "good" else "")
+                + "</div>")
+    seen = (f"<div class='muted small'>as of {e(ago(lim.get('observed_at')))}, "
+            f"from {e(lim.get('from'))}</div>")
+    return f"<div class='mblock'>{head}{body}{seen}</div>"
+
+
+def _tokens(state, acc):
+    rows = acc["tokens_today"]
+    if not rows:
+        return "<p class='muted small'>No tokens used today.</p>"
+    norm = {a: (v if isinstance(v, dict) else {"new": v, "cached": 0}) for a, v in rows.items()}
+    top = max((v["new"] + v["cached"]) for v in norm.values()) or 1
+    bars = []
+    for aid, v in sorted(norm.items(), key=lambda x: -(x[1]["new"] + x[1]["cached"])):
+        name = state["agents"].get(aid, {}).get("name", aid)
+        wn, wc = 100 * v["new"] / top, 100 * v["cached"] / top
+        tip = f"{name}: {v['new']:,} new tokens, {v['cached']:,} cache reads"
+        bars.append(
+            f"<div class='trow' title='{e(tip)}'><div class='tname small'>{e(name)}</div>"
+            f"<div class='tbar'><i class='tnew' style='width:{wn:.2f}%'></i>"
+            f"<i class='tcache' style='width:{wc:.2f}%'></i></div>"
+            f"<div class='tval small'><b>{human(v['new'])}</b> new · {human(v['cached'])} cached</div></div>")
+    legend = ("<div class='legend small'><span><i class='sw tnew'></i>new tokens (input, output, "
+              "cache writes)</span><span><i class='sw tcache'></i>cache reads (cheap, repeated)"
+              "</span></div>")
+    return "<h3>Tokens today</h3>" + legend + "".join(bars)
+
+
 def _accounts(state):
-    rows = []
+    cards = []
     for hid, acc in state["accounts"].items():
         agents = ", ".join(e(state["agents"][a]["name"]) for a in acc["agents"]) or "—"
-        lims = []
-        for kind, lim in sorted(acc["limits"].items()):
-            cls = "bad" if lim.get("status") == "rejected" else (
-                "warn" if lim.get("status") == "allowed_warning" else "")
-            resets = (lim.get("resets_at") or "")[11:16]
-            status = {"allowed": "ok", "allowed_warning": "close to the limit",
-                      "rejected": "limit reached"}.get(lim.get("status"), lim.get("status"))
-            if lim.get("utilization") is None:      # only the status was reported
-                value, bar = e(status), ""
-            else:
-                pct = round(100 * lim["utilization"])
-                value = f"{pct}%"
-                bar = f'<div class="bar"><i style="width:{min(pct, 100)}%"></i></div>'
-            lims.append(
-                f'<div>{e(LIMIT_NAMES.get(kind, kind))} <b class="{cls}">{value}</b>'
-                f'{f" · resets {resets} UTC" if resets else ""}{bar}'
-                f'<span class="muted small">as of {e(ago(lim.get("observed_at")))}, '
-                f'from {e(lim.get("from"))}</span></div>')
-        if not lims:
-            lims.append('<span class="muted small">no limit readings yet (they arrive while '
-                        'an agent on this seat runs)</span>')
-        tok = " · ".join(f"{e(a)} {n:,}" for a, n in acc["tokens_today"].items()) or "—"
-        rows.append(f"<tr><td><b>{e(acc['name'])}</b><div class='muted small'>{agents}</div>"
-                    f"</td><td>{''.join(lims)}<div class='small'>tokens today: {tok}</div>"
-                    f"</td></tr>")
-    return ("<section><h2>Claude usage, by account</h2><table><tr><th>Account</th>"
-            "<th>Limits &amp; tokens</th></tr>" + "".join(rows) + "</table></section>")
+        order = [k for k, _, _ in WINDOWS]
+        meters = [_meter(k, acc["limits"][k]) for k in sorted(
+            acc["limits"], key=lambda k: order.index(k) if k in order else 99)]
+        if not meters:
+            meters = ["<p class='muted small'>No limit readings yet: they arrive while an "
+                      "agent on this seat is running.</p>"]
+        cards.append(f"<div class='account'><h3>{e(acc['name'])}</h3><div class='muted small'>"
+                     f"seat used by: {agents}</div>{''.join(meters)}{_tokens(state, acc)}</div>")
+    return "<section><h2>Claude usage, by account</h2>" + "".join(cards) + "</section>"
 
 
 def _workers(state):
