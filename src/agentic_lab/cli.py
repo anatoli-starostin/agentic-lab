@@ -8,6 +8,8 @@
     lab intake serve            the secretary's endpoint where members' clients send secrets
     lab broker serve            the approval broker (on the secretary host, as lab-broker)
     lab manager serve <agent>   run a manager's service (Slack + its agent)
+    lab manager ask <agent> --as <member> "message"
+                                one message to a manager, answered on the console
     lab slack-manifest <agent>|approvals
                                 the Slack app manifest for an agent (paste into api.slack.com)
     lab debug <agent>           (sudo) stop the agent's service and open its session in the
@@ -144,6 +146,17 @@ def cmd_slack_manifest(args):
     return 0
 
 
+def cmd_manager_ask(args):
+    import asyncio
+    import logging
+
+    from .manager.service import ask
+    logging.basicConfig(level=logging.WARNING)
+    asyncio.run(ask(args.lab, args.agent, args.as_human, " ".join(args.message),
+                    wait_s=args.wait))
+    return 0
+
+
 def cmd_debug(args):
     from .debug import debug
     debug(args.lab, args.agent, session=args.session, new=args.new, ask=args.print)
@@ -215,6 +228,13 @@ def main(argv=None):
     mserve = msub.add_parser("serve", help="run a manager's service")
     mserve.add_argument("agent")
     mserve.set_defaults(fn=cmd_manager_serve)
+    mask = msub.add_parser("ask", help="one message to a manager, answered on the console")
+    mask.add_argument("agent")
+    mask.add_argument("message", nargs="+")
+    mask.add_argument("--as", dest="as_human", required=True, help="the member asking")
+    mask.add_argument("--wait", type=int, default=900,
+                      help="seconds to follow the tasks it submits (default 900)")
+    mask.set_defaults(fn=cmd_manager_ask)
 
     sm = sub.add_parser("slack-manifest", help="print a Slack app manifest")
     sm.add_argument("agent", help="a manager or the secretary, or 'approvals'")

@@ -171,3 +171,77 @@ async def serve(lab_path, agent_id):
     await stop.wait()
     await slack.stop()
     follower.cancel()
+
+
+class ConsoleIO:
+    """Stands in for Slack in `lab manager ask`: everything is printed."""
+
+    def __init__(self):
+        self.engaged = set()
+
+    async def post(self, channel, thread_ts, text):
+        if text and text.strip() != SILENT:
+            print(f"\n[{channel}] {text}", flush=True)
+
+    async def upload(self, channel, thread_ts, path, title, comment=None):
+        print(f"\n[{channel}] (file posted: {title} <- {path}){' ' + comment if comment else ''}",
+              flush=True)
+
+    async def react(self, *a, **kw):
+        pass
+
+
+async def ask(lab_path, agent_id, human, text, wait_s=900):
+    """One message to a manager from the command line, as `human`; the reply, task
+    progress and results are printed. Uses its own state (`cli/`), so it can run while the
+    service does. For admins (checking a manager works) and for tests."""
+    from ..slackio import Incoming
+    lab = load_lab(lab_path)
+    a = lab.agents.get(agent_id) or {}
+    if a.get("role") != "manager":
+        raise SystemExit(f"{agent_id!r} is not a manager in {lab_path}")
+    if human not in lab.humans:
+        raise SystemExit(f"no human {human!r} in {lab_path}")
+    worker_tokens = yaml.safe_load(_read_secret(f"{CONFIG}/workers.yaml") or "") or {}
+    workers = Workers({w: lab.worker_url(w) for w in worker_tokens if w in lab.agents},
+                      worker_tokens)
+    broker_cfg = yaml.safe_load(_read_secret(f"{CONFIG}/broker.yaml") or "") or {}
+    broker = approver = None
+    if broker_cfg.get("url") and broker_cfg.get("token"):
+        broker = BrokerClient(broker_cfg["url"], broker_cfg["token"])
+        approver = BrokerApprover(broker_cfg["url"], broker_cfg["token"])
+    env = {}
+    seat = _read_secret(f"{CONFIG}/claude-oauth-token")
+    if seat:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
+    workdir = os.path.expanduser(a.get("workdir", "~/work"))
+    os.makedirs(workdir, exist_ok=True)
+    state_root = os.path.expanduser(STATE)
+    state = ManagerState(os.path.join(state_root, "cli"))
+    memory = Memory(os.path.join(state_root, "memory"), shared=a.get("access") == "shared")
+
+    def settings_for(grants):
+        return lab.agent_settings(agent_id, extra_grants=grants,
+                                  now=dt.datetime.now(dt.timezone.utc))
+
+    brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
+                  approver=approver or NoChannelApprover(), model=a.get("model"), env=env)
+    io = ConsoleIO()
+    mgr = Manager(lab, agent_id, io, brain, workers, broker, state, memory, workdir)
+    ok, why = mgr.may_use(human)
+    if not ok:
+        raise SystemExit(why)
+    await mgr.on_message(Incoming("cli", None, "0", None, human, text, True, True))
+    stop = asyncio.Event()
+    follower = asyncio.create_task(follow(state, workers, mgr.post, mgr.finished, stop,
+                                          mention=lambda h: h))
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + wait_s
+    while state.open_tasks() and loop.time() < deadline:
+        await asyncio.sleep(2)
+    await asyncio.sleep(1)
+    stop.set()
+    await follower
+    if state.open_tasks():
+        print(f"\n(still running after {wait_s}s: "
+              f"{', '.join(t.task_id for t in state.open_tasks())})")

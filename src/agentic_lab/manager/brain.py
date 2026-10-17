@@ -7,6 +7,7 @@ GitHub, goes to the broker for the member whose message this turn answers.
 """
 import datetime as dt
 import json
+import warnings
 from types import SimpleNamespace
 
 from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient,
@@ -15,6 +16,10 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
                               UserMessage)
 
 from ..policy.grants import Grant
+
+# The lab tools are auto-allowed on purpose (allowed_tools); the SDK warns that the
+# permission callback then won't see them. That is the intent: silence it.
+warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
 from ..worker.runner import NoChannelApprover, allowed_without_asking, sandbox_violations
 from . import tools as lab_tools
 
