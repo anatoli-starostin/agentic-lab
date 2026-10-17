@@ -99,6 +99,31 @@ def test_apply_installs_only_the_agents_own_bot(tmp_path):
     assert not any("GitHub" in m for m in plan["missing"])
 
 
+def test_one_bot_for_several_agents(tmp_path):
+    """Several agents may share one bot: each gets its token."""
+    def share(d):
+        for a in d["agents"].values():
+            if a["role"] in ("manager", "worker"):
+                a["github"] = "flash-bot"
+    lab = lab_with_github(tmp_path, share)
+    assert errors(lab) == []
+
+    class Tok:
+        def get(self, k):
+            return "t"
+
+    def intake(owner, name):
+        return "ghp_" + "f" * 36 if (owner, name) == ("service:github-flash-bot",
+                                                      "github-token") else (
+            None if name == "nebius-sa" else "secret")
+    users = [lab.unix_user(a) for a, x in lab.agents.items() if x["role"] in ("manager", "worker")]
+    files = {}
+    for host in {lab.agents[a]["host"] for a in lab.agents}:
+        files.update(host_plan(lab, host, Tok(), intake)["files"])
+    for u in users:
+        assert files[f"/home/{u}/.config/agentic-lab/github.token"][2].startswith("ghp_f")
+
+
 def test_intake_takes_github_tokens():
     assert I.check_value("github-token", "github_pat_" + "a" * 40).startswith("github_pat_")
     with pytest.raises(I.IntakeError, match="GitHub token"):
