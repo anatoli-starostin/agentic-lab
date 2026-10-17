@@ -448,7 +448,7 @@ prompt or dialog.
   - So agents on the same host are separated by ordinary Unix permissions. "Local reads are
     free" (§6.1) means what *its own user* can read: one agent can't read another's working
     folder, memory or tokens.
-  - A system-level unit (e.g. `lab-worker.service`, `User=lab-agent`) starts it at boot
+  - A system-level unit (e.g. `lab-worker-a.service`, `User=lab-worker-a`) starts it at boot
     and restarts it if it dies.
   - Humans SSH in as themselves. `lab console` reaches the agent through a socket the
     service creates under `/run/agentic-lab/`, which the sandbox hides from the agent.
