@@ -301,7 +301,7 @@ def self_admin_script(sa):
                                     ' 2>/dev/null')} "
         f"&& sudo -u {u} -H git -C ~{u}/.local/state/agentic-lab/config-repo config "
         f"core.sshCommand {q(ssh)} && echo '  config repo: cloned for the secretary' || {{ "
-        "echo '  the secretary can't reach the config repo yet. Add this deploy key to it, "
+        "echo '  the secretary cannot reach the config repo yet. Add this deploy key to it, "
         "WITH write access (it pushes branches, never merges), then sudo lab apply again:'; "
         f"sed 's/^/    /' ~{u}/.config/agentic-lab/config-repo-key.pub; }}",
     ]

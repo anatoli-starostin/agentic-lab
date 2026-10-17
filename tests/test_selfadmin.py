@@ -72,6 +72,8 @@ def test_sudo_rule_is_one_fixed_command():
                                          "config_url": "git@github.com:acme/lab-config.git"}))
     assert "lab-secretary ALL=(root) NOPASSWD: /usr/local/bin/lab apply-main'" in lines
     assert "visudo -cqf" in lines and "WITH write access" in lines
+    r = subprocess.run(["bash", "-n"], input=lines, text=True, capture_output=True)
+    assert r.returncode == 0, r.stderr                  # the generated shell parses
 
 
 def test_admin_only_and_the_click_decides(monkeypatch):
