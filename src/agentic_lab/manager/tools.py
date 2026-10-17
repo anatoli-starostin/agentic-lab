@@ -12,8 +12,9 @@ from claude_agent_sdk import create_sdk_mcp_server, tool
 
 from .workers import WorkerError
 
-TOOL_NAMES = ("list_workers", "submit_task", "task_status", "task_result", "cancel_task",
-              "pending_approvals", "add_approval_note", "post_file", "post_worker_file")
+TOOL_NAMES = ("list_workers", "submit_task", "my_tasks", "task_status", "task_result",
+              "cancel_task", "pending_approvals", "add_approval_note", "post_file",
+              "post_worker_file", "send_file_to_worker", "recall", "remember")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
 
 
@@ -50,10 +51,19 @@ def _err(e):
     return {"content": [{"type": "text", "text": f"error: {e}"}], "is_error": True}
 
 
+def visible(ctx, task):
+    """May the current conversation see this tracked task? In a private conversation (DM):
+    the member's own tasks. In a channel thread: the tasks submitted from that thread."""
+    if ctx.private:
+        return task.requester == ctx.requester
+    return task.conversation == ctx.conv.key
+
+
 def build(ctx):
     """`ctx` carries: workers (Workers), broker (BrokerClient or None), state
-    (ManagerState), conv (Conversation), requester (human id), workdir, slack (poster with
-    `upload(channel, thread_ts, path, title, comment)`), describe_workers() -> list."""
+    (ManagerState), conv (Conversation), requester (human id), private (a DM?), memory
+    (Memory), workdir, slack (poster with `upload(channel, thread_ts, path, title,
+    comment)`), describe_workers() -> list."""
 
     @tool("list_workers", "The workers this manager can use, with their status and queue.", {})
     async def list_workers(args):
@@ -78,7 +88,19 @@ def build(ctx):
         return _text(f"Submitted {t['id']} to {args['worker']} (state: {t['state']}). Its "
                      f"progress and result will be posted in this conversation.")
 
+    @tool("my_tasks", "The tasks you submitted that this conversation may see, with their "
+          "last known state.", {})
+    async def my_tasks(args):
+        rows = [f"{t.task_id} on {t.worker} for {t.requester}: {t.state}"
+                for t in ctx.state.tasks.values() if visible(ctx, t)]
+        return _text("\n".join(rows) or "no tasks")
+
     async def _task(args, tool_name):
+        t = ctx.state.tasks.get(args.get("task_id"))
+        if t is None or not visible(ctx, t):
+            return _err("no such task in this conversation (see my_tasks)")
+        if t.worker != args.get("worker"):
+            return _err(f"{t.task_id} runs on {t.worker}")
         try:
             return _text(str(await ctx.workers.call(args["worker"], tool_name,
                                                     {"task_id": args["task_id"]})))
@@ -107,9 +129,17 @@ def build(ctx):
         if ctx.broker is None:
             return _text("no approval broker is configured")
         try:
-            return _text(str(await ctx.broker.pending()))
+            pending = await ctx.broker.pending()
         except WorkerError as e:
             return _err(e)
+        shown = []
+        for r in pending:
+            t = ctx.state.tasks.get(r.get("task_id") or "")
+            if (t is not None and visible(ctx, t)) or (
+                    t is None and ctx.private and r.get("human") == ctx.requester):
+                shown.append({k: r[k] for k in ("id", "agent", "task_id", "human", "detail",
+                                                "options", "expires", "context")})
+        return _text(str(shown) if shown else "nothing pending")
 
     @tool("add_approval_note", "Add a note to a pending approval request, shown to the "
           "human with it (e.g. why the worker needs this). It does not approve anything.",
@@ -157,6 +187,35 @@ def build(ctx):
                                args.get("comment"))
         return _text(f"posted {f['name']} (a copy is in {local})")
 
+    @tool("send_file_to_worker", "Send a file from your working folder (e.g. a member's "
+          "attachment) to a worker, before submitting a task that needs it. Returns where it "
+          "is on the worker: mention that path in the task's instruction. Up to 20 MB.",
+          {"worker": str, "path": str})
+    async def send_file_to_worker(args):
+        root = os.path.realpath(ctx.workdir)
+        full = os.path.realpath(os.path.join(root, args["path"]))
+        if not full.startswith(root + os.sep) or not os.path.isfile(full):
+            return _err("only existing files in your working folder can be sent")
+        with open(full, "rb") as f:
+            data = base64.b64encode(f.read()).decode()
+        try:
+            r = await ctx.workers.call(args["worker"], "write_file",
+                                       {"name": os.path.basename(full), "base64_data": data})
+        except WorkerError as e:
+            return _err(e)
+        return _text(f"sent; on {args['worker']} it is at {r['path']}")
+
+    @tool("recall", "What you remember about the member you're talking with (their projects, "
+          "preferences, ongoing work). Empty in channel threads.", {})
+    async def recall(args):
+        return _text(ctx.memory.recall(ctx.requester, ctx.private))
+
+    @tool("remember", "Remember a durable fact about the member or their work, for later "
+          "conversations with them (not in channel threads).", {"note": str})
+    async def remember(args):
+        return _text(ctx.memory.remember(ctx.requester, ctx.private, args["note"]))
+
     return create_sdk_mcp_server("lab", tools=[
-        list_workers, submit_task, task_status, task_result, cancel_task,
-        pending_approvals, add_approval_note, post_file, post_worker_file])
+        list_workers, submit_task, my_tasks, task_status, task_result, cancel_task,
+        pending_approvals, add_approval_note, post_file, post_worker_file,
+        send_file_to_worker, recall, remember])

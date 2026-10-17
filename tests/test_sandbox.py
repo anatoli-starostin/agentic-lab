@@ -18,9 +18,10 @@ def test_base_model():
     assert sb["network"]["allowedDomains"] == ["*.example.ts.net"]   # no internet, tailnet only
     assert sb["network"]["strictAllowlist"] is True                   # refuse, don't prompt
     assert sb["filesystem"]["allowWrite"] == [f"{HOME}/work", "/tmp"]
-    secrets = f"{HOME}/.config/agentic-lab"
-    assert sb["filesystem"]["denyRead"] == ["/run", "/var/run", secrets]   # sockets, secrets
-    assert s["permissions"]["deny"] == [f"Read(/{secrets}/**)", f"Edit(/{secrets}/**)"]
+    secrets, state = f"{HOME}/.config/agentic-lab", f"{HOME}/.local/state/agentic-lab"
+    assert sb["filesystem"]["denyRead"] == ["/run", "/var/run", secrets, state]
+    assert s["permissions"]["deny"] == [f"Read(/{secrets}/**)", f"Edit(/{secrets}/**)",
+                                        f"Read(/{state}/**)", f"Edit(/{state}/**)"]
     assert sb["credentials"]["envVars"] == [{"name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny"}]
     assert sb["filesystem"]["allowRead"] == []
     assert sb["network"]["allowAllUnixSockets"] is False           # seccomp socket block on

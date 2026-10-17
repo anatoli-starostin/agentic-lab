@@ -277,3 +277,14 @@ def test_read_file_stays_in_workdir(tmp_path):
     (work / "link").symlink_to(tmp_path / "secret")
     with pytest.raises(ToolError, match="working folder"):
         read_workdir_file(work, "link")
+
+
+def test_write_file_lands_in_inbox(tmp_path):
+    import base64
+    from agentic_lab.worker.server import write_inbox_file
+    from mcp.server.mcpserver.exceptions import ToolError
+    r = write_inbox_file(tmp_path, "../../etc/data.csv", base64.b64encode(b"a,b\n1,2\n").decode())
+    assert r["path"] == str(tmp_path / "inbox" / "data.csv")         # name only, never a path
+    assert (tmp_path / "inbox" / "data.csv").read_bytes() == b"a,b\n1,2\n"
+    with pytest.raises(ToolError, match="base64"):
+        write_inbox_file(tmp_path, "x", "not base64!!")

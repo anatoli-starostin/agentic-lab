@@ -21,7 +21,7 @@ from .worker import tasks as T
 
 CONFIG = "~/.config/agentic-lab"
 STATE = "~/.local/state/agentic-lab"
-SERVICE = {"worker": "lab-worker@{}"}      # managers and the secretary join in M3/M4
+SERVICE = {"worker": "lab-worker@{}", "manager": "lab-manager@{}"}   # secretary: M4
 
 
 def claude_cli():

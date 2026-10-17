@@ -32,6 +32,9 @@ HIDDEN = ["/run", "/var/run"]
 # sandboxed commands. A Slack-facing agent then can't be talked into reciting a token.
 SECRETS = "~/.config/agentic-lab"
 SECRET_ENV = ["CLAUDE_CODE_OAUTH_TOKEN"]
+# The service's own state (task queue, a manager's per-member memory...) is the service's
+# too: the agent reaches it only through its lab tools, which decide what it may see.
+STATE = "~/.local/state/agentic-lab"
 GPU_VISIBLE = ["/run/nvidia-persistenced"]
 
 
@@ -74,6 +77,7 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
     # then persist between tasks without widening the sandbox.
     cache = os.path.join(_abs(workdir), ".cache")
     secrets = _abs(SECRETS)
+    private = [secrets, _abs(STATE)]
 
     return {
         "sandbox": {
@@ -90,7 +94,7 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
             },
             "filesystem": {
                 "allowWrite": _dedup(writable),
-                "denyRead": list(HIDDEN) + [secrets],
+                "denyRead": list(HIDDEN) + private,
                 "allowRead": list(GPU_VISIBLE) if gpu else [],
             },
             "credentials": {"envVars": [{"name": n, "mode": "deny"} for n in SECRET_ENV]},
@@ -101,7 +105,7 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
         "permissions": {
             "defaultMode": "default",           # anything not allowed -> permission request
             "allow": _dedup(tools + [f"Edit({_rule_path(w)}/**)" for w in writable]),
-            "deny": [f"Read({_rule_path(secrets)}/**)", f"Edit({_rule_path(secrets)}/**)"],
+            "deny": [f"{tool}({_rule_path(p)}/**)" for p in private for tool in ("Read", "Edit")],
         },
     }
 

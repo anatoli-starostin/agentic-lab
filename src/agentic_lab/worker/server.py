@@ -76,6 +76,26 @@ def read_workdir_file(workdir, path):
             "base64": base64.b64encode(data).decode()}
 
 
+def write_inbox_file(workdir, name, b64):
+    """Store a file a manager sends (e.g. a member's attachment) in the worker's
+    `inbox/`, inside its working folder. Returns its path."""
+    name = os.path.basename(name or "")
+    if not name or name in (".", ".."):
+        raise ToolError("a file name is needed")
+    try:
+        data = base64.b64decode(b64, validate=True)
+    except (ValueError, TypeError):
+        raise ToolError("the file must be base64") from None
+    if len(data) > MAX_FILE_BYTES:
+        raise ToolError(f"the limit is {MAX_FILE_BYTES // 1_000_000} MB")
+    inbox = os.path.join(os.path.realpath(workdir), "inbox")
+    os.makedirs(inbox, exist_ok=True)
+    path = os.path.join(inbox, name)
+    with open(path, "wb") as f:
+        f.write(data)
+    return {"path": path, "size": len(data)}
+
+
 def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=None,
               usage=None, workdir=None):
     """The worker's MCP server. `guardrails()` returns its current settings and grants."""
@@ -143,6 +163,14 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         if workdir is None:
             raise ToolError("this worker doesn't serve files")
         return read_workdir_file(workdir, path)
+
+    @mcp.tool(description="Send this worker a file (e.g. a member's attachment), base64, up to "
+              "20 MB. It lands in the worker's inbox/ folder; returns its path there.")
+    def write_file(name: str, base64_data: str, ctx: Context) -> dict:
+        who(ctx)
+        if workdir is None:
+            raise ToolError("this worker doesn't accept files")
+        return write_inbox_file(workdir, name, base64_data)
 
     @mcp.tool(description="Liveness and state of this worker: queue, GPU, disk, versions.")
     def health_check(ctx: Context) -> dict:

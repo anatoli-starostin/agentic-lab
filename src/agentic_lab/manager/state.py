@@ -39,6 +39,7 @@ class ManagerState:
         self._lock = threading.RLock()
         self.conversations: dict[str, Conversation] = {}
         self.tasks: dict[str, TrackedTask] = {}
+        self.engaged = PersistentSet(self.save)     # channel threads it takes part in
         self._load()
 
     def _load(self):
@@ -49,11 +50,13 @@ class ManagerState:
             return
         self.conversations = {k: Conversation(**v) for k, v in d.get("conversations", {}).items()}
         self.tasks = {k: TrackedTask(**v) for k, v in d.get("tasks", {}).items()}
+        self.engaged.update_quietly(d.get("engaged", []))
 
     def save(self):
         with self._lock:
             d = {"conversations": {k: asdict(v) for k, v in self.conversations.items()},
-                 "tasks": {k: asdict(v) for k, v in self.tasks.items()}}
+                 "tasks": {k: asdict(v) for k, v in self.tasks.items()},
+                 "engaged": sorted(self.engaged)}
             fd, tmp = tempfile.mkstemp(dir=os.path.dirname(self.path), prefix=".tmp-")
             with os.fdopen(fd, "w") as f:
                 json.dump(d, f, indent=1)
@@ -74,3 +77,19 @@ class ManagerState:
 
     def open_tasks(self):
         return [t for t in self.tasks.values() if not t.done]
+
+
+class PersistentSet(set):
+    """A set that saves the state when something is added."""
+
+    def __init__(self, save):
+        super().__init__()
+        self._save = save
+
+    def add(self, item):
+        if item not in self:
+            super().add(item)
+            self._save()
+
+    def update_quietly(self, items):
+        super().update(items)

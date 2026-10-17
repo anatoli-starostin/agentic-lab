@@ -7,6 +7,9 @@
                                 ask a human for a secret: prints the message to send them
     lab intake serve            the secretary's endpoint where members' clients send secrets
     lab broker serve            the approval broker (on the secretary host, as lab-broker)
+    lab manager serve <agent>   run a manager's service (Slack + its agent)
+    lab slack-manifest <agent>|approvals
+                                the Slack app manifest for an agent (paste into api.slack.com)
     lab debug <agent>           (sudo) stop the agent's service and open its session in the
                                 classic Claude Code console; restarts the service on exit
 """
@@ -116,6 +119,31 @@ def cmd_broker_serve(args):
     return 0
 
 
+def cmd_manager_serve(args):
+    import asyncio
+    import logging
+
+    from .manager.service import serve
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    asyncio.run(serve(args.lab, args.agent))
+    return 0
+
+
+def cmd_slack_manifest(args):
+    from . import slack_manifest as sm
+    lab = _load_lab(args.lab)
+    if args.agent == "approvals":
+        print(sm.render(sm.approvals(lab, args.name or "Lab Approvals")))
+    elif args.agent in lab.agents:
+        try:
+            print(sm.render(sm.for_agent(lab, args.agent)))
+        except ValueError as e:
+            sys.exit(f"lab: {e}")
+    else:
+        sys.exit(f"lab: no agent {args.agent!r}")
+    return 0
+
+
 def cmd_debug(args):
     from .debug import debug
     debug(args.lab, args.agent, session=args.session, new=args.new, ask=args.print)
@@ -181,6 +209,17 @@ def main(argv=None):
     bserve.add_argument("--host", default="127.0.0.1", help="the tailnet IP in production")
     bserve.add_argument("--port", type=int, default=8772)
     bserve.set_defaults(fn=cmd_broker_serve)
+
+    mg = sub.add_parser("manager", help="the manager service")
+    msub = mg.add_subparsers(dest="mcmd", required=True)
+    mserve = msub.add_parser("serve", help="run a manager's service")
+    mserve.add_argument("agent")
+    mserve.set_defaults(fn=cmd_manager_serve)
+
+    sm = sub.add_parser("slack-manifest", help="print a Slack app manifest")
+    sm.add_argument("agent", help="a manager or the secretary, or 'approvals'")
+    sm.add_argument("--name", help="the approvals app's name (default: Lab Approvals)")
+    sm.set_defaults(fn=cmd_slack_manifest)
 
     for name, fn, hlp in (
             ("debug", cmd_debug, "talk to an agent in the classic Claude Code console (sudo)"),
