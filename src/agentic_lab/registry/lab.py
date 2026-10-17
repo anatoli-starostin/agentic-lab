@@ -185,13 +185,13 @@ def check(lab: Lab, today: dt.date | None = None):
                      "(every agent is attached to a human member, in terms of tokens)")
         if a.get("host") not in lab.hosts:
             E(where, f"host {a.get('host')!r} is not in hosts")
-        if role == "worker":
+        if role in ("worker", "manager"):
             if a.get("access", "dedicated") not in ACCESS:
                 E(where, f"access must be one of {ACCESS}, got {a.get('access')!r}")
-        else:
-            for k in ("access", "max_parallel_gpu_tasks"):
-                if k in a:
-                    E(where, f"{k!r} applies to workers only")
+        elif "access" in a:
+            E(where, "'access' applies to workers and managers only")
+        if role != "worker" and "max_parallel_gpu_tasks" in a:
+            E(where, "'max_parallel_gpu_tasks' applies to workers only")
         if role != "manager" and "slack_app" in a:
             E(where, "'slack_app' applies to managers only")
         if role == "manager" and not a.get("slack_app"):

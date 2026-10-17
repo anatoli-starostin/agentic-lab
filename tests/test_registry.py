@@ -97,7 +97,9 @@ def test_every_agent_needs_a_human(lab_dir):
     (lambda d: d["agents"]["worker-a"].update(host="nowhere"), "host 'nowhere' is not in hosts"),
     (lambda d: d["agents"]["worker-a"].update(acces="shared"), "unknown key 'acces'"),
     (lambda d: d["agents"]["worker-a"].update(access="public"), "access must be one of"),
-    (lambda d: d["agents"]["mgr-alice"].update(access="shared"), "applies to workers only"),
+    (lambda d: d["agents"]["mgr-alice"].update(max_parallel_gpu_tasks=1), "applies to workers only"),
+    (lambda d: d["agents"]["secretary"].update(access="shared"), "workers and managers only"),
+    (lambda d: d["agents"]["mgr-alice"].update(access="public"), "access must be one of"),
     (lambda d: d["agents"]["worker-a"].update(slack_app="A1"), "applies to managers only"),
     (lambda d: d["agents"]["worker-a"].update(max_parallel_gpu_tasks=True), "expected int"),
     (lambda d: d["agents"].pop("secretary"), "exactly one secretary"),
@@ -173,3 +175,7 @@ def test_cli_settings(capsys):
     assert main(["--lab", str(EXAMPLE / "lab.yaml"), "settings", "worker-a"]) == 0
     out = json.loads(capsys.readouterr().out)
     assert out["sandbox"]["enabled"] is True
+
+
+def test_shared_manager_ok(lab_dir):
+    assert errors(edit(lab_dir, lambda d: d["agents"]["mgr-alice"].update(access="shared"))) == []
