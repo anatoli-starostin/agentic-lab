@@ -46,7 +46,7 @@ deployment's own `lab.yaml` and secret files, which never enter this repo.
 - A **Slack workspace** (for teams). Each manager is its own Slack app and bot user.
 - **Tailscale.** Every host is on one tailnet. No service listens on a public interface.
 - An **always-on box** for the secretary (a small NUC or similar; no GPU needed).
-- An **Anthropic API key** (or Claude subscription) per agent host.
+- A **Claude seat** (e.g. Team plan) for each human member. Their agents run on it.
 
 ---
 
@@ -116,8 +116,9 @@ Tied to one GPU VM. Uses tokens freely. Humans don't talk to it directly.
 - Executes tasks inside the **cage** (§6). In-cage work runs without prompts. A boundary
   crossing becomes an **approval request to the approval broker** of the manager that owns
   the task.
-- Can be **dedicated** to one human (only that human's manager may submit tasks) or
-  **shared** (any manager may). This is set in `lab.yaml`.
+- Like every agent, it is **attached to one human** (it runs on their seat). Its access is
+  either **dedicated** (only that human's manager may submit tasks) or **shared** (any
+  manager may). This is set in `lab.yaml`.
 - **Debug console**, at two levels:
   - `lab console` (everyday): a human `ssh`es in and attaches to the live headless session.
     It streams the transcript and lets the human type messages, which are queued in order
@@ -307,19 +308,18 @@ agents:
     role: secretary
     host: nuc-01
     model: claude-haiku-5-5
-    auth: {seat: anatoly}     # attached to a human: runs on their Claude seat
+    human: anatoly            # every agent is attached to a human member
   mgr-anatoly:
     role: manager
     human: anatoly
     host: mgr-vm-01
     slack_app: A0XXXX
     model: claude-sonnet-5-5
-    auth: {seat: anatoly}
   worker-h100-a:
     role: worker
     host: gpu-h100-a
-    access: shared            # or: {dedicated: anatoly}
-    auth: {api_key: lab-shared}  # shared agent: company API key (or a seat, if allowed)
+    human: anatoly
+    access: shared            # or: dedicated (only anatoly's manager may submit)
     max_parallel_gpu_tasks: 1
     policy_overlay: agents/worker-h100-a.yaml
 hosts:
@@ -383,22 +383,15 @@ prompt or dialog.
 - Each agent gets its own Unix user, working dir and memory dir. The policy and the broker
   run as different users from the agent they govern.
 
-### Auth (per agent, in `lab.yaml`)
+### Every agent is attached to a human
 
-| `auth:` | Use for | Notes |
-|---|---|---|
-| `{seat: <human>}` | agents **attached to a human** (their manager, their dedicated workers, the secretary for now) | `claude setup-token` on that human's Team/Max seat. Shares the seat's 5-hour and weekly limits with that human's own Claude use. |
-| `{api_key: <name>}` | **shared** agents (shared workers) | Console API key, billed per token. Clearly allowed for services used by several people. |
-| `{bedrock\|vertex: …}` | deployments on a cloud provider | |
+Each agent in `lab.yaml` names the **human member it is attached to** (`human:`). It runs
+on that member's Claude seat, through a `claude setup-token` token stored on the agent's
+host. Its usage counts towards that member's seat limits, and the web UI shows it under that
+member.
 
-Anthropic's terms reserve subscription login for "ordinary, individual usage" and ask
-services used by others to run on API keys. A seat therefore powers only agents attached to
-that seat's human. Whether a dedicated "lab seat" may power shared agents is a question for
-Anthropic, not something to assume.
-
-**The secretary reports the real auth** of every agent in the web UI. A stray
-`ANTHROPIC_API_KEY` silently overrides subscription login and bills per token, so any
-mismatch with `lab.yaml` is flagged.
+**The secretary checks each agent's real auth.** A stray `ANTHROPIC_API_KEY` silently
+overrides seat login and bills per token, so the web UI flags it.
 
 Model per role is set in `lab.yaml`. Defaults: Haiku-class for the secretary's chat,
 Sonnet-class for managers, the strongest available model for workers.
@@ -455,14 +448,12 @@ after M3–M4 as needed.
 | 2026-10-17 | Shared workers: **first come, first served**. No quotas or priorities. |
 | 2026-10-17 | **No fixed results contract**: tasks vary, so a result is whatever fits (report, commit, W&B run, files). |
 | 2026-10-17 | **Agent SDK runtime** behind an `AgentRunner` interface. `lab console` + `--takeover` (real `claude --resume`) for humans. A tmux runner is only a fallback. |
-| 2026-10-17 | **Auth per agent**: an agent attached to a human uses that human's seat; shared agents use an API key. **The secretary is attached to the lab owner for now.** |
+| 2026-10-17 | **Every agent is attached to a human member** and runs on their seat. The secretary is attached to the lab owner. |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
 
 ## 14. Open questions
 
-1. **Shared agents' auth**: a company API key, or a dedicated Team seat if Anthropic confirms
-   that is allowed?
-2. **Manager VM layout**: one shared VM with one Unix user per manager, or one small VM per
+1. **Manager VM layout**: one shared VM with one Unix user per manager, or one small VM per
    manager? (Start shared; it's cheaper and the secretary restarts it.)
-3. **Web UI approvals**: should the web UI later become a permission channel too (answer
+2. **Web UI approvals**: should the web UI later become a permission channel too (answer
    approvals in the browser)?
