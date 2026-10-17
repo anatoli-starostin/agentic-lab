@@ -71,6 +71,13 @@ step is marked ⏳ it isn't built yet: say so, and use today's manual path below
 
 ## Diagnosis
 
+- **See what an agent is doing or did:** the web UI's transcript view (M4); until then,
+  `sudo journalctl -u lab-worker@<id>` for the service, and:
+- **Talk to an agent directly:** `sudo lab --lab /etc/agentic-lab/lab.yaml debug <agent>`
+  stops its service and opens its latest session in the classic Claude Code console, as
+  the agent's user with its sandbox; the service restarts on exit. `--print "question"`
+  asks one question without opening the console; `--new` starts a fresh session.
+
 - **Sandbox won't start, `nested userns is capability-restricted`:** the host is missing
   the AppArmor fix. Re-run `setup-sandbox.sh`.
 - **No GPU inside the sandbox:** check `/etc/claude-code/managed-settings.json` points

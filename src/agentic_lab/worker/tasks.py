@@ -50,7 +50,7 @@ class Task:
     progress: list = field(default_factory=list)     # [{"at": ..., "message": ...}]
     result: dict | None = None      # {"summary": ..., "artifacts": [...]} when done
     error: str | None = None
-    session_id: str | None = None   # the agent session, for resume and `lab console`
+    session_id: str | None = None   # the agent session, for resume and `lab debug`
     cancel_requested: bool = False
 
     def view(self, with_progress=True):

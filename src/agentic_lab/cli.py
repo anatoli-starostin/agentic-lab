@@ -6,6 +6,8 @@
     lab secret request <human> <name> --url URL
                                 ask a human for a secret: prints the message to send them
     lab intake serve            the secretary's endpoint where members' clients send secrets
+    lab debug <agent>           (sudo) stop the agent's service and open its session in the
+                                classic Claude Code console; restarts the service on exit
 """
 import argparse
 import json
@@ -96,6 +98,18 @@ def cmd_intake_serve(args):
     return 0
 
 
+def cmd_debug(args):
+    from .debug import debug
+    debug(args.lab, args.agent, session=args.session, new=args.new, ask=args.print)
+    return 0
+
+
+def cmd_debug_session(args):
+    from .debug import debug_session
+    debug_session(args.lab, args.agent, session=args.session, new=args.new, ask=args.print)
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="lab", description="Agentic Lab command line")
     ap.add_argument("--lab", default="lab.yaml", help="path to lab.yaml (default: ./lab.yaml)")
@@ -140,6 +154,17 @@ def main(argv=None):
     iserve.add_argument("--client", default="/opt/agentic-lab/client/lab-member.py",
                         help="the member client file to serve")
     iserve.set_defaults(fn=cmd_intake_serve)
+
+    for name, fn, hlp in (
+            ("debug", cmd_debug, "talk to an agent in the classic Claude Code console (sudo)"),
+            ("debug-session", cmd_debug_session, argparse.SUPPRESS)):
+        d = sub.add_parser(name, help=hlp)
+        d.add_argument("agent")
+        d.add_argument("--session", help="open this session instead of the latest task's")
+        d.add_argument("--new", action="store_true", help="start a fresh session")
+        d.add_argument("--print", metavar="QUESTION",
+                       help="ask the session one question, non-interactively")
+        d.set_defaults(fn=fn)
 
     args = ap.parse_args(argv)
     if getattr(args, "path", None) and args.cmd == "check":

@@ -227,3 +227,20 @@ def test_sandboxed_bash_needs_no_human():
     assert not allowed_without_asking("Bash", {"command": "make", "dangerouslyDisableSandbox": True})
     for tool in ("Write", "Edit", "WebFetch", "mcp__github__push"):
         assert not allowed_without_asking(tool, {})
+
+
+def test_debug_finds_latest_session(tmp_path, monkeypatch):
+    from agentic_lab import debug
+    monkeypatch.setattr(debug, "STATE", str(tmp_path))
+    store = T.TaskStore(tmp_path / "tasks")
+    a = store.submit("a", "alice", "mgr-alice")
+    store.update(a.id, state=T.RUNNING, session_id="s-old")
+    b = store.submit("b", "alice", "mgr-alice")
+    store.update(b.id, state=T.RUNNING, session_id="s-new")
+    store.submit("c", "alice", "mgr-alice")            # queued, no session yet
+    assert debug.latest_session("worker-a") == "s-new"
+
+
+def test_debug_uses_the_bundled_cli():
+    from agentic_lab.debug import claude_cli
+    assert claude_cli().endswith("_bundled/claude")

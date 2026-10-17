@@ -61,8 +61,16 @@ What it took:
 - **A command that creates a repo and writes its hooks in one go** isn't protected (the
   protection list is built when a command starts). Harmless in our model: git outside the
   sandbox always needs a human's approval, and hooks run by sandboxed git stay sandboxed.
-- **Grants mid-session.** Whether a running session picks up a changed allowlist. If not,
-  the service restarts and resumes the session.
+- **Grants mid-session.** Verified: a running session does *not* pick up a changed
+  allowlist. A grant therefore applies by restarting the session with the new settings
+  (verified seamless: the agent resumes where it was).
+- **Claude Code's own command checks.** Even with the sandbox on, Claude Code asks for
+  approval of some Bash commands (`export X=...`, `FOO=bar cmd`, some `python3 -c`, loops
+  over variables). The worker's permission callback allows any Bash command that stays in
+  the sandbox, since the sandbox confines it anyway (verified: writes outside, unlisted
+  hosts and the systemd bus all stay refused). Only commands asking to run *outside* the
+  sandbox reach a human. Claude Code also blocks a bare `sleep N` (it suggests a
+  background wait instead).
 
 ## Accepted trade-offs
 
