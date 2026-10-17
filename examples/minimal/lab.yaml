@@ -1,5 +1,5 @@
-# A minimal lab: one human, a secretary on an on-prem box, one manager on a cloud CPU VM,
-# two cloud GPU workers (one shared, one dedicated). Every agent is attached to a human
+# A minimal lab: one human, a secretary on an on-prem box, one manager on the shared cloud
+# CPU VM for managers, two cloud GPU workers (one shared, one dedicated). Every agent is attached to a human
 # member in terms of tokens: `human:` is whose Claude seat it runs on.
 # Validate with:  lab check examples/minimal/lab.yaml
 
@@ -12,8 +12,7 @@ humans:
     name: Alice
     slack_user: U00000001
     channels:
-      - {type: slack_dm, timeout_s: 120, on_timeout: deny}
-      - {type: console, when: attached}
+      - {type: slack_dm, timeout_s: 120, on_timeout: deny}   # permissions: Slack DM only (v1)
 
 hosts:
   nuc-01:

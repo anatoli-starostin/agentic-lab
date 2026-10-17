@@ -80,6 +80,8 @@ def test_every_agent_needs_a_human(lab_dir):
      "exactly one secretary"),
     (lambda d: d["humans"]["alice"].pop("channels"), "no permission channel"),
     (lambda d: d["humans"]["alice"]["channels"][0].update(type="pager"), "type must be one of"),
+    (lambda d: d["humans"]["alice"]["channels"][0].update(type="console"), "type must be one of"),
+    (lambda d: d["humans"]["alice"].pop("slack_user"), "no slack_user"),
     (lambda d: d["humans"]["alice"]["channels"][0].update(on_timeout="approve"),
      "a timeout never approves"),
     (lambda d: d["humans"]["alice"]["channels"][0].update(timeout_s=0), "must be positive"),

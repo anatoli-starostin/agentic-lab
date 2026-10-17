@@ -17,7 +17,7 @@ from ..policy import sandbox
 
 ROLES = ("worker", "manager", "secretary")
 DEFAULT_WORKDIR = "~/work"
-CHANNEL_TYPES = ("slack_dm", "console", "telegram", "email")
+CHANNEL_TYPES = ("slack_dm",)   # first version: Slack DM only (DESIGN.md §7)
 ACCESS = ("shared", "dedicated")
 HOST_KINDS = ("onprem", "cloud")
 POWER = ("always_on", "on_demand")
@@ -28,8 +28,7 @@ _TOP = {"lab": (str, True), "tailnet": (str, False), "trust_tailnet": (bool, Fal
         "humans": (dict, True),
         "agents": (dict, True), "hosts": (dict, True), "credentials": (list, False)}
 _HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, False)}
-_CHANNEL = {"type": (str, True), "timeout_s": (int, False), "on_timeout": (str, False),
-            "when": (str, False), "quiet_hours": (str, False), "address": (str, False)}
+_CHANNEL = {"type": (str, True), "timeout_s": (int, False), "on_timeout": (str, False)}
 _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "model": (str, False), "access": (str, False), "workdir": (str, False),
           "grants": (list, False),
@@ -210,6 +209,8 @@ def check(lab: Lab, today: dt.date | None = None):
         mine = [aid for aid in roles.get("manager", []) if lab.agents[aid].get("human") == hid]
         if mine and not (h or {}).get("channels"):
             E(f"humans.{hid}", "has a manager but no permission channel")
+        if mine and not (h or {}).get("slack_user"):
+            E(f"humans.{hid}", "has a manager but no slack_user (permissions go to their Slack DM)")
         if len(mine) > 1:
             W(f"humans.{hid}", f"has {len(mine)} managers: {mine}")
     for aid in roles.get("worker", []):
