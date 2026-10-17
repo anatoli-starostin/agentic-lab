@@ -31,6 +31,7 @@ MAX_FILE_BYTES = 20 * 1024 * 1024       # read_file: enough for plots, reports, 
 class Caller:
     manager: str
     human: str       # the human that manager belongs to
+    readonly: bool = False      # the secretary's monitoring: status only, never changes
 
 
 class AccessError(PermissionError):
@@ -52,7 +53,8 @@ class Access:
             raise AccessError("missing bearer token")
         for known, who in self._tokens.items():
             if hmac.compare_digest(known.encode(), token.encode()):
-                if self.allowed_humans is not None and who.human not in self.allowed_humans:
+                if (self.allowed_humans is not None and not who.readonly
+                        and who.human not in self.allowed_humans):
                     raise AccessError(f"this worker is dedicated; {who.manager} may not use it")
                 return who
         raise AccessError("unknown token")
@@ -102,17 +104,20 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
     mcp = MCPServer(name=f"agentic-lab worker {agent_id}",
                     instructions="Submit tasks to this worker and follow them.")
 
-    def who(ctx: Context) -> Caller:
+    def who(ctx: Context, writes=False) -> Caller:
         try:
-            return access.caller(ctx.headers)
+            c = access.caller(ctx.headers)
         except AccessError as e:
             raise ToolError(f"access denied: {e}") from None
+        if writes and c.readonly:
+            raise ToolError("access denied: this token is for monitoring only")
+        return c
 
     @mcp.tool(description="Queue a task (first come, first served). `requester` is the "
               "human who asked for it. Returns the task.")
     def submit_task(instruction: str, requester: str, ctx: Context,
                     project: str | None = None) -> dict:
-        c = who(ctx)
+        c = who(ctx, writes=True)
         try:
             return store.submit(instruction, requester=requester, manager=c.manager,
                                 project=project).view()
@@ -138,7 +143,7 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
     @mcp.tool(description="Cancel a task: a queued task at once, a running one as soon as "
               "the agent can stop.")
     def cancel_task(task_id: str, ctx: Context) -> dict:
-        who(ctx)
+        who(ctx, writes=True)
         task(task_id)
         return store.request_cancel(task_id).view(with_progress=False)
 
@@ -167,7 +172,7 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
     @mcp.tool(description="Send this worker a file (e.g. a member's attachment), base64, up to "
               "20 MB. It lands in the worker's inbox/ folder; returns its path there.")
     def write_file(name: str, base64_data: str, ctx: Context) -> dict:
-        who(ctx)
+        who(ctx, writes=True)
         if workdir is None:
             raise ToolError("this worker doesn't accept files")
         return write_inbox_file(workdir, name, base64_data)

@@ -48,11 +48,13 @@ def access_for(lab, agent_id, tokens_text):
     tokens = {}
     for mgr, token in by_manager.items():
         m = lab.agents.get(mgr)
-        if not m or m.get("role") != "manager":
-            raise SystemExit(f"manager-tokens.yaml: {mgr!r} is not a manager in lab.yaml")
+        if not m or m.get("role") not in ("manager", "secretary"):
+            raise SystemExit(f"manager-tokens.yaml: {mgr!r} is not a manager (or the "
+                             "secretary) in lab.yaml")
         if not isinstance(token, str) or len(token) < 32:
             raise SystemExit(f"manager-tokens.yaml: token for {mgr} must be 32+ characters")
-        tokens[token] = Caller(mgr, m["human"])
+        # the secretary monitors: read-only, and never subject to "dedicated"
+        tokens[token] = Caller(mgr, m["human"], readonly=m.get("role") == "secretary")
     dedicated = a.get("access", "dedicated") == "dedicated"
     return Access(tokens, allowed_humans={a["human"]} if dedicated else None)
 

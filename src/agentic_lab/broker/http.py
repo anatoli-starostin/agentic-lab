@@ -7,12 +7,15 @@
     POST /v1/tasks               register a submitted task: {worker, task_id, requester}
     GET  /v1/pending             pending requests of its tasks (and its own)
     POST /v1/requests/{id}/context   add a note for the human: {text}
+  the secretary only (read-only, for the web UI):
+    GET  /v1/overview            all pending requests and all active grants
 
 Agents pull decisions; there is no way to push one to an agent. An agent sees only its own
 requests and grants; a manager also sees, and may annotate, those of its tasks.
 """
 import asyncio
 import hmac
+import os
 
 from starlette.applications import Starlette
 from starlette.requests import Request as HttpRequest
@@ -121,7 +124,24 @@ def app(broker: Broker, tokens: dict[str, str]):
             return JSONResponse({"error": str(e)}, status_code=400)
         return JSONResponse(req.view())
 
+    async def overview(request: HttpRequest):
+        agent = caller(request)
+        if not agent:
+            return denied()
+        if role(agent) != "secretary":
+            return denied(403, "the secretary only")
+        grants = {}
+        for name in sorted(os.listdir(broker.grant_dir)):
+            if name.endswith(".json"):
+                active = broker.grants(name[:-5])
+                if active:
+                    grants[name[:-5]] = active
+        pending = [{k: r.view()[k] for k in ("id", "agent", "task_id", "human", "detail",
+                                              "expires", "manager")} for r in broker.pending()]
+        return JSONResponse({"pending": pending, "grants": grants})
+
     return Starlette(routes=[
+        Route("/v1/overview", overview, methods=["GET"]),
         Route("/v1/requests", submit, methods=["POST"]),
         Route("/v1/requests/{rid}", get, methods=["GET"]),
         Route("/v1/requests/{rid}/context", context, methods=["POST"]),

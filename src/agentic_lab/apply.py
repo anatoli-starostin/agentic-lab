@@ -27,7 +27,7 @@ from .registry import load as load_lab
 
 PRIVATE = "/etc/agentic-lab/private"
 INTAKE = "/home/lab-secretary/.local/state/agentic-lab/secrets"
-PORTS = {"worker": 8770, "intake": 8771, "broker": 8772}
+PORTS = {"worker": 8770, "intake": 8771, "broker": 8772, "secretary": 8774}
 SOURCE_COPY = "/opt/agentic-lab/src"
 
 
@@ -128,7 +128,8 @@ def host_plan(lab, host, tokens, intake=intake_secret):
             allowed = [m for m, ma in managers.items()
                        if a.get("access", "dedicated") == "shared" or ma.get("human") == a.get("human")]
             files[f"/home/{user}/.config/agentic-lab/manager-tokens.yaml"] = (user, "600", yaml.safe_dump(
-                {m: tokens.get(f"mgr:{m}:{aid}") for m in allowed}))
+                {**{m: tokens.get(f"mgr:{m}:{aid}") for m in allowed},
+                 secretary: tokens.get(f"mon:{aid}")}))
             files[f"/home/{user}/.config/agentic-lab/broker.yaml"] = (user, "600", yaml.safe_dump(
                 {"url": broker_url, "token": tokens.get(f"broker:{aid}")}))
             _, port = lab.address(aid)
@@ -146,15 +147,24 @@ def host_plan(lab, host, tokens, intake=intake_secret):
             units.append(("lab-manager@.service", f"lab-manager@{aid}"))
 
     if host == sec_host:
+        sec_user = lab.unix_user(secretary)
+        workers_all = [w for w, wa in lab.agents.items() if wa.get("role") == "worker"]
+        files[f"/home/{sec_user}/.config/agentic-lab/monitor.yaml"] = (sec_user, "600", yaml.safe_dump(
+            {w: tokens.get(f"mon:{w}") for w in workers_all}))
+        files[f"/home/{sec_user}/.config/agentic-lab/broker.yaml"] = (sec_user, "600", yaml.safe_dump(
+            {"url": broker_url, "token": tokens.get(f"broker:{secretary}")}))
         users += ["lab-broker"]
-        agents = [aid for aid, a in lab.agents.items() if a.get("role") in ("worker", "manager")]
+        agents = [aid for aid, a in lab.agents.items()
+                  if a.get("role") in ("worker", "manager", "secretary")]
         files["/home/lab-broker/.config/agentic-lab/agent-tokens.yaml"] = ("lab-broker", "600",
             yaml.safe_dump({aid: tokens.get(f"broker:{aid}") for aid in agents}))
         secret("lab-broker", "slack.env", intake("service:broker", "slack-app"),
                "the Lab Approvals Slack app tokens (lab secret request service:broker slack-app)")
         envs["/etc/agentic-lab/broker.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={PORTS['broker']}\n"
         envs["/etc/agentic-lab/intake.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={PORTS['intake']}\n"
-        units += [("lab-broker.service", "lab-broker"), ("lab-intake.service", "lab-intake")]
+        envs["/etc/agentic-lab/secretary.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={PORTS['secretary']}\n"
+        units += [("lab-broker.service", "lab-broker"), ("lab-intake.service", "lab-intake"),
+                  ("lab-secretary.service", "lab-secretary")]
         if "lab-secretary" not in users:
             users.append("lab-secretary")
     return {"host": host, "name": name, "files": files, "users": users, "units": units,

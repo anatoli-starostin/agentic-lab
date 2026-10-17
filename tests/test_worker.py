@@ -288,3 +288,20 @@ def test_write_file_lands_in_inbox(tmp_path):
     assert (tmp_path / "inbox" / "data.csv").read_bytes() == b"a,b\n1,2\n"
     with pytest.raises(ToolError, match="base64"):
         write_inbox_file(tmp_path, "x", "not base64!!")
+
+
+def test_secretary_monitors_read_only(tmp_path):
+    from agentic_lab.worker.server import AccessError
+    lab = registry.load(EXAMPLE)
+    acc = access_for(lab, "worker-b", f"mgr-alice: {TOK_A}\nsecretary: {TOK_B}\n")
+    sec = acc.caller({"authorization": f"Bearer {TOK_B}"})
+    assert sec.readonly and sec.manager == "secretary"
+    store = T.TaskStore(tmp_path)
+
+    async def scenario(url):
+        err, msg = await _call(url, TOK_B, "submit_task", {"instruction": "x", "requester": "alice"})
+        assert err and "monitoring only" in msg
+        err, h = await _call(url, TOK_B, "list_tasks", {})
+        assert not err
+
+    asyncio.run(_with_server(store, acc, scenario))

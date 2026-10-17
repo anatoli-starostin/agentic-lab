@@ -27,11 +27,11 @@ CONFIG = ".config/agentic-lab"
 SECRETS = {
     "worker": ["claude-oauth-token", "manager-tokens.yaml", "broker.yaml"],
     "manager": ["claude-oauth-token", "slack.env", "workers.yaml", "broker.yaml"],
-    "secretary": ["claude-oauth-token"],
+    "secretary": ["claude-oauth-token", "monitor.yaml", "broker.yaml"],
     "broker": ["slack.env", "agent-tokens.yaml"],
 }
-UNITS = {"worker": "lab-worker@{}", "manager": "lab-manager@{}", "broker": "lab-broker",
-         "intake": "lab-intake"}
+UNITS = {"worker": "lab-worker@{}", "manager": "lab-manager@{}", "secretary": "lab-secretary",
+         "broker": "lab-broker", "intake": "lab-intake"}
 
 
 @dataclass
