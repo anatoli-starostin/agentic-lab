@@ -1,0 +1,20 @@
+# AppArmor profile for bubblewrap on an agentic-lab worker host.
+#
+# Ubuntu (24.04+) restricts unprivileged user namespaces. Its own bwrap profile
+# (bwrap-userns-restrict) lets bwrap create them but strips capabilities from
+# everything bwrap starts. Claude Code's sandbox runs a seccomp helper inside bwrap that
+# needs CAP_SYS_ADMIN in a nested user namespace (to block Unix sockets), so under that
+# profile the sandbox cannot start.
+#
+# This profile lets bwrap, and what it starts, use user namespaces with their in-namespace
+# capabilities, which is the default on most other distributions. Capabilities inside a
+# user namespace give no privilege over the host.
+
+abi <abi/4.0>,
+include <tunables/global>
+
+profile bwrap /usr/bin/bwrap flags=(unconfined) {
+  userns,
+
+  include if exists <local/bwrap>
+}
