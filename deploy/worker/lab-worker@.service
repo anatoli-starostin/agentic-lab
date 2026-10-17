@@ -1,0 +1,27 @@
+# One worker agent as a system service: `systemctl enable --now lab-worker@<agent-id>`.
+# Runs as the agent's own Unix user (lab-<agent-id>, see create-agent-user.sh); no tmux,
+# no login session. The framework lives in /opt/agentic-lab (root-owned: the agent can't
+# change the code that runs it) and the lab's description in /etc/agentic-lab/lab.yaml.
+#
+# The MCP address comes from /etc/agentic-lab/worker-<agent-id>.env:
+#   LAB_BIND=<this host's tailnet IP>   LAB_PORT=8770   LAB_NAME=<this host's tailnet name>
+
+[Unit]
+Description=Agentic Lab worker %i
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=lab-%i
+Group=lab-%i
+WorkingDirectory=~
+EnvironmentFile=/etc/agentic-lab/worker-%i.env
+ExecStart=/opt/agentic-lab/venv/bin/lab --lab /etc/agentic-lab/lab.yaml worker serve %i --host ${LAB_BIND} --port ${LAB_PORT} --name ${LAB_NAME}
+Restart=always
+RestartSec=5
+# A /tmp of its own: sockets other processes leave in the host's /tmp (tmux, forwarded SSH
+# agents, other agents) aren't even visible to this agent.
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

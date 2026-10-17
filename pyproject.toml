@@ -5,7 +5,12 @@ description = "A framework for humans and AI agents running a scientific lab tog
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.12"
-dependencies = ["pyyaml>=6"]
+dependencies = [
+    "pyyaml>=6",
+    "claude-agent-sdk>=0.2.116",
+    "mcp>=2.3,<3",
+    "uvicorn>=0.31",
+]
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]

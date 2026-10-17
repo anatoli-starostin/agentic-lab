@@ -2,6 +2,7 @@
 
     lab check [lab.yaml]        validate the lab registry
     lab settings <agent>        the agent's generated Claude Code settings (sandbox + grants)
+    lab worker serve <agent>    run a worker's service (as its own Unix user, from systemd)
 """
 import argparse
 import json
@@ -51,6 +52,18 @@ def cmd_settings(args):
     return 0
 
 
+def cmd_worker_serve(args):
+    import asyncio
+    import logging
+
+    from .worker.service import serve
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    names = [n for n in (args.name or "").split(",") if n]
+    asyncio.run(serve(args.lab, args.agent, args.host, args.port, model=args.model,
+                      names=names))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="lab", description="Agentic Lab command line")
     ap.add_argument("--lab", default="lab.yaml", help="path to lab.yaml (default: ./lab.yaml)")
@@ -63,6 +76,18 @@ def main(argv=None):
     st = sub.add_parser("settings", help="print an agent's generated Claude Code settings")
     st.add_argument("agent")
     st.set_defaults(fn=cmd_settings)
+
+    wk = sub.add_parser("worker", help="the worker service")
+    wsub = wk.add_subparsers(dest="wcmd", required=True)
+    ws = wsub.add_parser("serve", help="run a worker's service")
+    ws.add_argument("agent")
+    ws.add_argument("--host", default="127.0.0.1", help="address to serve MCP on "
+                    "(the host's tailnet IP in production)")
+    ws.add_argument("--port", type=int, default=8770)
+    ws.add_argument("--name", help="comma-separated host names managers use to reach this "
+                    "worker, e.g. its tailnet name (besides --host)")
+    ws.add_argument("--model", help="override the agent's model from lab.yaml")
+    ws.set_defaults(fn=cmd_worker_serve)
 
     args = ap.parse_args(argv)
     if getattr(args, "path", None) and args.cmd == "check":
