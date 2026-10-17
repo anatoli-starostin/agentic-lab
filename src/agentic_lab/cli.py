@@ -76,14 +76,21 @@ STATE = "~/.local/state/agentic-lab"
 def cmd_secret_request(args):
     import os
 
-    from .secrets.intake import Intake, message
+    from .secrets.intake import Intake, form_url, message
     lab = _load_lab(args.lab)
-    if args.human not in lab.humans:
-        sys.exit(f"lab: no human {args.human!r} in {args.lab}")
+    owner = args.human
+    if owner.startswith("service:"):
+        if args.name != "slack-app":
+            sys.exit("lab: services hand over slack-app secrets only")
+    elif owner not in lab.humans:
+        sys.exit(f"lab: no human {owner!r} in {args.lab}")
     intake = Intake(os.path.expanduser(args.state))
-    code = intake.request(args.human, args.name)
-    name = (lab.humans[args.human] or {}).get("name", args.human)
-    print(message(name, code, args.url, args.name))
+    code = intake.request(owner, args.name)
+    if args.form or owner.startswith("service:"):
+        print(form_url(code, args.url))
+    else:
+        name = (lab.humans[owner] or {}).get("name", owner)
+        print(message(name, code, args.url, args.name))
     return 0
 
 
@@ -149,8 +156,10 @@ def main(argv=None):
     sc = sub.add_parser("secret", help="secrets from humans")
     ssub = sc.add_subparsers(dest="scmd", required=True)
     sr = ssub.add_parser("request", help="ask a human for a secret (one-time code + message)")
-    sr.add_argument("human")
-    sr.add_argument("name", choices=["claude-token"])
+    sr.add_argument("human", help="the owner: a human id, or service:<name> (e.g. service:broker)")
+    sr.add_argument("name", choices=["claude-token", "slack-app"])
+    sr.add_argument("--form", action="store_true",
+                    help="print a one-time web-form link instead of the client command")
     sr.add_argument("--url", required=True, help="the intake's address as members reach it, "
                     "e.g. http://secretary.example.ts.net:8771")
     sr.add_argument("--state", default=STATE)

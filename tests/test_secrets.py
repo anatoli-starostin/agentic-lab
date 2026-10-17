@@ -123,3 +123,43 @@ def test_client_finds_token_in_terminal_output():
     assert client.find_token(wrapped) == tok
     assert client.find_token("no token here") is None
     assert client.find_token("x sk-ant-oat01-" + "z" * 60 + " trailing") == "sk-ant-oat01-" + "z" * 60
+
+
+def test_slack_app_secret_for_a_service(tmp_path):
+    it = I.Intake(tmp_path)
+    code = it.request("service:broker", "slack-app")
+    with pytest.raises(I.IntakeError, match="App-Level Token"):
+        it.receive(code, "slack-app", {"bot": "xoxb-" + "1" * 30, "app": "nope"})
+    it.receive(code, "slack-app", {"bot": "xoxb-" + "1" * 30, "app": "xapp-" + "2" * 30})
+    assert it.load("service:broker", "slack-app") == (
+        "SLACK_BOT_TOKEN=xoxb-" + "1" * 30 + "\nSLACK_APP_TOKEN=xapp-" + "2" * 30)
+    assert (tmp_path / "secrets" / "services" / "broker" / "slack-app").exists()
+    with pytest.raises(I.IntakeError, match="bad owner"):
+        it.request("../etc", "slack-app")
+
+
+def test_web_form(tmp_path, free_port):
+    it = I.Intake(tmp_path)
+    code = it.request("service:broker", "slack-app")
+    server = uvicorn.Server(uvicorn.Config(app(it, ROOT / "client" / "lab-member.py"),
+                                           host="127.0.0.1", port=free_port, log_level="error"))
+    th = threading.Thread(target=server.run, daemon=True)
+    th.start()
+    while not server.started:
+        time.sleep(0.02)
+    try:
+        import httpx2
+        url = I.form_url(code, f"http://127.0.0.1:{free_port}")
+        page = httpx2.get(url)
+        assert page.status_code == 200 and 'type="password"' in page.text
+        assert "Content-Security-Policy" in page.headers
+        bad = httpx2.post(url, data={"bot": "xoxb-" + "1" * 30, "app": "oops"})
+        assert "doesn&#x27;t look like" in bad.text or "doesn't look like" in bad.text
+        assert "oops" not in bad.text                      # values are never echoed back
+        ok = httpx2.post(url, data={"bot": "xoxb-" + "1" * 30, "app": "xapp-" + "2" * 30})
+        assert "Stored" in ok.text
+        assert httpx2.get(url).status_code == 404          # the link works once
+        assert it.load("service:broker", "slack-app").startswith("SLACK_BOT_TOKEN=xoxb-")
+    finally:
+        server.should_exit = True
+        th.join()

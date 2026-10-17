@@ -1,9 +1,10 @@
 """Secret intake: humans hand secrets to the lab without them passing through a chat.
 
-The secretary (or the admin) creates a request for one human and one secret. That yields a
-one-time code and a ready-to-send message. The human runs the member client
-(`client/lab-member.py`) on their own machine, which sends the secret here over the
-tailnet with the code. Codes are single-use, tied to one human and one secret name, and
+The secretary (or the admin) creates a request for one secret, owned by a human (their
+Claude token) or by a lab service (e.g. the broker's Slack app tokens). That yields a
+one-time code. The secret then arrives here over the tailnet with the code, either from the
+member client (`client/lab-member.py`) or from a one-time web form (`/s/<code>`) that a
+human opens in their browser and pastes into. Codes are single-use, tied to one human and one secret name, and
 expire (24 h by default). Only a hash of each code is stored.
 
 Stored secrets live under the secretary service user's state directory, readable by that
@@ -15,13 +16,21 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import secrets as pysecrets
 import tempfile
 import threading
 import time
 from dataclasses import dataclass
 
-NAMES = ("claude-token",)
+NAMES = ("claude-token", "slack-app")
+# what each secret is made of, for the web form: (field, label, required prefix)
+FIELDS = {
+    "claude-token": [("value", "Claude token (sk-ant-…)", "sk-ant-")],
+    "slack-app": [("bot", "Bot User OAuth Token (xoxb-…)", "xoxb-"),
+                  ("app", "App-Level Token (xapp-…)", "xapp-")],
+}
+_OWNER = re.compile(r"^(service:)?[a-z][a-z0-9-]*$")
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"     # no 0/O, 1/I
 MAX_FAILURES = 20            # failed attempts per window, across all codes...
 FAILURE_WINDOW_S = 600       # ...before the intake refuses everything for a while
@@ -70,9 +79,12 @@ class Intake:
     # ── requests ─────────────────────────────────────────────────────────────
 
     def request(self, human, name, ttl=dt.timedelta(hours=24)) -> str:
-        """Create a one-time code for `human` to hand over secret `name`."""
+        """Create a one-time code to hand over secret `name`. `human` is the owner: a
+        human id, or `service:<name>` for a lab service (e.g. `service:broker`)."""
         if name not in NAMES:
             raise IntakeError(f"unknown secret {name!r} (known: {NAMES})")
+        if not _OWNER.match(human or ""):
+            raise IntakeError(f"bad owner {human!r}")
         raw = "".join(pysecrets.choice(_ALPHABET) for _ in range(8))
         code = f"{raw[:4]}-{raw[4:]}"
         req = Request(human, name, (_now() + ttl).isoformat(timespec="seconds"))
@@ -104,7 +116,7 @@ class Intake:
                 raise IntakeError("this code has expired; ask for a new one")
             if not hmac.compare_digest(req.name, name or ""):
                 raise IntakeError(f"this code is for {req.name}, not {name}")
-            check_value(name, value)
+            value = check_value(name, value)
             self.store(req.human, name, value)
             req.used = True
             _write_private(path, json.dumps(req.__dict__))
@@ -112,10 +124,24 @@ class Intake:
 
     # ── stored secrets ───────────────────────────────────────────────────────
 
-    def _secret_path(self, human, name):
-        if not human.replace("-", "").replace("_", "").isalnum() or name not in NAMES:
-            raise IntakeError("bad human or secret name")
-        return os.path.join(self.secrets_dir, "humans", human, name)
+    def lookup(self, code):
+        """The live request behind `code` (for the web form), or None. Doesn't use it up."""
+        path = os.path.join(self.requests_dir, _hash((code or "").strip().upper()) + ".json")
+        try:
+            with open(path) as f:
+                req = Request(**json.load(f))
+        except (FileNotFoundError, ValueError):
+            return None
+        if req.used or dt.datetime.fromisoformat(req.expires) < _now():
+            return None
+        return req
+
+    def _secret_path(self, owner, name):
+        if not _OWNER.match(owner or "") or name not in NAMES:
+            raise IntakeError("bad owner or secret name")
+        if owner.startswith("service:"):
+            return os.path.join(self.secrets_dir, "services", owner[8:], name)
+        return os.path.join(self.secrets_dir, "humans", owner, name)
 
     def store(self, human, name, value):
         _write_private(self._secret_path(human, name), value.strip() + "\n")
@@ -131,10 +157,31 @@ class Intake:
 
 
 def check_value(name, value):
-    if not isinstance(value, str) or not value.strip():
-        raise IntakeError("empty secret")
-    if name == "claude-token" and (not value.startswith("sk-ant-") or len(value) < 40):
+    """Validate a secret and return the text to store. A one-field secret is a string; a
+    several-field one (slack-app) is a dict of its fields."""
+    fields = FIELDS[name]
+    if len(fields) == 1:
+        value = {fields[0][0]: value}
+    if not isinstance(value, dict):
+        raise IntakeError("bad secret")
+    out = {}
+    for key, label, prefix in fields:
+        v = (value.get(key) or "").strip()
+        if not v:
+            raise IntakeError(f"missing: {label}")
+        if not v.startswith(prefix) or len(v) < 20:
+            raise IntakeError(f"that doesn't look like a {label}")
+        out[key] = v
+    if name == "claude-token" and len(out["value"]) < 40:
         raise IntakeError("that doesn't look like a Claude token")
+    if name == "slack-app":
+        return f"SLACK_BOT_TOKEN={out['bot']}\nSLACK_APP_TOKEN={out['app']}"
+    return out["value"]
+
+
+def form_url(code, url):
+    """The one-time web form for a request."""
+    return f"{url.rstrip('/')}/s/{code}"
 
 
 def message(human_name, code, url, name="claude-token"):
