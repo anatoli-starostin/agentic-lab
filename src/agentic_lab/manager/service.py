@@ -7,6 +7,7 @@ agent):
     ~/.config/agentic-lab/workers.yaml         {worker-id: token} to reach workers
     ~/.config/agentic-lab/broker.yaml          {url, token} for approvals
     ~/.config/agentic-lab/claude-oauth-token   the seat token
+    ~/.config/agentic-lab/monitor-token        the secretary's token for /v1/status
 """
 import asyncio
 import datetime as dt
@@ -18,6 +19,7 @@ from types import SimpleNamespace
 import yaml
 
 from ..broker.service import _env_file
+from ..eventlog import EventLog
 from ..registry import load as load_lab
 from ..slackio import SILENT, SlackIO
 from ..worker.approver import BrokerApprover
@@ -114,7 +116,7 @@ class Manager:
         await self.slack.post(conv.channel, conv.thread_ts, reply)
 
 
-async def serve(lab_path, agent_id):
+async def serve(lab_path, agent_id, host=None, port=None):
     lab = load_lab(lab_path)
     a = lab.agents.get(agent_id) or {}
     if a.get("role") != "manager":
@@ -143,13 +145,15 @@ async def serve(lab_path, agent_id):
     state = ManagerState(state_root)
     memory = Memory(os.path.join(state_root, "memory"), shared=a.get("access") == "shared")
     usage = UsageLog(os.path.join(state_root, "usage.json"))
+    events = EventLog(os.path.join(state_root, "events"))
+    events.prune()
 
     def settings_for(grants):
         return lab.agent_settings(agent_id, extra_grants=grants,
                                   now=dt.datetime.now(dt.timezone.utc))
 
     brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
-                  approver=approver, model=a.get("model"), env=env, usage=usage)
+                  approver=approver, model=a.get("model"), env=env, usage=usage, events=events)
     members = {(h or {}).get("slack_user"): hid for hid, h in lab.humans.items()
                if (h or {}).get("slack_user")}
     mgr = Manager(lab, agent_id, None, brain, workers, broker, state, memory, workdir)
@@ -168,7 +172,19 @@ async def serve(lab_path, agent_id):
              len(members))
     follower = asyncio.create_task(follow(state, workers, mgr.post, mgr.finished, stop,
                                           mention=mgr.mention))
+    status_server = None
+    if host and port:               # the secretary's view: usage and events
+        import uvicorn
+
+        from .status import app as status_app
+        status_server = uvicorn.Server(uvicorn.Config(
+            status_app(_read_secret(f"{CONFIG}/monitor-token"), usage, events),
+            host=host, port=port, log_level="warning"))
+        status_server.install_signal_handlers = lambda: None   # this process handles signals
+        asyncio.create_task(status_server.serve())
     await stop.wait()
+    if status_server is not None:
+        status_server.should_exit = True
     await slack.stop()
     follower.cancel()
 

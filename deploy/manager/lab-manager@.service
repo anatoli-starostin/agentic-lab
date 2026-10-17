@@ -13,7 +13,8 @@ Wants=network-online.target
 User=lab-%i
 Group=lab-%i
 WorkingDirectory=~
-ExecStart=/opt/agentic-lab/venv/bin/lab --lab /etc/agentic-lab/lab.yaml manager serve %i
+EnvironmentFile=/etc/agentic-lab/manager-%i.env
+ExecStart=/opt/agentic-lab/venv/bin/lab --lab /etc/agentic-lab/lab.yaml manager serve %i --host ${LAB_BIND} --port ${LAB_PORT}
 Restart=always
 RestartSec=5
 # A /tmp of its own: sockets other processes leave in the host's /tmp (tmux, forwarded SSH

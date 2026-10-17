@@ -144,11 +144,15 @@ def host_plan(lab, host, tokens, intake=intake_secret):
                 {"url": broker_url, "token": tokens.get(f"broker:{aid}")}))
             secret(user, "slack.env", intake(f"service:{aid}", "slack-app"),
                    f"{aid}'s Slack app tokens (lab secret request service:{aid} slack-app)")
+            files[f"/home/{user}/.config/agentic-lab/monitor-token"] = (
+                user, "600", tokens.get(f"mon:{aid}") + "\n")
+            _, port = lab.address(aid)
+            envs[f"/etc/agentic-lab/manager-{aid}.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={port}\n"
             units.append(("lab-manager@.service", f"lab-manager@{aid}"))
 
     if host == sec_host:
         sec_user = lab.unix_user(secretary)
-        workers_all = [w for w, wa in lab.agents.items() if wa.get("role") == "worker"]
+        workers_all = [w for w, wa in lab.agents.items() if wa.get("role") in ("worker", "manager")]
         files[f"/home/{sec_user}/.config/agentic-lab/monitor.yaml"] = (sec_user, "600", yaml.safe_dump(
             {w: tokens.get(f"mon:{w}") for w in workers_all}))
         files[f"/home/{sec_user}/.config/agentic-lab/broker.yaml"] = (sec_user, "600", yaml.safe_dump(

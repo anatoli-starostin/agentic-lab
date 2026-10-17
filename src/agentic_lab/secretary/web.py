@@ -3,8 +3,9 @@
 One page, rendered on the server from the secretary's latest snapshot, refreshing itself.
 Every reading shows when it was taken and which agent reported it. No external assets.
 
-    GET /            the page
-    GET /state.json  the snapshot, for scripts
+    GET /                 the page
+    GET /state.json       the snapshot, for scripts
+    GET /logs/{agent}     an agent's event log (admins only: recognised by `tailscale whois`)
 """
 import datetime as dt
 import html
@@ -33,7 +34,7 @@ td,th{text-align:left;padding:5px 6px;border-top:1px solid var(--line);vertical-
 th{font-weight:600;color:var(--muted);font-size:12px;border-top:none}
 .bar{height:8px;background:var(--barbg);border-radius:4px;overflow:hidden;margin:4px 0}
 .bar>i{display:block;height:100%;background:var(--bar)}
-.pill{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--line);
+a{color:inherit}.pill{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--line);
 font-size:12px}code{font-size:12px;word-break:break-all}
 @media (max-width:420px){main{padding:12px;grid-template-columns:1fr}header{padding:14px 16px}}
 """
@@ -149,7 +150,8 @@ def _approvals(state):
 
 def _agents(state):
     rows = "".join(
-        f"<tr><td><b>{e(a['name'])}</b><div class='muted small'>{e(aid)}</div></td>"
+        f"<tr><td><b><a href='/logs/{e(aid)}'>{e(a['name'])}</a></b>"
+        f"<div class='muted small'>{e(aid)}</div></td>"
         f"<td>{e(a.get('role'))}</td><td>{e(a.get('human'))}</td><td>{e(a.get('host'))}</td>"
         f"<td class='{'ok' if a.get('service') == 'active' or a.get('up') else 'muted'}'>"
         f"{e(a.get('service') or ('up' if a.get('up') else '—'))}</td></tr>"
@@ -174,13 +176,58 @@ def render(state):
             f"monitoring only; approvals happen in Slack</span></header>{body}</body></html>")
 
 
-def app(get_state):
+KIND_CLASS = {"message": "", "reply": "ok", "tool": "muted", "result": "muted",
+              "approval": "warn", "task": "", "error": "bad"}
+HEADERS = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'",
+           "Cache-Control": "no-store"}
+
+
+def render_logs(state, agent, hours, events, error=None):
+    name = (state or {}).get("agents", {}).get(agent, {}).get("name", agent)
+    picks = " · ".join(f"<a href='/logs/{e(agent)}?hours={h}'>{label}</a>"
+                       for h, label in ((1, "1 h"), (24, "24 h"), (168, "7 days")))
+    rows = "".join(
+        f"<tr><td class='muted small' style='white-space:nowrap'>{e(ev.get('at', '')[5:16].replace('T', ' '))}</td>"
+        f"<td class='{KIND_CLASS.get(ev.get('kind'), '')} small'>{e(ev.get('kind'))}"
+        f"{' ⚠' if ev.get('error') else ''}</td>"
+        f"<td class='small muted'>{e(ev.get('task') or ev.get('member') or '')}</td>"
+        f"<td><pre style='margin:0;white-space:pre-wrap;font:12px/1.4 ui-monospace,monospace'>"
+        f"{e(ev.get('text'))}</pre></td></tr>"
+        for ev in reversed(events))
+    body = (f"<main style='display:block'><section><h2>{e(name)}: the last {e(hours)} h</h2>"
+            f"<p class='small'><a href='/'>← the lab</a> · {picks}</p>"
+            + (f"<p class='bad'>{e(error)}</p>" if error else "") +
+            f"<table><tr><th>When (UTC)</th><th>What</th><th>Task / member</th><th></th></tr>"
+            f"{rows or '<tr><td class=muted colspan=4>nothing in this period</td></tr>'}</table>"
+            f"</section></main>")
+    return (f"<!doctype html><html><head><meta charset='utf-8'><title>{e(name)} · logs</title>"
+            f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            f"<style>{CSS}</style></head><body><header><h1>{e(name)} · log</h1>"
+            f"<span class='muted small'>admins only</span></header>{body}</body></html>")
+
+
+def app(get_state, get_events=None, is_admin=None):
+    """`get_events(agent, hours)` (async) -> events; `is_admin(client_ip)` (async) -> bool."""
     async def page(request):
-        return HTMLResponse(render(get_state()),
-                            headers={"Content-Security-Policy": "default-src 'none'; "
-                                     "style-src 'unsafe-inline'", "Cache-Control": "no-store"})
+        return HTMLResponse(render(get_state()), headers=HEADERS)
 
     async def state_json(request):
         return JSONResponse(get_state() or {})
 
-    return Starlette(routes=[Route("/", page), Route("/state.json", state_json)])
+    async def logs(request):
+        agent = request.path_params["agent"]
+        if is_admin is None or get_events is None or not await is_admin(request.client.host):
+            return HTMLResponse("<!doctype html><p>Agents' logs are for the lab's admins only.</p>",
+                                status_code=403, headers=HEADERS)
+        try:
+            hours = min(max(float(request.query_params.get("hours", 24)), 0.1), 336)
+        except ValueError:
+            hours = 24
+        try:
+            events, error = await get_events(agent, hours), None
+        except Exception as ex:
+            events, error = [], f"couldn't fetch the log: {ex}"
+        return HTMLResponse(render_logs(get_state(), agent, hours, events, error), headers=HEADERS)
+
+    return Starlette(routes=[Route("/", page), Route("/state.json", state_json),
+                             Route("/logs/{agent}", logs)])

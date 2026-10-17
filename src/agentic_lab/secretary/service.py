@@ -27,7 +27,8 @@ from ..manager.state import ManagerState
 from ..secrets.intake import Intake, message
 from ..slackio import SILENT, SlackIO
 from .brain import SecretaryBrain, expiry_notices
-from .status import collect
+from ..eventlog import EventLog
+from .status import collect, manager_status
 from .web import app
 import datetime as dt
 from types import SimpleNamespace
@@ -114,9 +115,39 @@ class Secretary:
 async def serve(lab_path, host, port):
     lab = load_lab(lab_path)
     mon = yaml.safe_load(_read_secret(f"{CONFIG}/monitor.yaml") or "") or {}
-    workers = Workers({w: lab.worker_url(w) for w in mon if w in lab.agents}, mon, timeout=15)
+    role = lambda a: lab.agents.get(a, {}).get("role")     # noqa: E731
+    workers = Workers({w: lab.worker_url(w) for w in mon if role(w) == "worker"},
+                      {w: t for w, t in mon.items() if role(w) == "worker"}, timeout=15)
+    managers = {m: t for m, t in mon.items() if role(m) == "manager"}
     bcfg = yaml.safe_load(_read_secret(f"{CONFIG}/broker.yaml") or "") or {}
     broker = (bcfg["url"], bcfg["token"]) if bcfg.get("url") and bcfg.get("token") else None
+    events = EventLog(os.path.expanduser(f"{STATE}/events"))
+    events.prune()
+    admins = {(h or {}).get("tailscale_login") for h in lab.humans.values()
+              if (h or {}).get("admin") and (h or {}).get("tailscale_login")}
+
+    async def get_events(agent, hours):
+        r = role(agent)
+        if r == "worker":
+            return (await workers.call(agent, "recent_events", {"hours": hours}))["events"]
+        if r == "manager" and agent in managers:
+            return (await manager_status(lab, agent, managers[agent], hours))["events"]
+        if r == "secretary":
+            import datetime as _dt
+            return events.read(since=_dt.timedelta(hours=hours), limit=2000)
+        raise ValueError(f"no log for {agent!r}")
+
+    async def is_admin(ip):
+        """Who's behind this tailnet address? An admin in lab.yaml?"""
+        try:
+            p = await asyncio.create_subprocess_exec(
+                "tailscale", "whois", "--json", ip, stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL)
+            out, _ = await asyncio.wait_for(p.communicate(), 10)
+            login = json.loads(out or b"{}").get("UserProfile", {}).get("LoginName")
+        except (OSError, ValueError, asyncio.TimeoutError):
+            return False
+        return bool(login) and login in admins
     here = {aid for aid, a in lab.agents.items()
             if a.get("host") == next((x.get("host") for x in lab.agents.values()
                                       if x.get("role") == "secretary"), None)}
@@ -138,7 +169,7 @@ async def serve(lab_path, host, port):
     async def collector():
         while not stop.is_set():
             try:
-                latest["state"] = await collect(lab, workers, broker, units)
+                latest["state"] = await collect(lab, workers, broker, units, managers)
                 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(snapshot_path))
                 with os.fdopen(fd, "w") as f:
                     json.dump(latest["state"], f)
@@ -159,7 +190,8 @@ async def serve(lab_path, host, port):
     workdir = os.path.expanduser(sa.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
     brain = SecretaryBrain(lab.display_name(sec_id), lab.name, workdir,
-                           lab.agent_settings(sec_id), model=sa.get("model"), env=env)
+                           lab.agent_settings(sec_id), model=sa.get("model"), env=env,
+                           events=events)
     sec = Secretary(lab, latest, workers, brain,
                     ManagerState(os.path.expanduser(f"{STATE}/chat")))
     slack_env = _env_file(_read_secret(f"{CONFIG}/slack.env"))
@@ -182,8 +214,8 @@ async def serve(lab_path, host, port):
             except asyncio.TimeoutError:
                 pass
 
-    server = uvicorn.Server(uvicorn.Config(app(lambda: latest["state"]), host=host, port=port,
-                                           log_level="warning"))
+    server = uvicorn.Server(uvicorn.Config(app(lambda: latest["state"], get_events, is_admin),
+                                           host=host, port=port, log_level="warning"))
     log.info("secretary: watching %d worker(s), slack=%s, web UI on http://%s:%d/",
              len(workers.known()), sec.slack is not None, host, port)
     tasks = [asyncio.create_task(collector()), asyncio.create_task(notice_loop())]

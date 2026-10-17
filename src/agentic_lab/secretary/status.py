@@ -38,13 +38,29 @@ async def broker_overview(url, token):
         return {"error": str(e)}
 
 
-async def collect(lab, workers: Workers, broker=None, local_units=None):
+async def manager_status(lab, manager, token, hours=0):
+    """A manager's /v1/status (usage, and events for the last `hours`)."""
+    name, port = lab.address(manager)
+    async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=10) as c:
+        r = await c.get(f"http://{name}:{port}/v1/status", params={"hours": hours})
+        r.raise_for_status()
+        return r.json()
+
+
+async def collect(lab, workers: Workers, broker=None, local_units=None, managers=None):
+    """One snapshot of the lab. `managers`: {manager-id: the secretary's token there}."""
     """One snapshot of the lab (a dict, ready for JSON and the web page)."""
     agents = {}
     for aid, a in lab.agents.items():
         agents[aid] = {"id": aid, "name": lab.display_name(aid), "role": a.get("role"),
                        "human": a.get("human"), "host": a.get("host"),
                        "access": a.get("access")}
+    for m, token in (managers or {}).items():
+        try:
+            st = await manager_status(lab, m, token)
+            agents[m].update(up=True, usage=st.get("usage"))
+        except (httpx2.HTTPError, ValueError) as e:
+            agents[m].update(up=False, error=str(e))
     for w in workers.known():
         try:
             h = await workers.call(w, "health_check", retries=0)

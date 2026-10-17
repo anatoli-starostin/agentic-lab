@@ -11,7 +11,10 @@ import warnings
 
 from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient,
                               PermissionResultAllow, PermissionResultDeny, ResultMessage,
-                              SystemMessage, TextBlock, create_sdk_mcp_server, tool)
+                              SystemMessage, TextBlock, ToolUseBlock, create_sdk_mcp_server,
+                              tool)
+
+from ..eventlog import tool_summary
 
 from ..manager.workers import WorkerError
 from ..worker.runner import allowed_without_asking
@@ -90,11 +93,15 @@ def build_tools(ctx):
 
 
 class SecretaryBrain:
-    def __init__(self, name, lab_name, workdir, settings, model=None, env=None):
+    def __init__(self, name, lab_name, workdir, settings, model=None, env=None, events=None):
         self.name, self.lab_name, self.workdir = name, lab_name, workdir
         self.settings, self.model, self.env = settings, model, env or {}
+        self.events = events
 
     async def turn(self, ctx, conv, prompt):
+        log = (lambda kind, text="", **m: self.events.add(kind, text, conv=conv.key, **m)
+               ) if self.events is not None else (lambda *a, **k: None)
+        log("message", prompt)
         async def can_use_tool(tool_name, tool_input, context):
             if tool_name in LAB_TOOLS or allowed_without_asking(tool_name, tool_input):
                 return PermissionResultAllow()
@@ -116,10 +123,14 @@ class SecretaryBrain:
                     conv.session_id = msg.data.get("session_id") or conv.session_id
                     ctx.save()
                 elif isinstance(msg, AssistantMessage):
-                    texts = [b.text for b in msg.content if isinstance(b, TextBlock)]
-                    last = texts[-1] if texts else last
+                    for b in msg.content:
+                        if isinstance(b, TextBlock):
+                            last = b.text
+                        elif isinstance(b, ToolUseBlock):
+                            log("tool", tool_summary(b.name, b.input))
                 elif isinstance(msg, ResultMessage):
                     reply = msg.result
+        log("reply", reply or last or "")
         return reply or last or ""
 
 

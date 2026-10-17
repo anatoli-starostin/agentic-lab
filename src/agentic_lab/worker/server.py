@@ -99,7 +99,7 @@ def write_inbox_file(workdir, name, b64):
 
 
 def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=None,
-              usage=None, workdir=None):
+              usage=None, workdir=None, events=None):
     """The worker's MCP server. `guardrails()` returns its current settings and grants."""
     mcp = MCPServer(name=f"agentic-lab worker {agent_id}",
                     instructions="Submit tasks to this worker and follow them.")
@@ -176,6 +176,16 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         if workdir is None:
             raise ToolError("this worker doesn't accept files")
         return write_inbox_file(workdir, name, base64_data)
+
+    @mcp.tool(description="This worker's own event log (messages, tool calls, results, "
+              "approvals, task events) for the last `hours`, newest last. For the admin's "
+              "log viewer.")
+    def recent_events(ctx: Context, hours: float = 24, limit: int = 500) -> dict:
+        who(ctx)
+        import datetime as _dt
+        if events is None:
+            return {"events": []}
+        return {"events": events.read(since=_dt.timedelta(hours=hours), limit=min(limit, 2000))}
 
     @mcp.tool(description="Liveness and state of this worker: queue, GPU, disk, versions.")
     def health_check(ctx: Context) -> dict:

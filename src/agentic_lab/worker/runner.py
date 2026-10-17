@@ -25,7 +25,9 @@ from typing import Callable, Protocol
 from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient,
                               PermissionResultAllow, PermissionResultDeny, RateLimitEvent,
                               ResultMessage, SystemMessage, TextBlock, ToolResultBlock,
-                              UserMessage, create_sdk_mcp_server, tool)
+                              ToolUseBlock, UserMessage, create_sdk_mcp_server, tool)
+
+from ..eventlog import tool_summary
 
 from ..policy.grants import Grant
 from . import tasks as T
@@ -122,7 +124,8 @@ def _grant_line(g):
 
 class SdkRunner:
     def __init__(self, agent_id, workdir, settings_for: Callable[[list], dict],
-                 approver: Approver = None, model=None, env=None, cli_path=None, usage=None):
+                 approver: Approver = None, model=None, env=None, cli_path=None, usage=None,
+                 events=None):
         """`settings_for(grants)` returns the agent's settings given its active Grants."""
         self.agent_id = agent_id
         self.workdir = workdir
@@ -132,6 +135,11 @@ class SdkRunner:
         self.env = env or {}
         self.cli_path = cli_path
         self.usage = usage          # a UsageLog, or None
+        self.events = events        # an EventLog, or None
+
+    def _log(self, kind, text="", **meta):
+        if self.events is not None:
+            self.events.add(kind, text, **meta)
 
     def _lab_server(self, task, store, outcome):
         @tool("report_progress", "Report progress on the current task to the humans "
@@ -172,12 +180,15 @@ class SdkRunner:
             if store.get(task.id).cancel_requested:
                 return PermissionResultDeny(message="The task was cancelled.", interrupt=True)
             store.update(task.id, state=T.AWAITING)
+            self._log("approval", "asked: " + tool_summary(tool_name, tool_input), task=task.id)
             try:
                 d = await self.approver.ask(task, tool_name, tool_input,
                                             list(session["violations"]))
             finally:
                 if store.get(task.id).state == T.AWAITING:
                     store.update(task.id, state=T.RUNNING)
+            self._log("approval", f"decided: {d.kind}" + (f" ({d.message[:200]})" if d.message
+                                                         else ""), task=task.id)
             if d.kind == "allow":
                 return PermissionResultAllow()
             if d.kind == "grant":
@@ -210,6 +221,8 @@ class SdkRunner:
         )
 
     async def run(self, task, store):
+        self._log("task", f"started for {task.requester} via {task.manager}: {task.instruction}",
+                  task=task.id)
         outcome = {}
         prompt = task.instruction if task.session_id is None else (
             "The worker restarted while you were on this task. Continue it from where you "
@@ -235,6 +248,9 @@ class SdkRunner:
                 continue
             break
         self._finish(task, store, outcome, result_msg, last_text)
+        t = store.get(task.id)
+        self._log("task", f"{t.state}: " + ((t.result or {}).get("summary") or t.error or ""),
+                  task=task.id)
 
     async def _session(self, task, store, outcome, session, grants, prompt):
         last_text, result_msg = None, None
@@ -248,15 +264,20 @@ class SdkRunner:
                         if sid and sid != store.get(task.id).session_id:
                             store.update(task.id, session_id=sid)
                     elif isinstance(msg, AssistantMessage):
-                        texts = [b.text for b in msg.content if isinstance(b, TextBlock)]
-                        if texts:
-                            last_text = texts[-1]
+                        for b in msg.content:
+                            if isinstance(b, TextBlock):
+                                last_text = b.text
+                                self._log("reply", b.text, task=task.id)
+                            elif isinstance(b, ToolUseBlock):
+                                self._log("tool", tool_summary(b.name, b.input), task=task.id)
                     elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
                         for b in msg.content:
                             if isinstance(b, ToolResultBlock):
                                 text = b.content if isinstance(b.content, str) else " ".join(
                                     x.get("text", "") for x in (b.content or [])
                                     if isinstance(x, dict))
+                                self._log("result", text[:1000], task=task.id,
+                                          error=bool(b.is_error) or None)
                                 session["violations"] = (session["violations"] +
                                                          sandbox_violations(text))[-10:]
                     elif isinstance(msg, RateLimitEvent) and self.usage:

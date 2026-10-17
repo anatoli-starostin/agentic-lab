@@ -15,6 +15,7 @@
     lab manager ask <agent> --as <member> "message"
                                 one message to a manager, answered on the console
     lab doctor [--host H]       (sudo) check this host against lab.yaml, with fixes
+    lab logs <agent> [--hours N] (sudo, on the agent's host) its event log
     lab plan [--host H]         what `lab apply` would do on each host; missing secrets
     lab apply [--host H]        (sudo, on the secretary host) make the hosts match lab.yaml
     lab slack-manifest <agent>|approvals
@@ -143,7 +144,7 @@ def cmd_manager_serve(args):
 
     from .manager.service import serve
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
-    asyncio.run(serve(args.lab, args.agent))
+    asyncio.run(serve(args.lab, args.agent, host=args.host, port=args.port))
     return 0
 
 
@@ -236,6 +237,30 @@ def cmd_secretary_ask(args):
     from .secretary.service import ask
     logging.basicConfig(level=logging.WARNING)
     asyncio.run(ask(args.lab, args.as_human, " ".join(args.message)))
+    return 0
+
+
+def cmd_logs(args):
+    import datetime as dt
+    import pwd
+
+    from .eventlog import EventLog
+    lab = _load_lab(args.lab)
+    if args.agent not in lab.agents:
+        sys.exit(f"lab: no agent {args.agent!r}")
+    try:
+        home = pwd.getpwnam(lab.unix_user(args.agent)).pw_dir
+    except KeyError:
+        sys.exit(f"lab logs: {lab.unix_user(args.agent)} isn't on this host")
+    try:
+        events = EventLog(f"{home}/.local/state/agentic-lab/events").read(
+            since=dt.timedelta(hours=args.hours), limit=5000)
+    except PermissionError:
+        sys.exit("lab logs needs root: sudo lab logs ...")
+    for ev in events:
+        tag = ev.get("task") or ev.get("member") or ""
+        print(f"{ev['at'][5:19].replace('T', ' ')}  {ev['kind']:<8} {tag:<28} "
+              f"{ev.get('text', '').replace(chr(10), ' | ')[:300]}")
     return 0
 
 
@@ -335,6 +360,8 @@ def main(argv=None):
     msub = mg.add_subparsers(dest="mcmd", required=True)
     mserve = msub.add_parser("serve", help="run a manager's service")
     mserve.add_argument("agent")
+    mserve.add_argument("--host", help="serve the status endpoint here (the tailnet IP)")
+    mserve.add_argument("--port", type=int, default=8773)
     mserve.set_defaults(fn=cmd_manager_serve)
     mask = msub.add_parser("ask", help="one message to a manager, answered on the console")
     mask.add_argument("agent")
@@ -354,6 +381,11 @@ def main(argv=None):
     ap_.add_argument("--allow-missing", action="store_true",
                      help="apply hosts even if some of their secrets are missing")
     ap_.set_defaults(fn=cmd_apply)
+
+    lg = sub.add_parser("logs", help="an agent's event log (sudo, on its host)")
+    lg.add_argument("agent")
+    lg.add_argument("--hours", type=float, default=24)
+    lg.set_defaults(fn=cmd_logs)
 
     dr = sub.add_parser("doctor", help="check this host against lab.yaml (run with sudo)")
     dr.add_argument("--host", help="which lab.yaml host this is (default: detect)")

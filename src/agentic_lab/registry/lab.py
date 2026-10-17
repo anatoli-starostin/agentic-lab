@@ -35,7 +35,9 @@ _TOP = {"lab": (str, True), "tailnet": (str, False), "trust_tailnet": (bool, Fal
         "announcements": (str, False),     # Slack channel (id or #name) for lab-wide notices
         "humans": (dict, True),
         "agents": (dict, True), "hosts": (dict, True), "credentials": (list, False)}
-_HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, False)}
+_HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, False),
+          "admin": (bool, False),           # may see agents' logs in the web UI
+          "tailscale_login": (str, False)}  # how the web UI recognises them (tailscale whois)
 _CHANNEL = {"type": (str, True), "timeout_s": (int, False), "on_timeout": (str, False)}
 _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "model": (str, False), "access": (str, False), "workdir": (str, False),
@@ -240,6 +242,9 @@ def check(lab: Lab, today: dt.date | None = None):
                 E(f"{where}.grants[{j}]", "standing grants in lab.yaml don't expire; "
                                           "timed grants are given by a human through the broker")
 
+    for hid, h in lab.humans.items():
+        if (h or {}).get("admin") and not (h or {}).get("tailscale_login"):
+            W(f"humans.{hid}", "an admin needs tailscale_login to see agents' logs in the web UI")
     if lab.data.get("trust_tailnet", True) and not lab.data.get("tailnet"):
         W("lab", "no tailnet set: sandboxed commands can't reach lab resources")
 

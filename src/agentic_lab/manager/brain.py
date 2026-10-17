@@ -13,7 +13,9 @@ from types import SimpleNamespace
 from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient,
                               PermissionResultAllow, PermissionResultDeny, RateLimitEvent,
                               ResultMessage, SystemMessage, TextBlock, ToolResultBlock,
-                              UserMessage)
+                              ToolUseBlock, UserMessage)
+
+from ..eventlog import tool_summary
 
 from ..policy.grants import Grant
 
@@ -59,7 +61,7 @@ def _grant(g):
 
 class Brain:
     def __init__(self, agent_id, lab_name, workdir, settings_for, approver=None, model=None,
-                 env=None, usage=None, cli_path=None):
+                 env=None, usage=None, cli_path=None, events=None):
         self.agent_id = agent_id
         self.lab_name = lab_name
         self.workdir = workdir
@@ -69,9 +71,14 @@ class Brain:
         self.env = env or {}
         self.usage = usage
         self.cli_path = cli_path
+        self.events = events
 
     async def turn(self, ctx, prompt):
         """Run one turn in `ctx.conv`'s session; returns the reply text."""
+        log = (lambda kind, text="", **m: self.events.add(kind, text, conv=ctx.conv.key,
+                                                          member=ctx.requester, **m)
+               ) if self.events is not None else (lambda *a, **k: None)
+        log("message", prompt)
         grants = [g for g in await self.approver.active_grants() if not g.get("task_id")]
         tool_grants = {g["value"] for g in grants if g["kind"] == "tool"}
         violations = []
@@ -81,7 +88,9 @@ class Brain:
             if (tool_name in lab_tools.LAB_TOOLS or tool_name in tool_grants
                     or allowed_without_asking(tool_name, tool_input)):
                 return PermissionResultAllow()
+            log("approval", "asked: " + tool_summary(tool_name, tool_input))
             d = await self.approver.ask(asker, tool_name, tool_input, list(violations))
+            log("approval", f"decided: {d.kind}")
             if d.kind == "allow":
                 return PermissionResultAllow()
             if d.kind == "grant":
@@ -116,17 +125,21 @@ class Brain:
                         ctx.conv.session_id = sid
                         ctx.state.save()
                 elif isinstance(msg, AssistantMessage):
-                    texts = [b.text for b in msg.content if isinstance(b, TextBlock)]
-                    if texts:
-                        last_text = texts[-1]
+                    for b in msg.content:
+                        if isinstance(b, TextBlock):
+                            last_text = b.text
+                        elif isinstance(b, ToolUseBlock):
+                            log("tool", tool_summary(b.name, b.input))
                 elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
                     for b in msg.content:
                         if isinstance(b, ToolResultBlock) and isinstance(b.content, str):
                             violations[:] = (violations + sandbox_violations(b.content))[-10:]
+                            log("result", b.content[:1000], error=bool(b.is_error) or None)
                 elif isinstance(msg, RateLimitEvent) and self.usage:
                     self.usage.rate_limit(msg.rate_limit_info)
                 elif isinstance(msg, ResultMessage):
                     reply = msg.result
                     if self.usage:
                         self.usage.run(f"conv:{ctx.conv.key}", msg.model_usage)
+        log("reply", reply or last_text or "")
         return reply or last_text or ""

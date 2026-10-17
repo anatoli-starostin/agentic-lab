@@ -22,6 +22,7 @@ from . import tasks as T
 from .approver import BrokerApprover
 from .runner import NoChannelApprover, SdkRunner
 from .server import Access, Caller, build_mcp, http_app, run_tasks
+from ..eventlog import EventLog
 from .usage import UsageLog
 
 CONFIG = "~/.config/agentic-lab"
@@ -79,13 +80,15 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
         log.warning("no broker configured: actions outside the sandbox will be denied")
         approver = NoChannelApprover()
     usage = UsageLog(os.path.expanduser(f"{STATE}/usage.json"))
+    events = EventLog(os.path.expanduser(f"{STATE}/events"))
+    events.prune()
 
     def settings_for(grants):
         return lab.agent_settings(agent_id, extra_grants=grants,
                                   now=dt.datetime.now(dt.timezone.utc))
 
     runner = SdkRunner(agent_id, workdir, settings_for, approver=approver,
-                       model=model or a.get("model"), env=env, usage=usage)
+                       model=model or a.get("model"), env=env, usage=usage, events=events)
 
     async def guardrails():
         active = await approver.active_grants()
@@ -93,7 +96,7 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
                 "standing_grants": a.get("grants") or [], "active_grants": active}
 
     mcp = build_mcp(agent_id, store, access, guardrails=guardrails, usage=usage,
-                    workdir=workdir)
+                    workdir=workdir, events=events)
     # the names managers may use to reach us: the bind address, and e.g. the tailnet name
     allowed = [f"{h}:{port}" for h in (host, *names)]
     app, _ = http_app(mcp, access, allowed_hosts=allowed)
