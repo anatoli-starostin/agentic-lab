@@ -306,7 +306,7 @@ def cmd_slack_verify(args):
     except (VerifyError, OSError) as e:
         sys.exit(f"lab slack verify: {e}")
     print(f"✓ bot token works: app {r['name']!r} in workspace {r['team']!r}, "
-          f"App ID {r['app_id']}")
+          f"App ID {r['app_id'] or 'unknown (the app lacks users:read; only managers need it)'}")
     print("✓ app-level token opens Socket Mode" if r["socket_ok"] else
           f"✗ app-level token: {r['socket_error']} (Basic Information → App-Level Tokens, "
           "scope connections:write; Socket Mode on)")
