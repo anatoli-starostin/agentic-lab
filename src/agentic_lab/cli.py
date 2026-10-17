@@ -1,16 +1,14 @@
 """`lab`: the command-line entry point.
 
-    lab check [lab.yaml]                         validate the lab registry
-    lab policy explain <agent> <command>         why is this Bash command green or gated?
-    lab policy explain <agent> --tool T [--path P]
-    lab policy show <agent>                      the agent's effective policy
+    lab check [lab.yaml]        validate the lab registry
+    lab settings <agent>        the agent's generated Claude Code settings (sandbox + grants)
 """
 import argparse
 import json
 import sys
-from dataclasses import asdict
 
-from . import policy, registry
+from . import registry
+from .registry.lab import ROLES
 
 
 def _load_lab(path):
@@ -38,39 +36,18 @@ def cmd_check(args):
     n_warn = len(issues) - n_err
     a = [x for x in lab.agents.values() if isinstance(x, dict)]
     counts = [_n(len(lab.humans), "human")]
-    counts += [_n(sum(x.get("role") == r for x in a), r) for r in policy.ROLES]
+    counts += [_n(sum(x.get("role") == r for x in a), r) for r in ROLES]
     counts += [_n(len(lab.hosts), "host")]
     print(f"{lab.name or args.lab}: {', '.join(counts)} -- "
           f"{_n(n_err, 'error')}, {_n(n_warn, 'warning')}")
     return 1 if n_err else 0
 
 
-def _agent_policy(lab, agent):
-    if agent not in lab.agents:
-        sys.exit(f"lab: no agent {agent!r} (have: {', '.join(lab.agents)})")
-    return lab.agent_policy(agent)
-
-
-def cmd_explain(args):
+def cmd_settings(args):
     lab = _load_lab(args.lab)
-    p = _agent_policy(lab, args.agent)
-    if args.tool == "Bash":
-        if not args.command:
-            sys.exit("lab: give a command to explain")
-        tool_input = {"command": " ".join(args.command)}
-    else:
-        tool_input = {"file_path": args.path} if args.path else {}
-    v = policy.classify(p, args.tool, tool_input)
-    print(v)
-    return 0
-
-
-def cmd_show(args):
-    lab = _load_lab(args.lab)
-    p = _agent_policy(lab, args.agent)
-    d = asdict(p)
-    d["git_subcommands"] = sorted(d["git_subcommands"])
-    print(json.dumps(d, indent=2, default=list))
+    if args.agent not in lab.agents:
+        sys.exit(f"lab: no agent {args.agent!r} (have: {', '.join(lab.agents)})")
+    print(json.dumps(lab.agent_settings(args.agent), indent=2))
     return 0
 
 
@@ -83,17 +60,9 @@ def main(argv=None):
     c.add_argument("path", nargs="?", help="path to lab.yaml (overrides --lab)")
     c.set_defaults(fn=cmd_check)
 
-    pol = sub.add_parser("policy", help="inspect agents' guardrails")
-    psub = pol.add_subparsers(dest="pcmd", required=True)
-    e = psub.add_parser("explain", help="classify one tool call for an agent")
-    e.add_argument("agent")
-    e.add_argument("command", nargs="*", help="the Bash command (for --tool Bash)")
-    e.add_argument("--tool", default="Bash")
-    e.add_argument("--path", help="file path (for Write/Edit)")
-    e.set_defaults(fn=cmd_explain)
-    s = psub.add_parser("show", help="print an agent's effective policy")
-    s.add_argument("agent")
-    s.set_defaults(fn=cmd_show)
+    st = sub.add_parser("settings", help="print an agent's generated Claude Code settings")
+    st.add_argument("agent")
+    st.set_defaults(fn=cmd_settings)
 
     args = ap.parse_args(argv)
     if getattr(args, "path", None) and args.cmd == "check":

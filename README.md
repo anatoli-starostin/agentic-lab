@@ -11,28 +11,26 @@ A framework for running a scientific lab as a team of **humans and AI agents**:
 Anything that crosses the sandbox boundary needs a real human's yes, and the code enforces
 that, not a prompt.
 
-Status: **M0** (skeleton, registry, policy engine). See [DESIGN.md](DESIGN.md) for the
+Status: **M0** (skeleton, `lab.yaml` registry, per-agent sandbox settings). See [DESIGN.md](DESIGN.md) for the
 design and [docs/security-notes.md](docs/security-notes.md) for known gaps.
 
 ## Quick start
 
 ```sh
 uv venv && uv pip install -e ".[dev]"
-.venv/bin/pytest                                     # the policy and registry tests
-.venv/bin/lab check examples/minimal/lab.yaml        # validate a lab registry
-.venv/bin/lab --lab examples/minimal/lab.yaml policy explain worker-a "git push origin main"
-.venv/bin/lab --lab examples/minimal/lab.yaml policy show mgr-alice
+.venv/bin/pytest                                         # registry, sandbox and grant tests
+.venv/bin/lab check examples/minimal/lab.yaml            # validate a lab registry
+.venv/bin/lab --lab examples/minimal/lab.yaml settings worker-a   # its Claude Code settings
 ```
 
 ## Layout
 
 ```
 src/agentic_lab/
-  policy/     guardrails as config: base.yaml, roles/*.yaml, the classifier engine
+  policy/     the sandbox model (Claude Code settings per agent) and grants
   registry/   lab.yaml: loading and `lab check`
-  cage/       sbox, the bubblewrap sandbox
   cli.py      the `lab` command
-examples/minimal/   an example lab.yaml with a per-agent policy overlay
+examples/minimal/   an example lab.yaml with standing grants
 tests/
 ```
 

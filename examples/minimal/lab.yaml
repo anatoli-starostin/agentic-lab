@@ -4,7 +4,8 @@
 # Validate with:  lab check examples/minimal/lab.yaml
 
 lab: example-lab
-tailnet: example.ts.net
+tailnet: example.ts.net      # sandboxed commands may reach *.example.ts.net
+trust_tailnet: true          # tailnet resources count as safe (the default)
 
 humans:
   alice:
@@ -49,13 +50,21 @@ agents:
     host: mgr-vm-01
     slack_app: A00000001
     model: claude-sonnet-5-5
+    workdir: ~/scratch
+    grants:                  # standing grants: this manager may always read the web
+      - {tool: WebFetch}
+      - {tool: WebSearch}
   worker-a:
     role: worker
     human: alice
     host: gpu-a
     access: shared
     max_parallel_gpu_tasks: 1
-    policy_overlay: agents/worker-a.yaml
+    workdir: ~/work
+    grants:
+      - {domain: pypi.org}
+      - {domain: files.pythonhosted.org}
+      - {write: ~/datasets, reason: shared dataset cache}
   worker-b:
     role: worker
     human: alice

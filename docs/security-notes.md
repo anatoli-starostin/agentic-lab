@@ -1,61 +1,50 @@
 # Security notes
 
-Known gaps in the guardrails and how we plan to close them. A gap stays listed here until
-a test proves it's closed.
+What the guardrails rely on, what is still unverified, and the trade-offs we accept. An
+item stays under "To verify" until a test on a real host proves it.
 
-## Open
+## The model (DESIGN.md §6)
 
-### 1. Green `git` runs repository-controlled code outside the cage
+Every agent: inside Claude Code's built-in sandbox, Bash is auto-allowed with no internet,
+the tailnet, and writes to its working folder and tmp. Outside the sandbox, internet and
+writes need a human's permission; reads are free. Grants widen the sandbox for a while
+(or permanently, in `lab.yaml`). There is no command parsing anywhere: a parser that
+decides from command text is an arms race. Porting spiky's classifier turned up about ten
+bypasses in one afternoon, and that's why we dropped the approach.
 
-Workers may run everyday `git` (status, commit, push, …) without approval, **outside**
-the cage, because `push` and `pull` need the network. But git reads the repository's own
-`.git/config` and `.git/hooks/`, and a worker can write both from inside the cage (its
-repos live in the writable zone). So a caged step can plant, for example, a
-`pre-commit` hook, `core.fsmonitor`, `diff.external` or `core.sshCommand`. The next green
-`git commit` or `git diff` then runs that program uncaged, with no approval.
+## To verify in M1
 
-The classifier can't see this: the command line is innocent, and the danger sits in
-files. Planned fix (M1), one of:
-- the gate **rewrites** green git calls (a PreToolUse hook may return an updated input)
-  to `git -c core.hooksPath=/dev/null -c core.fsmonitor=false -c diff.external= …`, so
-  repository config can't name a program to run; or
-- green git goes through a trusted `lab git` helper that does the same, and plain `git`
-  becomes gated.
+1. **GPU inside the built-in sandbox.** The docs don't mention `/dev/nvidia*`. Test:
+   sandboxed `nvidia-smi` and a CUDA tensor op.
+2. **Tailnet through the sandbox proxy.** The proxy refuses names that resolve only to
+   local addresses. Check that `*.<tailnet>` names (100.64.0.0/10) are let through, and
+   whether raw tailnet IPs work.
+3. **Settings keys.** `sandbox.network.strictAllowlist` (refuse unknown hosts instead of
+   prompting) and `sandbox.filesystem.allowWrite`: confirm the names and behaviour, and
+   that a refused domain makes the command fail rather than prompt in a headless SDK session.
+4. **Grants mid-session.** Whether a running session picks up a changed allowlist. If not,
+   the service restarts and resumes the session.
+5. **No silent fallback.** The Python SDK defaults `failIfUnavailable` to false. We set it
+   to true; check that a broken sandbox stops the agent instead of running unsandboxed.
+6. **Ubuntu 24.04+ hosts.** AppArmor blocks bubblewrap's user namespaces by default
+   (`kernel.apparmor_restrict_unprivileged_userns=1`); the host setup must add the
+   bwrap profile.
 
-Either way, the test is: a hook planted from inside the cage never runs on a green call.
+## Accepted trade-offs
 
-### 2. The cage's writable dirs are hard-coded in `sbox`
+- **Local reads are free**, including the Read tool (which runs outside the sandbox). An
+  agent can read token files on its own host. Fine for small, transparent teams. A token
+  that matters more moves to another Unix user, out of the agent's reach.
+- **Tailnet is trusted.** Any sandboxed command can reach any tailnet host. This may
+  tighten to per-host lists as the organisation grows.
+- **Allowed domains can carry data out.** A domain grant (say, GitHub) also lets a
+  sandboxed command upload there. The docs note domain fronting as a further limit of
+  proxy-based filtering.
 
-The policy's `writable` list and `sbox`'s writable binds must match, but `sbox` hard-codes
-`~/projects`, `/tmp` and `~/.cache`. A role or overlay that changes `writable` (for
-example, the manager's `~/scratch`) makes the two disagree. Planned fix (M1): `sbox` reads
-its binds from the agent's effective policy (`lab policy show`), so there is one source.
+## Spiky's current gate (not part of this repo)
 
-### 3. Read-only tools can read secrets
-
-`Read`, `Grep` and `cat` are ungated, so an agent can read any file its Unix user can,
-including token files. The design answer (DESIGN.md §6.4) is the Unix user split: each
-agent runs as its own user, and secrets belong to the service users that need them
-(chmod 600). Until agents run as separate users (M1+), this holds only by convention.
-
-## Closed while porting spiky's `cage_policy` (2026-10-17)
-
-Each has a regression test in `tests/test_policy_engine.py`.
-
-- **Report helper smuggling.** The whole-line rule for the report helper accepted any
-  non-space id and any non-space prefix before `python3`. A shell command could ride
-  along on the id (`done x;<command>`), in front of the interpreter, or after an early
-  heredoc delimiter. Ids are now plain words, the interpreter path is restricted, and the
-  delimiter must close the heredoc exactly once.
-- **Untrusted interpreters.** `<writable>/python3 <trusted helper>` ran the agent's own
-  "python3" uncaged. A helper's interpreter must now be `python3` from `PATH` or an
-  absolute path outside the writable zone.
-- **Program-running git options after the subcommand.** `git fetch --upload-pack=…`,
-  `git push --receive-pack=…` and `git rebase -x/--exec …` were green. The engine now
-  checks these options wherever they appear. `git … --output=<file>` (writes anywhere)
-  is gated too.
-- **Read-only commands with write or exec forms.** `awk` (via `system()`), `find -exec` and
-  `-delete`, `sed`'s `w` and `e` commands, `sort -o`, a second argument to `uniq`,
-  `rg --pre`, `date -s`, `ip … set`, `journalctl --vacuum`, `nvidia-smi -pl`, `env <cmd>`,
-  `chmod +x` and `mkdir -p` were green anywhere. They are now gated, or pinned to their
-  read-only forms. Use the cage (`sbox …`) for the rest.
+While porting, we found holes in spiky's live `cage_policy.py` and `sbox`. These include
+command smuggling through the report helper, git options that run programs, write and exec
+forms of "read-only" commands, and `sbox --net tailnet` keeping `CAP_NET_ADMIN`, which
+lets a caged command delete its egress filter and reach the internet. Spiky needs its own
+fix until it moves to the lab.

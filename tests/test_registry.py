@@ -1,5 +1,6 @@
 """lab.yaml loading and `lab check`."""
 import datetime as dt
+import json
 import shutil
 from pathlib import Path
 
@@ -7,6 +8,7 @@ import pytest
 import yaml
 
 from agentic_lab import registry
+from agentic_lab.policy import grants as G
 from agentic_lab.cli import main
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "minimal"
@@ -38,12 +40,24 @@ def test_example_is_clean():
     assert [i.where for i in issues if i.level == "warning"] == []
 
 
-def test_example_effective_policy():
+def test_example_agent_settings():
     lab = registry.load(EXAMPLE / "lab.yaml")
-    p = lab.agent_policy("worker-a")
-    assert p.helpers[0].path == "/opt/agentic-lab/bin/lab-report"
-    assert "rebase" not in p.git_subcommands and "commit" in p.git_subcommands
-    assert lab.agent_policy("worker-b").helpers == ()
+    w = lab.agent_settings("worker-a")
+    assert w["sandbox"]["network"]["allowedDomains"] == [
+        "*.example.ts.net", "pypi.org", "files.pythonhosted.org"]
+    m = lab.agent_settings("mgr-alice")
+    assert {"WebFetch", "WebSearch"} <= set(m["permissions"]["allow"])
+    assert m["sandbox"]["network"]["allowedDomains"] == ["*.example.ts.net"]
+    b = lab.agent_settings("worker-b")             # no grants: the bare model
+    assert b["sandbox"]["network"]["allowedDomains"] == ["*.example.ts.net"]
+
+
+def test_timed_grant_through_registry():
+    lab = registry.load(EXAMPLE / "lab.yaml")
+    now = dt.datetime(2026, 10, 17, 12)
+    g = G.timed("domain", "arxiv.org", dt.timedelta(hours=1), "alice", now)
+    s = lab.agent_settings("worker-b", [g], now=now)
+    assert "arxiv.org" in s["sandbox"]["network"]["allowedDomains"]
 
 
 def test_every_agent_needs_a_human(lab_dir):
@@ -75,7 +89,11 @@ def test_every_agent_needs_a_human(lab_dir):
     (lambda d: d["credentials"][0].update(host="nowhere"), "is not in hosts"),
     (lambda d: d["credentials"][0].update(agent="ghost"), "agent 'ghost' is not in agents"),
     (lambda d: d["credentials"][0].pop("expires"), "missing required key 'expires'"),
-    (lambda d: d["agents"]["worker-a"].update(policy_overlay="agents/missing.yaml"), "not found"),
+    (lambda d: d["agents"]["worker-a"].update(workdir="work"), "absolute or ~/"),
+    (lambda d: d["agents"]["worker-a"]["grants"].append({"domain": "*"}), "not a domain"),
+    (lambda d: d["agents"]["worker-a"]["grants"].append(
+        {"domain": "arxiv.org", "expires": dt.datetime(2026, 10, 18)}), "don't expire"),
+    (lambda d: d.update(trust_tailnet="yes"), "expected bool"),
     (lambda d: d.update(extra=1), "unknown key 'extra'"),
 ])
 def test_check_errors(lab_dir, mutate, expect):
@@ -83,10 +101,9 @@ def test_check_errors(lab_dir, mutate, expect):
     assert any(expect in e for e in errs), errs
 
 
-def test_bad_overlay_reported(lab_dir):
-    (lab_dir / "agents" / "worker-a.yaml").write_text("bash:\n  helpers: [{path: ~/projects/h}]\n")
-    errs = errors(registry.check(registry.load(lab_dir / "lab.yaml"), TODAY))
-    assert any("inside the writable zone" in e for e in errs)
+def test_no_tailnet_warns(lab_dir):
+    warns = [i.message for i in edit(lab_dir, lambda d: d.pop("tailnet")) if i.level == "warning"]
+    assert any("no tailnet set" in w for w in warns)
 
 
 def test_credential_expiry(lab_dir):
@@ -124,11 +141,7 @@ def test_cli_check_fails_on_error(lab_dir, capsys):
     assert main(["check", str(lab_dir / "lab.yaml")]) == 1
 
 
-def test_cli_explain(capsys):
-    lab = str(EXAMPLE / "lab.yaml")
-    main(["--lab", lab, "policy", "explain", "worker-a", "sbox --net tailnet -- python x"])
-    assert capsys.readouterr().out.startswith("green:")
-    main(["--lab", lab, "policy", "explain", "mgr-alice", "git push origin main"])
-    assert capsys.readouterr().out.startswith("gated:")
-    main(["--lab", lab, "policy", "explain", "mgr-alice", "--tool", "WebSearch"])
-    assert capsys.readouterr().out.startswith("green:")
+def test_cli_settings(capsys):
+    assert main(["--lab", str(EXAMPLE / "lab.yaml"), "settings", "worker-a"]) == 0
+    out = json.loads(capsys.readouterr().out)
+    assert out["sandbox"]["enabled"] is True

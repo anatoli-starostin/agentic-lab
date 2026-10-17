@@ -8,14 +8,15 @@ roles, channels, policies, expiring credentials) and returns every issue at once
 `lab check` run shows everything that's wrong.
 """
 import datetime as dt
-import os
 from dataclasses import dataclass, field
 
 import yaml
 
-from .. import policy
+from ..policy import grants as G
+from ..policy import sandbox
 
-ROLES = policy.ROLES
+ROLES = ("worker", "manager", "secretary")
+DEFAULT_WORKDIR = "~/work"
 CHANNEL_TYPES = ("slack_dm", "console", "telegram", "email")
 ACCESS = ("shared", "dedicated")
 HOST_KINDS = ("onprem", "cloud")
@@ -23,13 +24,15 @@ POWER = ("always_on", "on_demand")
 EXPIRY_WARN_DAYS = 14
 
 # key -> (type, required). Types are checked; unknown keys are errors.
-_TOP = {"lab": (str, True), "tailnet": (str, False), "humans": (dict, True),
+_TOP = {"lab": (str, True), "tailnet": (str, False), "trust_tailnet": (bool, False),
+        "humans": (dict, True),
         "agents": (dict, True), "hosts": (dict, True), "credentials": (list, False)}
 _HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, False)}
 _CHANNEL = {"type": (str, True), "timeout_s": (int, False), "on_timeout": (str, False),
             "when": (str, False), "quiet_hours": (str, False), "address": (str, False)}
 _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
-          "model": (str, False), "access": (str, False), "policy_overlay": (str, False),
+          "model": (str, False), "access": (str, False), "workdir": (str, False),
+          "grants": (list, False),
           "slack_app": (str, False), "max_parallel_gpu_tasks": (int, False)}
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
          "preemptible": (bool, False), "power": (str, False), "idle_stop_min": (int, False),
@@ -74,17 +77,19 @@ class Lab:
     def credentials(self):
         return self.data.get("credentials") or []
 
-    def overlay_path(self, agent_id):
-        rel = self.agents[agent_id].get("policy_overlay")
-        if not rel:
-            return None
-        return os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(self.path)), rel))
+    def standing_grants(self, agent_id):
+        """The agent's standing grants from lab.yaml (raises GrantError if malformed)."""
+        return [G.from_mapping(m) for m in self.agents[agent_id].get("grants") or []]
 
-    def agent_policy(self, agent_id):
-        """The effective Policy of an agent: base + role defaults + its overlay."""
+    def agent_settings(self, agent_id, extra_grants=(), now=None):
+        """The agent's Claude Code settings: the sandbox model + its grants (DESIGN.md §6)."""
         a = self.agents[agent_id]
-        overlay = self.overlay_path(agent_id)
-        return policy.load(a.get("role"), [overlay] if overlay else [])
+        return sandbox.settings(
+            workdir=a.get("workdir", DEFAULT_WORKDIR),
+            tailnet=self.data.get("tailnet"),
+            trust_tailnet=self.data.get("trust_tailnet", True),
+            grant_list=self.standing_grants(agent_id) + list(extra_grants),
+            now=now)
 
 
 def _fields(obj, spec, where, issues):
@@ -182,14 +187,21 @@ def check(lab: Lab, today: dt.date | None = None):
             host = lab.hosts.get(a.get("host")) or {}
             if host.get("kind") == "cloud":
                 W(where, "the secretary is meant to run on an always-on on-prem host")
-        overlay = lab.overlay_path(aid)
-        if overlay and not os.path.exists(overlay):
-            E(where, f"policy_overlay {a['policy_overlay']!r} not found ({overlay})")
-        elif role in ROLES:
+        workdir = a.get("workdir", DEFAULT_WORKDIR)
+        if isinstance(workdir, str) and not workdir.startswith(("/", "~/")):
+            E(where, f"workdir must be an absolute or ~/ path, got {workdir!r}")
+        for j, m in enumerate(a.get("grants") or []):
             try:
-                lab.agent_policy(aid)
-            except (policy.PolicyError, yaml.YAMLError) as e:
-                E(where, f"policy: {e}")
+                g = G.from_mapping(m)
+            except G.GrantError as e:
+                E(f"{where}.grants[{j}]", str(e))
+                continue
+            if g.expires is not None:
+                E(f"{where}.grants[{j}]", "standing grants in lab.yaml don't expire; "
+                                          "timed grants are given by a human through the broker")
+
+    if lab.data.get("trust_tailnet", True) and not lab.data.get("tailnet"):
+        W("lab", "no tailnet set: sandboxed commands can't reach lab resources")
 
     secretaries = roles.get("secretary", [])
     if len(secretaries) != 1:
