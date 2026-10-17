@@ -28,18 +28,23 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 - **Re-running is safe.** The setup scripts are idempotent; when unsure of a host's state,
   re-run the step rather than guessing.
 
-## What exists today (M1, in progress)
+## What exists today
 
 | Step | How |
 |---|---|
 | Validate `lab.yaml` | `lab check [path]` |
-| An agent's generated Claude Code settings | `lab --lab <path> settings <agent>` (run on the agent's own host: `~` expands there) |
-| Prepare a worker host for the sandbox | copy `deploy/worker/` to the host, `sudo ./setup-sandbox.sh` |
-| Create an agent's Unix user | `sudo deploy/worker/create-agent-user.sh lab-<agent-id>` on its host |
+| What would change on each host; missing secrets | `sudo lab --lab <lab.yaml> plan` (on the secretary host) |
+| Make the hosts match `lab.yaml` | `sudo lab --lab <lab.yaml> apply [--host H]` (secretary host; remote hosts over SSH as the admin, who needs passwordless sudo there). Run it from the repo checkout, so it ships the current code. |
+| Is this host healthy? | `sudo lab --lab /etc/agentic-lab/lab.yaml doctor` (on any host): every failure comes with a fix |
+| Ask a member for their Claude token | `sudo -u lab-secretary lab --lab <lab.yaml> secret request <member> claude-token --url http://<secretary>:8771` → send them the message |
+| Get a Slack app's tokens (pasted in a browser) | `sudo -u lab-secretary lab ... secret request service:<agent or broker> slack-app --url ...` → send the admin the link |
+| A Slack app manifest | `lab --lab <lab.yaml> slack-manifest <manager or secretary>` or `... slack-manifest approvals` |
+| Talk to a manager without Slack | `sudo -u lab-<id> lab --lab /etc/agentic-lab/lab.yaml manager ask <id> --as <member> "..."` |
+| Talk to an agent in the classic console | `sudo lab --lab /etc/agentic-lab/lab.yaml debug <agent>` (`--print "q"` for one question) |
+| The lab's web UI (monitoring) | `http://<secretary host>:8774/` on the tailnet |
 
-Coming, by milestone: worker service (M1), broker and Slack DM approvals (M2), manager
-(M3), `lab init / plan / apply / doctor / secret` (M3a), secretary and web UI (M4). Until
-`lab apply` exists, do host steps with the scripts above, over SSH, one host at a time.
+Coming: the secretary's own chat agent in Slack, VM power and token-expiry notices (M4),
+`lab init` (M3a). Until then, write `lab.yaml` by hand from `examples/`.
 
 ## First-time setup
 
