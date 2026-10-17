@@ -243,18 +243,36 @@ def default_health(agent_id, store):
     counts = {}
     for t in store.all():
         counts[t.state] = counts.get(t.state, 0) + 1
-    gpu = None
+    gpu, gpus, procs = None, None, None
     if shutil.which("nvidia-smi"):
         try:
-            gpu = subprocess.run(
-                ["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu",
-                 "--format=csv,noheader"], capture_output=True, text=True, timeout=10
-            ).stdout.strip() or None
+            gpu = _smi("--query-gpu=name,memory.used,memory.total,utilization.gpu") or None
+            gpus = [{"name": r[0], "mem_used_mb": _num(r[1]), "mem_total_mb": _num(r[2]),
+                     "util": _num(r[3])} for r in _rows(gpu or "")]
+            # every process on the GPUs, the lab's or anyone's: a machine with one is busy
+            procs = [{"pid": _num(r[0]), "name": os.path.basename(r[1]), "mem_mb": _num(r[2])}
+                     for r in _rows(_smi("--query-compute-apps=pid,process_name,used_memory"))]
         except (OSError, subprocess.SubprocessError):
             gpu = "nvidia-smi failed"
     disk = shutil.disk_usage(os.path.expanduser("~"))
     return {"agent": agent_id, "host": platform.node(), "tasks": counts, "gpu": gpu,
-            "disk_free_gb": round(disk.free / 1e9, 1)}
+            "gpus": gpus, "gpu_processes": procs, "disk_free_gb": round(disk.free / 1e9, 1)}
+
+
+def _smi(query):
+    return subprocess.run(["nvidia-smi", query, "--format=csv,noheader,nounits"],
+                          capture_output=True, text=True, timeout=10).stdout.strip()
+
+
+def _rows(csv_text):
+    return [[c.strip() for c in line.split(",")] for line in csv_text.splitlines() if line.strip()]
+
+
+def _num(s):
+    try:
+        return int(float(s))
+    except ValueError:
+        return None
 
 
 async def run_tasks(store: T.TaskStore, runner, stop: asyncio.Event):

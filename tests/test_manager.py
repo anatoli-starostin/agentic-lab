@@ -267,6 +267,53 @@ def test_idle_watch():
     assert powerable(lab, "gpu-a")[0]
 
 
+def test_admin_only_actions(monkeypatch):
+    """Powering off a busy machine and asking for someone else's token: admins only,
+    enforced in code. A busy machine needs force_off even from an admin."""
+    from agentic_lab.secretary import power as P
+    from agentic_lab.secretary.service import Secretary
+    lab = registry.load(EXAMPLE)
+    lab.humans["alice"]["admin"] = True
+    lab.humans["bob"] = {"name": "Bob", "slack_user": "U-BOB"}
+    stopped = []
+
+    async def stop(lab_, host):
+        stopped.append(host)
+    monkeypatch.setattr(P, "stop", stop)
+    sec = Secretary.__new__(Secretary)
+    sec.lab, sec.slack, sec.events, sec.workers = lab, None, None, None
+    sec.state = SimpleNamespace(save=None)
+    q = {"running": 1}
+    sec.latest = {"state": {"agents": {"worker-a": {"up": True, "queue": q},
+                                       "worker-b": {"up": True, "queue": {}}}}}
+
+    def run(coro):
+        return asyncio.run(coro)
+    assert P.busy(lab, "gpu-a", sec.latest["state"]) == "worker-a has 1 running"
+    assert P.busy(lab, "gpu-b", sec.latest["state"]) is None
+    assert run(sec.ctx("bob").power("gpu-b", "off")).startswith("gpu-b: powering off")
+    assert "Only an admin (Alice)" in run(sec.ctx("bob").power("gpu-a", "off"))
+    assert "refused" in run(sec.ctx("bob").power("gpu-a", "force_off"))
+    assert "use force_off" in run(sec.ctx("alice").power("gpu-a", "off"))
+    assert run(sec.ctx("alice").power("gpu-a", "force_off")).startswith("gpu-a: powering off")
+    assert stopped == ["gpu-b", "gpu-a"]
+    assert "refused" in run(sec.ctx("bob").request_token("alice"))
+    # the GPU counts too: a process on it (anyone's), or utilization
+    gpu_proc = {"up": True, "queue": {}, "gpu_processes": [{"pid": 7, "name": "python"}]}
+    hot = {"up": True, "queue": {}, "gpus": [{"name": "H100", "util": 85}]}
+    cool = {"up": True, "queue": {}, "gpus": [{"name": "H100", "util": 3}], "gpu_processes": []}
+    for seen, why in ((gpu_proc, "1 process(es) on the GPU (python)"), (hot, "GPU 85% busy"),
+                      (cool, None)):
+        assert P.busy(lab, "gpu-b", {"agents": {"worker-b": seen}}) == why
+    w = P.IdleWatch()
+    import datetime as dt
+    t0 = dt.datetime(2026, 10, 17, 12, tzinfo=dt.timezone.utc)
+    snap = {"agents": {"worker-a": cool, "worker-b": gpu_proc}}
+    w.candidates(lab, snap, now=t0)
+    later = w.candidates(lab, snap, now=t0 + dt.timedelta(hours=2))
+    assert "gpu-b" not in later and "gpu-a" in later       # never idle-stopped mid-GPU-job
+
+
 def test_secretary_home_tab():
     import datetime as dt
     from agentic_lab.secretary import home

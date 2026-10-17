@@ -200,6 +200,16 @@ def _accounts(state):
     return "<section><h2>Claude usage, by account</h2>" + "".join(cards) + "</section>"
 
 
+def _gpu_line(a):
+    """'NVIDIA H100 80GB HBM3: 87% · 61/80 GB · 2 processes', one part per GPU."""
+    if not a.get("gpus"):
+        return a.get("gpu") or "none"
+    parts = [f"{g['name']}: {g.get('util')}% · {round((g.get('mem_used_mb') or 0) / 1024)}/"
+             f"{round((g.get('mem_total_mb') or 0) / 1024)} GB" for g in a["gpus"]]
+    n = len(a.get("gpu_processes") or [])
+    return "; ".join(parts) + (f" · {n} process{'es' if n > 1 else ''}" if n else "")
+
+
 def _workers(state):
     out = []
     for aid, a in state["agents"].items():
@@ -221,7 +231,7 @@ def _workers(state):
             f"<td class='muted small'>{e(ago(t.get('finished') or t.get('created')))}</td></tr>"
             for t in a.get("recent") or [])
         out.append(f"<h2>{e(a['name'])} {status}</h2>"
-                   f"<div class='small'>GPU: {e(a.get('gpu'))} · disk free "
+                   f"<div class='small'>GPU: {e(_gpu_line(a))} · disk free "
                    f"{e(a.get('disk_free_gb'))} GB</div>"
                    f"<table><tr><th>Task</th><th>State</th><th>For</th><th>When</th></tr>"
                    f"{rows or '<tr><td class=muted>no tasks yet</td></tr>'}</table>")
