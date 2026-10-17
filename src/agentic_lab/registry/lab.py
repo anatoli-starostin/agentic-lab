@@ -1,0 +1,226 @@
+"""The lab registry: `lab.yaml`, the one description of the lab (DESIGN.md §8).
+
+It lists the humans, agents, hosts and credentials. Every component reads it. It holds
+credential *metadata* (name, host, expiry), never secret values.
+
+`load()` parses and type-checks the file. `check()` validates the whole lab (references,
+roles, channels, policies, expiring credentials) and returns every issue at once, so one
+`lab check` run shows everything that's wrong.
+"""
+import datetime as dt
+import os
+from dataclasses import dataclass, field
+
+import yaml
+
+from .. import policy
+
+ROLES = policy.ROLES
+CHANNEL_TYPES = ("slack_dm", "console", "telegram", "email")
+ACCESS = ("shared", "dedicated")
+HOST_KINDS = ("onprem", "cloud")
+POWER = ("always_on", "on_demand")
+EXPIRY_WARN_DAYS = 14
+
+# key -> (type, required). Types are checked; unknown keys are errors.
+_TOP = {"lab": (str, True), "tailnet": (str, False), "humans": (dict, True),
+        "agents": (dict, True), "hosts": (dict, True), "credentials": (list, False)}
+_HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, False)}
+_CHANNEL = {"type": (str, True), "timeout_s": (int, False), "on_timeout": (str, False),
+            "when": (str, False), "quiet_hours": (str, False), "address": (str, False)}
+_AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
+          "model": (str, False), "access": (str, False), "policy_overlay": (str, False),
+          "slack_app": (str, False), "max_parallel_gpu_tasks": (int, False)}
+_HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
+         "preemptible": (bool, False), "power": (str, False), "idle_stop_min": (int, False),
+         "restart_by": (str, False), "tailnet_name": (str, False)}
+_CRED = {"name": (str, True), "host": (str, True), "expires": ((dt.date, type(None)), True),
+         "scope": (str, False), "agent": (str, False)}
+
+
+@dataclass
+class Issue:
+    level: str      # "error" | "warning"
+    where: str
+    message: str
+
+    def __str__(self):
+        return f"{self.level.upper():7} {self.where}: {self.message}"
+
+
+@dataclass
+class Lab:
+    path: str
+    data: dict
+    issues: list = field(default_factory=list)   # parse-time issues
+
+    @property
+    def name(self):
+        return self.data.get("lab")
+
+    @property
+    def humans(self):
+        return self.data.get("humans") or {}
+
+    @property
+    def agents(self):
+        return self.data.get("agents") or {}
+
+    @property
+    def hosts(self):
+        return self.data.get("hosts") or {}
+
+    @property
+    def credentials(self):
+        return self.data.get("credentials") or []
+
+    def overlay_path(self, agent_id):
+        rel = self.agents[agent_id].get("policy_overlay")
+        if not rel:
+            return None
+        return os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(self.path)), rel))
+
+    def agent_policy(self, agent_id):
+        """The effective Policy of an agent: base + role defaults + its overlay."""
+        a = self.agents[agent_id]
+        overlay = self.overlay_path(agent_id)
+        return policy.load(a.get("role"), [overlay] if overlay else [])
+
+
+def _fields(obj, spec, where, issues):
+    if not isinstance(obj, dict):
+        issues.append(Issue("error", where, f"expected a mapping, got {type(obj).__name__}"))
+        return False
+    for k in obj:
+        if k not in spec:
+            issues.append(Issue("error", where, f"unknown key {k!r}"))
+    for k, (typ, required) in spec.items():
+        if k not in obj:
+            if required:
+                issues.append(Issue("error", where, f"missing required key {k!r}"))
+            continue
+        v = obj[k]
+        # bool is a subclass of int; don't let `true` pass as an int
+        if typ is int and isinstance(v, bool) or not isinstance(v, typ):
+            names = typ.__name__ if isinstance(typ, type) else " or ".join(t.__name__ for t in typ)
+            issues.append(Issue("error", f"{where}.{k}", f"expected {names}, got {v!r}"))
+    return True
+
+
+def load(path):
+    with open(path) as f:
+        data = yaml.safe_load(f)
+    issues = []
+    if not isinstance(data, dict):
+        return Lab(path, {}, [Issue("error", path, "lab.yaml must be a mapping")])
+    _fields(data, _TOP, "lab", issues)
+    return Lab(path, data, issues)
+
+
+def check(lab: Lab, today: dt.date | None = None):
+    """Validate the whole lab. Returns a list of Issues (errors and warnings)."""
+    today = today or dt.date.today()
+    issues = list(lab.issues)
+    E = lambda where, msg: issues.append(Issue("error", where, msg))      # noqa: E731
+    W = lambda where, msg: issues.append(Issue("warning", where, msg))    # noqa: E731
+
+    for hid, h in lab.humans.items():
+        where = f"humans.{hid}"
+        if not _fields(h or {}, _HUMAN, where, issues):
+            continue
+        for i, ch in enumerate((h or {}).get("channels") or []):
+            cw = f"{where}.channels[{i}]"
+            if not _fields(ch, _CHANNEL, cw, issues):
+                continue
+            if ch.get("type") not in CHANNEL_TYPES:
+                E(cw, f"type must be one of {CHANNEL_TYPES}, got {ch.get('type')!r}")
+            if "timeout_s" in ch and isinstance(ch["timeout_s"], int) and ch["timeout_s"] <= 0:
+                E(cw, "timeout_s must be positive")
+            if ch.get("on_timeout", "deny") != "deny":
+                E(cw, "on_timeout must be 'deny' (a timeout never approves)")
+
+    for hid, h in lab.hosts.items():
+        where = f"hosts.{hid}"
+        if not _fields(h or {}, _HOST, where, issues):
+            continue
+        if h.get("kind") not in HOST_KINDS:
+            E(where, f"kind must be one of {HOST_KINDS}, got {h.get('kind')!r}")
+        if h.get("kind") == "cloud" and not h.get("provider"):
+            E(where, "a cloud host needs a provider")
+        if "power" in h and h["power"] not in POWER:
+            E(where, f"power must be one of {POWER}, got {h['power']!r}")
+        rb = h.get("restart_by")
+        if rb is not None and lab.agents.get(rb, {}).get("role") != "secretary":
+            E(where, f"restart_by must name the secretary agent, got {rb!r}")
+
+    roles = {}
+    for aid, a in lab.agents.items():
+        where = f"agents.{aid}"
+        if not _fields(a or {}, _AGENT, where, issues):
+            continue
+        role = a.get("role")
+        roles.setdefault(role, []).append(aid)
+        if role not in ROLES:
+            E(where, f"role must be one of {ROLES}, got {role!r}")
+        if a.get("human") not in lab.humans:
+            E(where, f"human {a.get('human')!r} is not in humans "
+                     "(every agent is attached to a human member, in terms of tokens)")
+        if a.get("host") not in lab.hosts:
+            E(where, f"host {a.get('host')!r} is not in hosts")
+        if role == "worker":
+            if a.get("access", "dedicated") not in ACCESS:
+                E(where, f"access must be one of {ACCESS}, got {a.get('access')!r}")
+        else:
+            for k in ("access", "max_parallel_gpu_tasks"):
+                if k in a:
+                    E(where, f"{k!r} applies to workers only")
+        if role != "manager" and "slack_app" in a:
+            E(where, "'slack_app' applies to managers only")
+        if role == "manager" and not a.get("slack_app"):
+            W(where, "manager has no slack_app yet (it can't talk in Slack)")
+        if role == "secretary":
+            host = lab.hosts.get(a.get("host")) or {}
+            if host.get("kind") == "cloud":
+                W(where, "the secretary is meant to run on an always-on on-prem host")
+        overlay = lab.overlay_path(aid)
+        if overlay and not os.path.exists(overlay):
+            E(where, f"policy_overlay {a['policy_overlay']!r} not found ({overlay})")
+        elif role in ROLES:
+            try:
+                lab.agent_policy(aid)
+            except (policy.PolicyError, yaml.YAMLError) as e:
+                E(where, f"policy: {e}")
+
+    secretaries = roles.get("secretary", [])
+    if len(secretaries) != 1:
+        E("agents", f"a lab has exactly one secretary, found {len(secretaries)}")
+    for hid, h in lab.humans.items():
+        mine = [aid for aid in roles.get("manager", []) if lab.agents[aid].get("human") == hid]
+        if mine and not (h or {}).get("channels"):
+            E(f"humans.{hid}", "has a manager but no permission channel")
+        if len(mine) > 1:
+            W(f"humans.{hid}", f"has {len(mine)} managers: {mine}")
+    for aid in roles.get("worker", []):
+        a = lab.agents[aid]
+        if a.get("access", "dedicated") == "dedicated":
+            owner = a.get("human")
+            if not any(lab.agents[m].get("human") == owner for m in roles.get("manager", [])):
+                W(f"agents.{aid}", f"dedicated to {owner!r}, who has no manager to submit tasks")
+
+    for i, c in enumerate(lab.credentials):
+        where = f"credentials[{i}]"
+        if not _fields(c, _CRED, where, issues):
+            continue
+        where = f"credentials.{c.get('name', i)}"
+        if c.get("host") not in lab.hosts:
+            E(where, f"host {c.get('host')!r} is not in hosts")
+        if c.get("agent") is not None and c["agent"] not in lab.agents:
+            E(where, f"agent {c['agent']!r} is not in agents")
+        exp = c.get("expires")
+        if isinstance(exp, dt.date):
+            left = (exp - today).days
+            if left < 0:
+                E(where, f"expired {-left} days ago ({exp})")
+            elif left <= EXPIRY_WARN_DAYS:
+                W(where, f"expires in {left} days ({exp})")
+    return issues

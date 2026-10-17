@@ -1,0 +1,11 @@
+# worker-a's overlay: on top of the worker role defaults.
+bash:
+  helpers:
+    # the lab's report command, trusted by absolute path (outside the writable zone)
+    - path: /opt/agentic-lab/bin/lab-report
+      subcommands: [done, error, running]
+      allow_quoted_heredoc: true
+remove:
+  bash:
+    git:
+      subcommands: [rebase, cherry-pick]   # this project keeps history linear by hand

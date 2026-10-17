@@ -1,0 +1,28 @@
+[project]
+name = "agentic-lab"
+version = "0.0.1"
+description = "A framework for humans and AI agents running a scientific lab together"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = ["pyyaml>=6"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+lab = "agentic_lab.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"agentic_lab.policy" = ["*.yaml", "roles/*.yaml"]
+"agentic_lab.cage" = ["sbox"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

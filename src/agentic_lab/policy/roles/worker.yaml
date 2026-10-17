@@ -1,0 +1,14 @@
+# Worker defaults: frictionless inside the cage, read-only outside it.
+writable: [~/projects, /tmp, ~/.cache]   # mirrors sbox's writable binds
+
+bash:
+  sbox:
+    enabled: true
+    net_modes: [tailnet]                  # `sbox --net tailnet -- ...` (tailnet only)
+  git:
+    enabled: true
+    subcommands: [status, diff, log, show, branch, remote, reflog, stash, add, commit,
+                  checkout, switch, restore, fetch, pull, push, rev-parse, describe, tag,
+                  merge, rebase, cherry-pick, mv, worktree, ls-tree, ls-files, rev-list,
+                  merge-base, check-ignore, cat-file, blame, shortlog, show-ref,
+                  for-each-ref, name-rev, ls-remote]

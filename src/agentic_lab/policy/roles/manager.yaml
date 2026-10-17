@@ -1,0 +1,17 @@
+# Manager defaults: reads anything without asking (org and internet), writes only to its
+# scratchpad. Every write to GitHub, Google Drive or anything shared goes to its human.
+writable: [~/scratch, /tmp]
+
+green_tools:
+  - WebFetch
+  - WebSearch
+
+bash:
+  sbox:
+    enabled: true          # local scratch work (no network) is frictionless
+    net_modes: []
+  git:
+    enabled: true          # read-only git only: no commit, no push
+    subcommands: [status, diff, log, show, branch, remote, reflog, fetch, rev-parse,
+                  describe, ls-tree, ls-files, rev-list, merge-base, cat-file, blame,
+                  shortlog, show-ref, for-each-ref, name-rev, ls-remote]
