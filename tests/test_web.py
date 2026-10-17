@@ -31,7 +31,8 @@ def test_render():
     assert "<script>alert(1)</script>" not in page and "&lt;script&gt;" in page
     assert "62% used" in page and "3 min ago" in page and "from worker-a" in page
     assert "Current session" in page and "resets in" in page
-    assert "arxiv.org" in page and "12k" in page and "800k" in page and "busy" in page
+    assert "arxiv.org" in page and "812k on this account" in page and "busy" in page
+    assert "var(--c1)" in page and "12k new" in page
     assert "aria-valuenow='62'" in page
     assert web.render(None).startswith("<!doctype html>")
 
