@@ -7,6 +7,8 @@
 #   3. bwrap-gpu: a wrapper that passes the GPU into the sandbox
 #   4. managed settings pointing Claude Code at the wrapper (agents can't change them)
 #
+# Then create the agent's user with create-agent-user.sh.
+#
 # The agent's own sandbox settings (allowlist, writable dirs, hidden /run, Unix sockets for
 # CUDA) are generated per agent by `lab settings <agent>`, on this host.
 set -euo pipefail
