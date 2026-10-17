@@ -125,6 +125,72 @@ def test_client_finds_token_in_terminal_output():
     assert client.find_token("x sk-ant-oat01-" + "z" * 60 + " trailing") == "sk-ant-oat01-" + "z" * 60
 
 
+def test_client_finds_token_in_a_tui_rendering():
+    """The way Claude Code draws it: spaces as cursor moves, `\r\r\n` line ends, `ESC 7`/`ESC 8`,
+    private CSI queries and hyperlinks, a token wrapped at the terminal's width."""
+    client = _load_client()
+    tok = "sk-ant-oat01-" + "Zq9_x-Lm3P" * 9 + "AbCdE"
+    row = 79
+    out = ("\x1b7\x1b8\x1b[2G\x1b[1mYour\x1b[7GOAuth\x1b[13Gtoken:\x1b[22m\r\r\n\r\r\n"
+           "\x1b]8;id=1;https://example.com\x1b\\link\x1b]8;;\x1b\\\r\r\n"
+           "\x1b[2G" + tok[:row] + "\x1b[>0q\r\r\n\x1b[2G" + tok[row:] + "  \r\r\n\r\r\n"
+           "\x1b[2GStore\x1b[8Gthis\r\r\n")
+    assert client.find_token(out) == tok
+    padded = "  " + tok[:row] + "   \n  " + tok[row:] + "\n\n  Store it\n"     # padded rows
+    assert client.find_token(padded) == tok
+    assert client.find_token("  " + tok + " export X=1") == tok                 # a space ends it
+
+
+def test_intake_verifies_claude_tokens(tmp_path):
+    def verify(value):
+        if value != TOKEN:
+            raise I.IntakeError("Claude rejected this token (61 characters)")
+    it = I.Intake(tmp_path, verify={"claude-token": verify})
+    code = it.request("alice", "claude-token")
+    with pytest.raises(I.IntakeError, match="rejected this token"):
+        it.receive(code, "claude-token", TOKEN[:-1])
+    assert it.load("alice", "claude-token") is None
+    assert it.receive(code, "claude-token", TOKEN) == "alice"       # the code was still usable
+
+
+def test_verify_claude_token_lets_unknowns_through(monkeypatch):
+    import urllib.error
+
+    def refuse(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, 401, "Unauthorized", {}, None)
+
+    def offline(req, timeout):
+        raise urllib.error.URLError("no network")
+    monkeypatch.setattr(urllib.request, "urlopen", refuse)
+    with pytest.raises(I.IntakeError, match="rejected this token"):
+        I.verify_claude_token(TOKEN)
+    monkeypatch.setattr(urllib.request, "urlopen", offline)
+    I.verify_claude_token(TOKEN)                                    # can't tell: accepted
+
+
+def test_client_pastes_when_the_found_token_is_rejected(tmp_path, monkeypatch, free_port):
+    def verify(value):
+        if value != TOKEN:
+            raise I.IntakeError("Claude rejected this token (40 characters)")
+    it = I.Intake(tmp_path, verify={"claude-token": verify})
+    code = it.request("alice", "claude-token")
+    server = uvicorn.Server(uvicorn.Config(app(it, ROOT / "client" / "lab-member.py"),
+                                           host="127.0.0.1", port=free_port, log_level="error"))
+    th = threading.Thread(target=server.run, daemon=True)
+    th.start()
+    while not server.started:
+        time.sleep(0.02)
+    try:
+        client = _load_client()
+        monkeypatch.setattr(client, "get_claude_token", lambda paste: TOKEN[:40])  # cut short
+        monkeypatch.setattr(client.getpass, "getpass", lambda prompt: TOKEN)
+        client.main(["claude-token", "--code", code, "--to", f"http://127.0.0.1:{free_port}"])
+        assert it.load("alice", "claude-token") == TOKEN
+    finally:
+        server.should_exit = True
+        th.join()
+
+
 def test_slack_app_secret_for_a_service(tmp_path):
     it = I.Intake(tmp_path)
     code = it.request("service:broker", "slack-app")

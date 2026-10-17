@@ -71,9 +71,34 @@ class Request:
     used: bool = False
 
 
+def verify_claude_token(token, timeout=20):
+    """Ask Anthropic whether `token` works, with a one-token request. Raises IntakeError if
+    it's refused (e.g. cut short when copied); any other outcome (no network, an outage)
+    lets the token through, since the lab can't tell it's bad."""
+    import urllib.error
+    import urllib.request
+    body = json.dumps({"model": "claude-haiku-5-5", "max_tokens": 1,
+                       "messages": [{"role": "user", "content": "hi"}]}).encode()
+    req = urllib.request.Request(
+        "https://api.anthropic.com/v1/messages", data=body, method="POST",
+        headers={"Authorization": f"Bearer {token}", "anthropic-version": "2023-06-01",
+                 "anthropic-beta": "oauth-2025-04-20", "content-type": "application/json"})
+    try:
+        urllib.request.urlopen(req, timeout=timeout).close()
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise IntakeError(f"Claude rejected this token ({len(token)} characters): "
+                              "was all of it copied, every line?") from None
+    except (urllib.error.URLError, OSError):
+        pass
+
+
 class Intake:
-    def __init__(self, root):
+    def __init__(self, root, verify=None):
+        """`verify`: name -> function(value) that raises IntakeError for a secret that
+        doesn't work (the intake service checks Claude tokens; tests pass none)."""
         self.root = root
+        self.verify = verify or {}
         self.requests_dir = os.path.join(root, "secret-requests")
         self.secrets_dir = os.path.join(root, "secrets")
         os.makedirs(self.requests_dir, mode=0o700, exist_ok=True)
@@ -122,6 +147,8 @@ class Intake:
             if not hmac.compare_digest(req.name, name or ""):
                 raise IntakeError(f"this code is for {req.name}, not {name}")
             value = check_value(name, value)
+            if name in self.verify:
+                self.verify[name](value)
             self.store(req.human, name, value)
             req.used = True
             _write_private(path, json.dumps(req.__dict__))

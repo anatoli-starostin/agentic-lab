@@ -26,29 +26,82 @@ import urllib.request
 VERSION = 1
 
 
-_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b\][^\x07]*\x07|\x1b[()][A-Z0-9]")
+# every escape sequence a terminal UI may print: CSI (private ones like `ESC[>0q` too), OSC
+# ended by BEL or ST (hyperlinks), charset selection, and two-byte ones (`ESC 7`, `ESC 8`)
+_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+                   r"|\x1b[()*+#].|\x1b[^\[\]()*+#]")
 _TOKEN_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
 
 def run_capturing(argv):
     """Run an interactive command in a pseudo-terminal (it looks and behaves as usual) and
-    return (exit code, everything it printed). Unix only."""
+    return (exit code, everything it printed). Unix only.
+
+    Not pty.spawn: it gives the child an 80-column terminal whatever the real one is (so a
+    long token wraps), and on macOS it keeps waiting for a key press after the child exits."""
+    import fcntl
     import pty
+    import select
+    import termios
+    import tty
     out = bytearray()
-
-    def read(fd):
-        data = os.read(fd, 4096)
-        out.extend(data)
-        return data
-
-    status = pty.spawn(argv, read)
+    pid, fd = pty.fork()
+    if pid == 0:
+        try:
+            os.execvp(argv[0], argv)
+        finally:
+            os._exit(127)
+    stdin = sys.stdin.fileno()
+    interactive = os.isatty(stdin)
+    saved = None
+    if interactive:
+        try:
+            size = fcntl.ioctl(stdin, termios.TIOCGWINSZ, b"\0" * 8)
+            fcntl.ioctl(fd, termios.TIOCSWINSZ, size)
+        except OSError:
+            pass
+        saved = termios.tcgetattr(stdin)
+        tty.setraw(stdin)
+    status = None
+    try:
+        while status is None:
+            ready, _, _ = select.select([fd, stdin] if interactive else [fd], [], [], 0.2)
+            if fd in ready:
+                try:
+                    data = os.read(fd, 4096)
+                except OSError:             # Linux: the child closed the terminal
+                    data = b""
+                if data:
+                    out.extend(data)
+                    os.write(sys.stdout.fileno(), data)
+            if stdin in ready:
+                data = os.read(stdin, 4096)
+                if data:
+                    os.write(fd, data)
+            done, st = os.waitpid(pid, os.WNOHANG)
+            if done:
+                status = st
+        while select.select([fd], [], [], 0.1)[0]:      # what it printed just before exiting
+            try:
+                data = os.read(fd, 4096)
+            except OSError:
+                break
+            if not data:
+                break
+            out.extend(data)
+            os.write(sys.stdout.fileno(), data)
+    finally:
+        if saved is not None:
+            termios.tcsetattr(stdin, termios.TCSAFLUSH, saved)
+        os.close(fd)
     code = os.waitstatus_to_exitcode(status) if hasattr(os, "waitstatus_to_exitcode") else status
     return code, out.decode(errors="replace")
 
 
 def find_token(text):
     """The last sk-ant- token in terminal output. The terminal may have wrapped it over
-    several lines, so a line break (and the indentation after it) doesn't end it."""
+    several lines, so a line break (with padding before it and indentation after it)
+    doesn't end it; a blank line does."""
     text = _ANSI.sub("", text).replace("\r", "")
     start = text.rfind("sk-ant-")
     if start < 0:
@@ -59,16 +112,18 @@ def find_token(text):
         if c in _TOKEN_CHARS:
             token.append(c)
             i += 1
-        elif c == "\n":
-            j = i + 1
-            while j < len(text) and text[j] == " ":
+            continue
+        j = i
+        while j < len(text) and text[j] in " \t":
+            j += 1
+        if j < len(text) and text[j] == "\n":
+            j += 1
+            while j < len(text) and text[j] in " \t":
                 j += 1
-            if j < len(text) and text[j] in _TOKEN_CHARS and text[j] != "\n":
+            if j < len(text) and text[j] in _TOKEN_CHARS:
                 i = j          # the token continues on the next line
-            else:
-                break
-        else:
-            break
+                continue
+        break
     return "".join(token)
 
 
@@ -95,6 +150,14 @@ def get_claude_token(paste):
     elif not paste:
         print("Claude Code isn't installed here. Get a token with `claude setup-token` on any")
         print("machine where it is, then paste it below.\n")
+    return paste_token()
+
+
+class Refused(Exception):
+    pass
+
+
+def paste_token():
     token = getpass.getpass("Paste the token (input hidden; from the terminal or the browser), "
                             "then Enter: ").strip()
     if not looks_like_token(token):
@@ -111,7 +174,7 @@ def send(to, code, name, value):
             return json.loads(r.read() or b"{}")
     except urllib.error.HTTPError as e:
         detail = e.read().decode(errors="replace")[:300]
-        sys.exit(f"the secretary refused it ({e.code}): {detail}")
+        raise Refused(f"the secretary refused it ({e.code}): {detail}") from None
     except urllib.error.URLError as e:
         sys.exit(f"can't reach the secretary at {to}: {e.reason}. Are you on the lab's tailnet?")
 
@@ -128,8 +191,19 @@ def main(argv=None):
     args = ap.parse_args(argv)
 
     if args.cmd == "claude-token":
+        code = args.code.strip().upper()
         token = get_claude_token(args.paste)
-        reply = send(args.to, args.code.strip().upper(), "claude-token", token)
+        try:
+            reply = send(args.to, code, "claude-token", token)
+        except Refused as e:
+            if args.paste or "rejected this token" not in str(e):
+                sys.exit(str(e))
+            print(f"\n{e}")        # e.g. a token cut short; the code is still usable
+            print("Copy the whole token from the output above (every line of it).")
+            try:
+                reply = send(args.to, code, "claude-token", paste_token())
+            except Refused as e:
+                sys.exit(str(e))
         print(f"Done: the lab stored your Claude token ({reply.get('stored', 'ok')}).")
         print("You can close this window.")
 
