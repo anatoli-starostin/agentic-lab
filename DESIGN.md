@@ -502,6 +502,13 @@ slack_sdk, PyYAML).
 
 Each milestone ends with a demo that works on real infrastructure.
 
+**Development and integration setup: the whole lab on one GPU VM.** Because every agent
+runs as its own system service under its own Unix user (§10), the secretary, the
+manager(s) and a worker can share one GPU VM, with the same sandbox, MCP, broker and Slack
+DM approvals as production (`examples/single-vm/lab.yaml`). Differences: the secretary
+only logs power actions (it can't power off the VM it runs on), and there is one worker.
+M1–M4 are developed and demoed on this setup first.
+
 | # | Milestone | Done when |
 |---|---|---|
 | M0 | **Skeleton**: repo, `lab.yaml` schema + `lab check`, per-agent sandbox settings generated from `lab.yaml` | `pytest` green; `lab check` validates the example lab |
