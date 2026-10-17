@@ -7,7 +7,9 @@
                                 ask a human for a secret: prints the message to send them
     lab intake serve            the secretary's endpoint where members' clients send secrets
     lab broker serve            the approval broker (on the secretary host, as lab-broker)
-    lab secretary serve         the secretary's service: lab state + web UI
+    lab secretary serve         the secretary's service: lab state, web UI, Slack
+    lab secretary ask --as <member> "message"
+                                one message to the secretary, answered on the console
     lab manager serve <agent>   run a manager's service (Slack + its agent)
     lab manager ask <agent> --as <member> "message"
                                 one message to a manager, answered on the console
@@ -217,6 +219,16 @@ def cmd_secretary_serve(args):
     return 0
 
 
+def cmd_secretary_ask(args):
+    import asyncio
+    import logging
+
+    from .secretary.service import ask
+    logging.basicConfig(level=logging.WARNING)
+    asyncio.run(ask(args.lab, args.as_human, " ".join(args.message)))
+    return 0
+
+
 def cmd_debug(args):
     from .debug import debug
     debug(args.lab, args.agent, session=args.session, new=args.new, ask=args.print)
@@ -289,6 +301,10 @@ def main(argv=None):
     seserve.add_argument("--host", default="127.0.0.1", help="the tailnet IP in production")
     seserve.add_argument("--port", type=int, default=8774)
     seserve.set_defaults(fn=cmd_secretary_serve)
+    seask = sesub.add_parser("ask", help="one message to the secretary, on the console")
+    seask.add_argument("message", nargs="+")
+    seask.add_argument("--as", dest="as_human", required=True, help="the member asking")
+    seask.set_defaults(fn=cmd_secretary_ask)
 
     mg = sub.add_parser("manager", help="the manager service")
     msub = mg.add_subparsers(dest="mcmd", required=True)

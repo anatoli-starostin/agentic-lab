@@ -32,6 +32,7 @@ EXPIRY_WARN_DAYS = 14
 
 # key -> (type, required). Types are checked; unknown keys are errors.
 _TOP = {"lab": (str, True), "tailnet": (str, False), "trust_tailnet": (bool, False),
+        "announcements": (str, False),     # Slack channel (id or #name) for lab-wide notices
         "humans": (dict, True),
         "agents": (dict, True), "hosts": (dict, True), "credentials": (list, False)}
 _HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, False)}

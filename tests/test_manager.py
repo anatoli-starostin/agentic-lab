@@ -237,3 +237,12 @@ def test_manifests():
     assert a["settings"]["interactivity"]["is_enabled"]
     with pytest.raises(ValueError, match="only managers and the secretary"):
         slack_manifest.for_agent(lab, "worker-a")
+
+
+def test_secretary_expiry_notices():
+    import datetime as dt
+    from agentic_lab.secretary.brain import expiry_notices
+    lab = registry.load(EXAMPLE)
+    soon = expiry_notices(lab, today=dt.date(2026, 12, 1))
+    assert [(c["name"], d) for c, d in soon] == [("github/bot-pat", 10)]
+    assert expiry_notices(lab, today=dt.date(2026, 10, 17)) == []

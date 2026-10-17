@@ -153,6 +153,9 @@ def host_plan(lab, host, tokens, intake=intake_secret):
             {w: tokens.get(f"mon:{w}") for w in workers_all}))
         files[f"/home/{sec_user}/.config/agentic-lab/broker.yaml"] = (sec_user, "600", yaml.safe_dump(
             {"url": broker_url, "token": tokens.get(f"broker:{secretary}")}))
+        slack = intake(f"service:{secretary}", "slack-app")
+        if slack is not None:          # optional: without it, the secretary has no Slack
+            files[f"/home/{sec_user}/.config/agentic-lab/slack.env"] = (sec_user, "600", slack)
         users += ["lab-broker"]
         agents = [aid for aid, a in lab.agents.items()
                   if a.get("role") in ("worker", "manager", "secretary")]

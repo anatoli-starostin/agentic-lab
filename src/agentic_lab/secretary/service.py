@@ -1,11 +1,14 @@
 """`lab secretary serve`: the secretary's service (DESIGN.md §4.1).
 
-For now: collects the lab's state every few seconds and serves the web UI on the tailnet.
-(The secretary's chat agent in Slack, VM power and token-expiry notices come next.)
-Secrets, readable by this service only:
+Collects the lab's state every few seconds and serves the web UI on the tailnet. With its
+Slack app configured, it also talks in Slack (DMs, and channel threads it's tagged in),
+asks members for secrets, and posts notices (expiring credentials) to the lab's
+announcements channel. Secrets, readable by this service only:
 
-    ~/.config/agentic-lab/monitor.yaml   {worker-id: read-only token}
-    ~/.config/agentic-lab/broker.yaml    {url, token} (read-only overview)
+    ~/.config/agentic-lab/monitor.yaml        {worker-id: read-only token}
+    ~/.config/agentic-lab/broker.yaml         {url, token} (read-only overview)
+    ~/.config/agentic-lab/slack.env           its Slack app (optional)
+    ~/.config/agentic-lab/claude-oauth-token  the seat token, for its chat agent
 """
 import asyncio
 import json
@@ -20,13 +23,93 @@ import yaml
 from ..registry import load as load_lab
 from ..worker.service import _read_secret
 from ..manager.workers import Workers
+from ..broker.service import _env_file
+from ..manager.state import ManagerState
+from ..secrets.intake import Intake, message
+from ..slackio import SILENT, SlackIO
+from .brain import SecretaryBrain, expiry_notices
 from .status import collect
 from .web import app
+import datetime as dt
+from types import SimpleNamespace
 
 CONFIG = "~/.config/agentic-lab"
 STATE = "~/.local/state/agentic-lab"
 COLLECT_EVERY_S = 15
 log = logging.getLogger("agentic_lab.secretary")
+
+
+INTAKE_PORT = 8771
+
+
+class Secretary:
+    """The secretary's Slack side: answers members, asks them for secrets, posts notices."""
+
+    def __init__(self, lab, latest, workers, brain, state, slack=None):
+        self.lab, self.latest, self.workers = lab, latest, workers
+        self.brain, self.state, self.slack = brain, state, slack
+        self._locks = {}
+        sec = next(a for a, x in lab.agents.items() if x.get("role") == "secretary")
+        name, _ = lab.address(sec)
+        self.intake_url = f"http://{name}:{INTAKE_PORT}"
+        self.intake = Intake(os.path.expanduser(STATE))     # the same store the intake serves
+
+    def ctx(self):
+        return SimpleNamespace(state=lambda: self.latest["state"], workers=self.workers,
+                               request_token=self.request_token, announce=self.announce,
+                               save=self.state.save)
+
+    async def request_token(self, member):
+        if member not in self.lab.humans:
+            return f"no member {member!r} in lab.yaml"
+        h = self.lab.humans[member] or {}
+        code = self.intake.request(member, "claude-token")
+        text = message(h.get("name") or member, code, self.intake_url)
+        if self.slack is None or not h.get("slack_user"):
+            return f"no Slack for {member}; give them this message:\n{text}"
+        im = await self.slack.web.conversations_open(users=h["slack_user"])
+        await self.slack.post(im["channel"]["id"], None, text)
+        return f"sent {member} a DM with a one-time command (valid 24 h)"
+
+    async def announce(self, text):
+        channel = self.lab.data.get("announcements")
+        if not channel or self.slack is None:
+            return False
+        await self.slack.post(channel.lstrip("#"), None, text)
+        return True
+
+    async def on_message(self, msg):
+        conv = self.state.conversation(msg.channel, msg.thread_ts)
+        lock = self._locks.setdefault(conv.key, asyncio.Lock())
+        who = (self.lab.humans.get(msg.human) or {}).get("name") or msg.human
+        prompt = "\n\n".join(filter(None, [
+            ("Earlier in this thread:\n" + "\n".join(msg.history)) if msg.history else "",
+            f"[{who} ({msg.human})]: {msg.text}",
+            "" if msg.mentioned else f"(Not addressed to you: answer only if useful from "
+                                     f"you, otherwise reply exactly {SILENT}.)"]))
+        async with lock:
+            try:
+                reply = await self.brain.turn(self.ctx(), conv, prompt)
+            except Exception as e:
+                log.exception("secretary turn failed")
+                reply = f"Sorry, something went wrong on my side ({type(e).__name__})."
+        if self.slack is not None:
+            await self.slack.post(conv.channel, conv.thread_ts, reply)
+        return reply
+
+    async def notices(self):
+        """Once a day: credentials expiring within 14 days, announced (and the owner of a
+        Claude token gets a DM with a fresh one-time command)."""
+        today = dt.date.today().isoformat()
+        done = getattr(self.state, "noticed", None) or {}
+        for cred, left in expiry_notices(self.lab):
+            key = f"{cred['name']}:{today}"
+            if done.get(key):
+                continue
+            when = "expired" if left < 0 else f"expires in {left} days"
+            await self.announce(f":hourglass: *{cred['name']}* {when} ({cred['expires']}).")
+            done[key] = True
+        self.state.noticed = done
 
 
 async def serve(lab_path, host, port):
@@ -70,12 +153,73 @@ async def serve(lab_path, host, port):
             except asyncio.TimeoutError:
                 pass
 
+    sec_id = next(a for a, x in lab.agents.items() if x.get("role") == "secretary")
+    sa = lab.agents[sec_id]
+    env = {}
+    seat = _read_secret(f"{CONFIG}/claude-oauth-token")
+    if seat:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
+    workdir = os.path.expanduser(sa.get("workdir", "~/work"))
+    os.makedirs(workdir, exist_ok=True)
+    brain = SecretaryBrain(lab.display_name(sec_id), lab.name, workdir,
+                           lab.agent_settings(sec_id), model=sa.get("model"), env=env)
+    sec = Secretary(lab, latest, workers, brain,
+                    ManagerState(os.path.expanduser(f"{STATE}/chat")))
+    slack_env = _env_file(_read_secret(f"{CONFIG}/slack.env"))
+    if slack_env.get("SLACK_BOT_TOKEN") and slack_env.get("SLACK_APP_TOKEN"):
+        members = {(h or {}).get("slack_user"): hid for hid, h in lab.humans.items()
+                   if (h or {}).get("slack_user")}
+        sec.slack = SlackIO(slack_env["SLACK_BOT_TOKEN"], slack_env["SLACK_APP_TOKEN"],
+                            members, lambda human: (True, ""), sec.on_message,
+                            os.path.join(workdir, "inbox"), engaged=sec.state.engaged)
+        await sec.slack.start()
+
+    async def notice_loop():
+        while not stop.is_set():
+            try:
+                await sec.notices()
+            except Exception:
+                log.exception("notices failed")
+            try:
+                await asyncio.wait_for(stop.wait(), 3600)
+            except asyncio.TimeoutError:
+                pass
+
     server = uvicorn.Server(uvicorn.Config(app(lambda: latest["state"]), host=host, port=port,
                                            log_level="warning"))
-    log.info("secretary: watching %d worker(s), web UI on http://%s:%d/", len(workers.known()),
-             host, port)
-    tasks = [asyncio.create_task(collector()), asyncio.create_task(server.serve())]
+    log.info("secretary: watching %d worker(s), slack=%s, web UI on http://%s:%d/",
+             len(workers.known()), sec.slack is not None, host, port)
+    tasks = [asyncio.create_task(collector()), asyncio.create_task(server.serve()),
+             asyncio.create_task(notice_loop())]
     await stop.wait()
     server.should_exit = True
+    if sec.slack is not None:
+        await sec.slack.stop()
     for t in tasks:
         t.cancel()
+
+
+async def ask(lab_path, human, text):
+    """One message to the secretary from the command line, as `human` (no Slack)."""
+    from ..slackio import Incoming
+    lab = load_lab(lab_path)
+    mon = yaml.safe_load(_read_secret(f"{CONFIG}/monitor.yaml") or "") or {}
+    workers = Workers({w: lab.worker_url(w) for w in mon if w in lab.agents}, mon, timeout=15)
+    try:
+        with open(os.path.expanduser(f"{STATE}/lab-state.json")) as f:
+            latest = {"state": json.load(f)}
+    except (OSError, ValueError):
+        latest = {"state": None}
+    sec_id = next(a for a, x in lab.agents.items() if x.get("role") == "secretary")
+    sa = lab.agents[sec_id]
+    env = {}
+    seat = _read_secret(f"{CONFIG}/claude-oauth-token")
+    if seat:
+        env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
+    workdir = os.path.expanduser(sa.get("workdir", "~/work"))
+    os.makedirs(workdir, exist_ok=True)
+    brain = SecretaryBrain(lab.display_name(sec_id), lab.name, workdir,
+                           lab.agent_settings(sec_id), model=sa.get("model"), env=env)
+    sec = Secretary(lab, latest, workers, brain,
+                    ManagerState(os.path.expanduser(f"{STATE}/chat-cli")))
+    print(await sec.on_message(Incoming("cli", None, "0", None, human, text, True, True)))
