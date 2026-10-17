@@ -10,6 +10,7 @@
     lab manager serve <agent>   run a manager's service (Slack + its agent)
     lab manager ask <agent> --as <member> "message"
                                 one message to a manager, answered on the console
+    lab doctor [--host H]       (sudo) check this host against lab.yaml, with fixes
     lab slack-manifest <agent>|approvals
                                 the Slack app manifest for an agent (paste into api.slack.com)
     lab debug <agent>           (sudo) stop the agent's service and open its session in the
@@ -157,6 +158,13 @@ def cmd_manager_ask(args):
     return 0
 
 
+def cmd_doctor(args):
+    from .doctor import report, run
+    text, failed = report(run(args.lab, host=args.host))
+    print(text)
+    return 1 if failed else 0
+
+
 def cmd_debug(args):
     from .debug import debug
     debug(args.lab, args.agent, session=args.session, new=args.new, ask=args.print)
@@ -235,6 +243,10 @@ def main(argv=None):
     mask.add_argument("--wait", type=int, default=900,
                       help="seconds to follow the tasks it submits (default 900)")
     mask.set_defaults(fn=cmd_manager_ask)
+
+    dr = sub.add_parser("doctor", help="check this host against lab.yaml (run with sudo)")
+    dr.add_argument("--host", help="which lab.yaml host this is (default: detect)")
+    dr.set_defaults(fn=cmd_doctor)
 
     sm = sub.add_parser("slack-manifest", help="print a Slack app manifest")
     sm.add_argument("agent", help="a manager or the secretary, or 'approvals'")
