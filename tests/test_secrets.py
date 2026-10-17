@@ -113,3 +113,13 @@ def test_member_client_end_to_end(tmp_path, monkeypatch, free_port):
     finally:
         server.should_exit = True
         th.join()
+
+
+def test_client_finds_token_in_terminal_output():
+    client = _load_client()
+    tok = "sk-ant-oat01-" + "A1b2_C3d4-" * 9
+    wrapped = ("\x1b[32m✓ Long-lived token created\x1b[0m\r\n\r\n  " + tok[:50] + "\r\n  "
+               + tok[50:] + "\r\n\r\nStore it securely.\r\n")
+    assert client.find_token(wrapped) == tok
+    assert client.find_token("no token here") is None
+    assert client.find_token("x sk-ant-oat01-" + "z" * 60 + " trailing") == "sk-ant-oat01-" + "z" * 60
