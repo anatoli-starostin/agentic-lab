@@ -73,14 +73,20 @@ def _accounts(state):
         agents = ", ".join(e(state["agents"][a]["name"]) for a in acc["agents"]) or "—"
         lims = []
         for kind, lim in sorted(acc["limits"].items()):
-            pct = round(100 * (lim.get("utilization") or 0))
             cls = "bad" if lim.get("status") == "rejected" else (
                 "warn" if lim.get("status") == "allowed_warning" else "")
             resets = (lim.get("resets_at") or "")[11:16]
+            status = {"allowed": "ok", "allowed_warning": "close to the limit",
+                      "rejected": "limit reached"}.get(lim.get("status"), lim.get("status"))
+            if lim.get("utilization") is None:      # only the status was reported
+                value, bar = e(status), ""
+            else:
+                pct = round(100 * lim["utilization"])
+                value = f"{pct}%"
+                bar = f'<div class="bar"><i style="width:{min(pct, 100)}%"></i></div>'
             lims.append(
-                f'<div>{e(LIMIT_NAMES.get(kind, kind))} <b class="{cls}">{pct}%</b>'
-                f'{f" · resets {resets} UTC" if resets else ""}'
-                f'<div class="bar"><i style="width:{min(pct, 100)}%"></i></div>'
+                f'<div>{e(LIMIT_NAMES.get(kind, kind))} <b class="{cls}">{value}</b>'
+                f'{f" · resets {resets} UTC" if resets else ""}{bar}'
                 f'<span class="muted small">as of {e(ago(lim.get("observed_at")))}, '
                 f'from {e(lim.get("from"))}</span></div>')
         if not lims:
