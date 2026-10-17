@@ -70,3 +70,20 @@ def test_script_and_bundle(tmp_path):
 
 def test_find_source():
     assert (Path(A.find_source()) / "pyproject.toml").exists()
+
+
+def test_services_wait_for_their_secrets(tmp_path):
+    lab = registry.load(SINGLE)
+    p = A.host_plan(lab, "dev-vm", A.Tokens(tmp_path), fake_intake({
+        ("alice", "claude-token"): "sk-ant-x\n"}))           # no Slack apps yet
+    assert set(p["held"]) == {"lab-manager@mgr-alice", "lab-broker"}
+    sh = A.script(p)
+    assert "systemctl disable --now lab-broker" in sh and "systemctl restart lab-intake" in sh
+    assert "systemctl restart lab-worker@worker-a" in sh
+
+
+def test_fresh_install_keeps_the_intake_running(tmp_path):
+    lab = registry.load(SINGLE)
+    p = A.host_plan(lab, "dev-vm", A.Tokens(tmp_path), fake_intake({}))   # nothing yet
+    assert "lab-intake" not in p["held"] and "lab-secretary" not in p["held"]
+    assert set(p["held"]) == {"lab-manager@mgr-alice", "lab-broker"}

@@ -45,11 +45,12 @@ means `~/agentic-lab/.venv/bin/lab`. `sudo` commands need the full path:
    - `lab.yaml` goes into git (it holds no secrets).
 
 5. **The secretary's own services** (Claude)
-   - `sudo lab apply --host <secretary host>`: installs the framework in
+   - `sudo lab apply --host <secretary host> --allow-missing`: installs the framework in
      `/opt/agentic-lab`, creates the users `lab-secretary` and `lab-broker`, starts the
-     secret intake, the broker and the secretary (state + web UI on
-     `http://<secretary host>:8774/`). Secrets still missing are listed; that's expected
-     here (they come in the next steps).
+     secret intake and the secretary (state + web UI on `http://<secretary host>:8774/`).
+     Services whose secrets don't exist yet (the broker's and manager's Slack apps, Claude
+     tokens) are installed but held back, and listed; the next steps provide them, and the
+     final `lab apply` starts them.
 
 6. **Slack apps** (Admin creates them, Claude guides; ~2 minutes each)
    - Three apps: **Lab Approvals** (the broker's), **the secretary**, and **the admin's

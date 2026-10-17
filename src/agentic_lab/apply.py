@@ -110,10 +110,13 @@ def host_plan(lab, host, tokens, intake=intake_secret):
     broker_url = f"http://{host_name(lab, sec_host)}:{PORTS['broker']}"
     name = host_name(lab, host)
     files, users, units, envs, missing = {}, [], [], {}, []
+    waiting = set()             # users whose service can't start yet (a secret is missing)
 
     def secret(user, fname, content, what):
         if content is None:
             missing.append(f"{what} (for {user})")
+            if fname == "slack.env":    # a Slack-facing service can't run without its app;
+                waiting.add(user)       # the rest start, and the intake must (it receives them)
             return
         files[f"/home/{user}/.config/agentic-lab/{fname}"] = (user, "600", content)
 
@@ -186,9 +189,13 @@ def host_plan(lab, host, tokens, intake=intake_secret):
                   ("lab-secretary.service", "lab-secretary")]
         if "lab-secretary" not in users:
             users.append("lab-secretary")
+    unit_user = {u: (f"lab-{u.split('@', 1)[1]}" if "@" in u else
+                     {"lab-broker": "lab-broker", "lab-intake": "lab-secretary",
+                      "lab-secretary": "lab-secretary"}.get(u)) for _, u in units}
+    held = sorted(u for u, owner in unit_user.items() if owner in waiting)
     return {"host": host, "name": name, "files": files, "users": users, "units": units,
             "envs": envs, "missing": missing, "secretary_host": host == sec_host,
-            "nebius_cli": locals().get("nebius_cli")}
+            "nebius_cli": locals().get("nebius_cli"), "held": held}
 
 
 # ── the script each host runs ────────────────────────────────────────────────
@@ -243,11 +250,16 @@ def script(plan):
         sub = "worker" if "worker" in unit_file else "manager" if "manager" in unit_file else "secretary"
         lines.append(f"install -m 644 /opt/agentic-lab/src/deploy/{sub}/{unit_file} /etc/systemd/system/")
     lines.append("systemctl daemon-reload")
+    held = set(plan.get("held") or [])
     for _, unit in plan["units"]:
-        lines.append(f"systemctl enable {unit} >/dev/null 2>&1; systemctl restart {unit}")
+        if unit in held:        # its secrets aren't all there yet: don't start it
+            lines.append(f"systemctl disable --now {unit} >/dev/null 2>&1 || true")
+        else:
+            lines.append(f"systemctl enable {unit} >/dev/null 2>&1; systemctl restart {unit}")
     lines.append('sleep 3; say "status"')
     for _, unit in plan["units"]:
-        lines.append(f'echo "  {unit}: $(systemctl is-active {unit})"')
+        note = " (waiting for its secrets)" if unit in held else ""
+        lines.append(f'echo "  {unit}: $(systemctl is-active {unit}){note}"')
     return "\n".join(lines) + "\n"
 
 
