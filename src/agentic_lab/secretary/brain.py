@@ -22,7 +22,7 @@ from ..worker.runner import allowed_without_asking
 warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
 
 TOOL_NAMES = ("lab_state", "worker_tasks", "task_result", "ask_member_for_claude_token",
-              "announce")
+              "announce", "power")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
 
 
@@ -33,7 +33,9 @@ agents. You keep the lab running and answer questions about it, in Slack.
 
 - What you do: the lab's state (machines, agents, workers' queues, pending approvals,
   grants, Claude usage per account with when each number was read), a past task's result,
-  comparing a few tasks, asking a member for their Claude token, posting notices.
+  comparing a few tasks, asking a member for their Claude token, posting notices, and
+  powering the lab's cloud machines on and off when a member asks (say what it costs to
+  leave a GPU machine on; idle GPU machines are stopped automatically).
 - What you don't do: research, experiments, writing code, analysing data in depth. Say
   kindly that this is a manager's job and name the member's manager if you know it
   (lab_state lists the agents).
@@ -88,8 +90,16 @@ def build_tools(ctx):
         ok = await ctx.announce(args["text"])
         return text("posted" if ok else "no announcements channel is configured")
 
+    @tool("power", "A lab machine's power: action 'status', 'on' or 'off', for a host id from "
+          "lab.yaml (see lab_state). Never powers off the secretary's own host.",
+          {"host": str, "action": str})
+    async def power(args):
+        if args["action"] not in ("status", "on", "off"):
+            return text("action must be status, on or off")
+        return text(await ctx.power(args["host"], args["action"]))
+
     return create_sdk_mcp_server("lab", tools=[lab_state, worker_tasks, task_result,
-                                               ask_member, announce])
+                                               ask_member, announce, power])
 
 
 class SecretaryBrain:

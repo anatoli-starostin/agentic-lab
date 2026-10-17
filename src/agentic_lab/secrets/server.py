@@ -13,7 +13,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
-from .intake import FIELDS, Intake, IntakeError
+from .intake import FIELDS, MULTILINE, Intake, IntakeError
 
 MAX_BODY = 16 * 1024
 _HEADERS = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
@@ -34,8 +34,11 @@ def _page(body, status=200):
 def _form(code, name, owner, error=""):
     who = f"the lab's {owner[8:]}" if owner.startswith("service:") else owner
     fields = "".join(
-        f'<label for="{k}">{html.escape(label)}</label>'
-        f'<input id="{k}" name="{k}" type="password" autocomplete="off" required>'
+        f'<label for="{k}">{html.escape(label)}</label>' + (
+            f'<textarea id="{k}" name="{k}" rows="8" autocomplete="off" spellcheck="false" '
+            f'required style="width:100%;font:12px ui-monospace,monospace"></textarea>'
+            if k in MULTILINE else
+            f'<input id="{k}" name="{k}" type="password" autocomplete="off" required>')
         for k, label, _ in FIELDS[name])
     err = f'<p class="err">{html.escape(error)}</p>' if error else ""
     return _page(f"<h2>Agentic Lab: {html.escape(name)}</h2>"

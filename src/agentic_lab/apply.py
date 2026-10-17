@@ -160,6 +160,18 @@ def host_plan(lab, host, tokens, intake=intake_secret):
         slack = intake(f"service:{secretary}", "slack-app")
         if slack is not None:          # optional: without it, the secretary has no Slack
             files[f"/home/{sec_user}/.config/agentic-lab/slack.env"] = (sec_user, "600", slack)
+        sa = intake(f"service:{secretary}", "nebius-sa")
+        if sa is not None:             # optional: without it, no VM power
+            import json as _json
+            sa = _json.loads(sa)
+            key = f"/home/{sec_user}/.nebius/lab-key.pem"
+            files[key] = (sec_user, "600", sa["private_key"].strip() + "\n")
+            files[f"/home/{sec_user}/.nebius/config.yaml"] = (sec_user, "600", yaml.safe_dump({
+                "default": "lab", "profiles": {"lab": {
+                    "endpoint": "api.nebius.cloud", "auth-type": "service account",
+                    "service-account-id": sa["service_account_id"],
+                    "public-key-id": sa["public_key_id"], "private-key-file-path": key}}}))
+            nebius_cli = sec_user
         users += ["lab-broker"]
         agents = [aid for aid, a in lab.agents.items()
                   if a.get("role") in ("worker", "manager", "secretary")]
@@ -175,7 +187,8 @@ def host_plan(lab, host, tokens, intake=intake_secret):
         if "lab-secretary" not in users:
             users.append("lab-secretary")
     return {"host": host, "name": name, "files": files, "users": users, "units": units,
-            "envs": envs, "missing": missing, "secretary_host": host == sec_host}
+            "envs": envs, "missing": missing, "secretary_host": host == sec_host,
+            "nebius_cli": locals().get("nebius_cli")}
 
 
 # ── the script each host runs ────────────────────────────────────────────────
@@ -210,6 +223,12 @@ def script(plan):
     lines.append('say "users"')
     for u in dict.fromkeys(plan["users"]):
         lines.append(f"/opt/agentic-lab/src/deploy/worker/create-agent-user.sh {u} >/dev/null")
+    if plan.get("nebius_cli"):
+        u = plan["nebius_cli"]
+        lines.append('say "Nebius CLI (VM power)"')
+        lines.append(f"sudo -u {u} -H bash -c 'test -x ~/.nebius/bin/nebius || "
+                     "curl -sSL https://storage.eu-north1.nebius.cloud/cli/install.sh | bash "
+                     ">/dev/null'")
     lines.append('say "secrets and config"')
     for i, (path, (owner, mode, _)) in enumerate(sorted(plan["files"].items())):
         d = os.path.dirname(path)

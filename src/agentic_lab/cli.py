@@ -102,8 +102,8 @@ def cmd_secret_request(args):
     lab = _load_lab(args.lab)
     owner = args.human
     if owner.startswith("service:"):
-        if args.name != "slack-app":
-            sys.exit("lab: services hand over slack-app secrets only")
+        if args.name == "claude-token":
+            sys.exit("lab: Claude tokens belong to members, not services")
     elif owner not in lab.humans:
         sys.exit(f"lab: no human {owner!r} in {args.lab}")
     intake = Intake(os.path.expanduser(args.state))
@@ -320,7 +320,7 @@ def main(argv=None):
     ssub = sc.add_subparsers(dest="scmd", required=True)
     sr = ssub.add_parser("request", help="ask a human for a secret (one-time code + message)")
     sr.add_argument("human", help="the owner: a human id, or service:<name> (e.g. service:broker)")
-    sr.add_argument("name", choices=["claude-token", "slack-app"])
+    sr.add_argument("name", choices=["claude-token", "slack-app", "nebius-sa"])
     sr.add_argument("--form", action="store_true",
                     help="print a one-time web-form link instead of the client command")
     sr.add_argument("--url", required=True, help="the intake's address as members reach it, "

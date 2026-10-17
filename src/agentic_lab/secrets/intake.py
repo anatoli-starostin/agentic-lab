@@ -23,13 +23,18 @@ import threading
 import time
 from dataclasses import dataclass
 
-NAMES = ("claude-token", "slack-app")
+NAMES = ("claude-token", "slack-app", "nebius-sa")
 # what each secret is made of, for the web form: (field, label, required prefix)
 FIELDS = {
     "claude-token": [("value", "Claude token (sk-ant-…)", "sk-ant-")],
     "slack-app": [("bot", "Bot User OAuth Token (xoxb-…)", "xoxb-"),
                   ("app", "App-Level Token (xapp-…)", "xapp-")],
+    # a Nebius service account's key, for VM power (the secretary's only)
+    "nebius-sa": [("service_account_id", "Service account id (serviceaccount-…)", "serviceaccount-"),
+                  ("public_key_id", "Public key id (publickey-…)", "publickey-"),
+                  ("private_key", "Private key (PEM)", "-----BEGIN")],
 }
+MULTILINE = {"private_key"}         # shown as a text area in the web form
 _OWNER = re.compile(r"^(service:)?[a-z][a-z0-9-]*$")
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"     # no 0/O, 1/I
 MAX_FAILURES = 20            # failed attempts per window, across all codes...
@@ -176,6 +181,10 @@ def check_value(name, value):
         raise IntakeError("that doesn't look like a Claude token")
     if name == "slack-app":
         return f"SLACK_BOT_TOKEN={out['bot']}\nSLACK_APP_TOKEN={out['app']}"
+    if name == "nebius-sa":
+        if "PRIVATE KEY-----" not in out["private_key"]:
+            raise IntakeError("that doesn't look like a PEM private key")
+        return json.dumps(out)
     return out["value"]
 
 

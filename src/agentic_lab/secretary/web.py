@@ -234,6 +234,22 @@ def _approvals(state):
             (grants or "<tr><td class=muted colspan=4>none</td></tr>") + "</table></section>")
 
 
+def _hosts(state):
+    hosts = state.get("hosts") or {}
+    if not hosts:
+        return ""
+    cls = {"RUNNING": "ok", "STOPPED": "muted", "STOPPING": "warn", "STARTING": "warn"}
+    rows = "".join(
+        f"<tr><td><b>{e(h)}</b></td><td class='{cls.get(v.get('state'), 'muted')}'>"
+        f"{e((v.get('state') or '—').lower())}</td><td class='small'>{e(v.get('power') or '')}"
+        + (f"<div class='muted small'>idle since {e(ago(v['idle_since']))}</div>"
+           if v.get("idle_since") else "")
+        + f"</td><td class='muted small'>{e(ago(v.get('at')) if v.get('at') else '')}</td></tr>"
+        for h, v in hosts.items())
+    return ("<section><h2>Machines</h2><table><tr><th>Host</th><th>Power</th><th>Policy</th>"
+            "<th>Checked</th></tr>" + rows + "</table></section>")
+
+
 def _agents(state):
     rows = "".join(
         f"<tr><td><b><a href='/logs/{e(aid)}'>{e(a['name'])}</a></b>"
@@ -254,7 +270,7 @@ def render(state):
         title = f"{state['lab']} · Agentic Lab"
         when = f"updated {ago(state['at'])}"
         body = ("<main>" + _accounts(state) + _workers(state) + _approvals(state) +
-                _agents(state) + "</main>")
+                _hosts(state) + _agents(state) + "</main>")
     return (f"<!doctype html><html><head><meta charset='utf-8'><title>{e(title)}</title>"
             f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
             f"<meta http-equiv='refresh' content='{REFRESH_S}'><style>{CSS}</style></head>"

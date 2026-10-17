@@ -29,6 +29,7 @@ from ..slackio import SILENT, SlackIO
 from .brain import SecretaryBrain, expiry_notices
 from ..eventlog import EventLog
 from ..worker.usage import UsageLog
+from . import power as P
 from .status import collect, manager_status
 from .web import app
 import datetime as dt
@@ -50,6 +51,7 @@ class Secretary:
         self.lab, self.latest, self.workers = lab, latest, workers
         self.brain, self.state, self.slack = brain, state, slack
         self._locks = {}
+        self.events = None
         sec = next(a for a, x in lab.agents.items() if x.get("role") == "secretary")
         name, _ = lab.address(sec)
         self.intake_url = f"http://{name}:{INTAKE_PORT}"
@@ -58,7 +60,22 @@ class Secretary:
     def ctx(self):
         return SimpleNamespace(state=lambda: self.latest["state"], workers=self.workers,
                                request_token=self.request_token, announce=self.announce,
-                               save=self.state.save)
+                               save=self.state.save, power=self.power)
+
+    async def power(self, host, action, why="asked in Slack"):
+        try:
+            if action == "status":
+                return f"{host}: {await P.status(self.lab, host)}"
+            if action == "on":
+                await P.start(self.lab, host)
+            else:
+                await P.stop(self.lab, host)
+        except P.PowerError as e:
+            return f"couldn't: {e}"
+        if self.events is not None:
+            self.events.add("power", f"{host} {action} ({why})")
+        await self.announce(f":electric_plug: {host} powering {action} ({why}).")
+        return f"{host}: powering {action}; it takes a minute or two"
 
     async def request_token(self, member):
         if member not in self.lab.humans:
@@ -186,11 +203,40 @@ async def serve(lab_path, host, port):
     # uvicorn handles SIGTERM/SIGINT (a graceful shutdown); when it returns, the rest stops
     stop = asyncio.Event()
 
+    idle = P.IdleWatch()
+    hosts_power = {}
+    rounds = {"n": 0}
+
+    async def check_power():
+        """Every few rounds: the power state of the machines the secretary may power, and
+        stopping the on-demand ones that have been idle long enough."""
+        for host in lab.hosts:
+            if not P.powerable(lab, host)[0]:
+                continue
+            try:
+                hosts_power[host] = {"state": await P.status(lab, host),
+                                     "at": dt.datetime.now(dt.timezone.utc).isoformat(
+                                         timespec="seconds")}
+            except P.PowerError as e:
+                hosts_power[host] = {"state": "unknown", "error": str(e)[:200]}
+        for host in idle.candidates(lab, latest["state"] or {"agents": {}}):
+            if hosts_power.get(host, {}).get("state") == "RUNNING":
+                await sec.power(host, "off", f"idle for {lab.hosts[host]['idle_stop_min']} min")
+                idle.idle_since.pop(host, None)
+
     async def collector():
         while not stop.is_set():
             try:
                 latest["state"] = await collect(lab, workers, broker, units, managers,
                                                 own=(sec_id, usage))
+                if rounds["n"] % 4 == 0:
+                    await check_power()
+                rounds["n"] += 1
+                latest["state"]["hosts"] = {
+                    h: {**(hosts_power.get(h) or {}), "power": (lab.hosts[h] or {}).get("power"),
+                        "idle_since": (idle.idle_since.get(h).isoformat(timespec="seconds")
+                                       if idle.idle_since.get(h) else None)}
+                    for h in lab.hosts}
                 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(snapshot_path))
                 with os.fdopen(fd, "w") as f:
                     json.dump(latest["state"], f)
@@ -215,6 +261,7 @@ async def serve(lab_path, host, port):
                            events=events, usage=usage)
     sec = Secretary(lab, latest, workers, brain,
                     ManagerState(os.path.expanduser(f"{STATE}/chat")))
+    sec.events = events
     slack_env = _env_file(_read_secret(f"{CONFIG}/slack.env"))
     if slack_env.get("SLACK_BOT_TOKEN") and slack_env.get("SLACK_APP_TOKEN"):
         members = {(h or {}).get("slack_user"): hid for hid, h in lab.humans.items()

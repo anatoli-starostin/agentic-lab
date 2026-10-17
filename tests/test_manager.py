@@ -246,3 +246,22 @@ def test_secretary_expiry_notices():
     soon = expiry_notices(lab, today=dt.date(2026, 12, 1))
     assert [(c["name"], d) for c, d in soon] == [("github/bot-pat", 10)]
     assert expiry_notices(lab, today=dt.date(2026, 10, 17)) == []
+
+
+def test_idle_watch():
+    import datetime as dt
+    from agentic_lab.secretary.power import IdleWatch, powerable
+    lab = registry.load(EXAMPLE)
+    w = IdleWatch()
+    t0 = dt.datetime(2026, 10, 17, 12, tzinfo=dt.timezone.utc)
+    snap = lambda q: {"agents": {"worker-a": {"up": True, "queue": q},
+                                 "worker-b": {"up": True, "queue": {}}}}
+    assert w.candidates(lab, snap({"done": 3}), now=t0) == []
+    later = t0 + dt.timedelta(minutes=31)
+    assert set(w.candidates(lab, snap({"done": 3}), now=later)) == {"gpu-a", "gpu-b"}
+    w2 = IdleWatch()
+    w2.candidates(lab, snap({"running": 1}), now=t0)
+    assert "gpu-a" not in w2.candidates(lab, snap({"running": 1}), now=later)
+    ok, why = powerable(lab, "nuc-01")
+    assert not ok and "Nebius VM" in why
+    assert powerable(lab, "gpu-a")[0]
