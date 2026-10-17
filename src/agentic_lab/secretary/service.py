@@ -137,16 +137,33 @@ async def serve(lab_path, host, port):
             return events.read(since=_dt.timedelta(hours=hours), limit=2000)
         raise ValueError(f"no log for {agent!r}")
 
+    def lab_host_ips():
+        """The tailnet addresses of the lab's own hosts: agents run there, never admins."""
+        import socket
+        ips = set()
+        for hid in lab.hosts:
+            try:
+                ips.add(socket.gethostbyname(lab.address_of_host(hid)))
+            except OSError:
+                pass
+        return ips
+
     async def is_admin(ip):
-        """Who's behind this tailnet address? An admin in lab.yaml?"""
+        """Who's behind this tailnet address? A person (not a tagged machine, not one of
+        the lab's hosts) whose login is an admin's in lab.yaml?"""
+        if ip in lab_host_ips():
+            return False
         try:
             p = await asyncio.create_subprocess_exec(
                 "tailscale", "whois", "--json", ip, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL)
             out, _ = await asyncio.wait_for(p.communicate(), 10)
-            login = json.loads(out or b"{}").get("UserProfile", {}).get("LoginName")
+            who = json.loads(out or b"{}")
         except (OSError, ValueError, asyncio.TimeoutError):
             return False
+        if (who.get("Node") or {}).get("Tags"):
+            return False
+        login = (who.get("UserProfile") or {}).get("LoginName")
         return bool(login) and login in admins
     here = {aid for aid, a in lab.agents.items()
             if a.get("host") == next((x.get("host") for x in lab.agents.values()

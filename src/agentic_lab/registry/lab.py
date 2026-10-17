@@ -97,6 +97,10 @@ class Lab:
         default = {"worker": 8770, "secretary": 8771}.get(a.get("role"), 8773)
         return name, a.get("port", default)
 
+    def address_of_host(self, host_id):
+        h = self.hosts.get(host_id) or {}
+        return h.get("tailnet_name") or f"{host_id}.{self.data.get('tailnet')}"
+
     def worker_url(self, agent_id):
         name, port = self.address(agent_id)
         return f"http://{name}:{port}/mcp"
