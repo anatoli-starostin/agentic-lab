@@ -91,6 +91,11 @@ in order; tell the admin before each step what they will need to do themselves.
 - **Change grants:** edit the agent's `grants:` in `lab.yaml` → `lab check`. Time-limited
   grants are never written here; humans give those in Slack (M2).
 
+## Uninstalling
+
+Only here, at the console, with the admin: follow `docs/uninstall.md` stage by stage,
+asking before each one. The whole lab, one host, or one agent.
+
 ## Diagnosis
 
 - **See what an agent is doing or did:** the web UI's transcript view (M4); until then,
