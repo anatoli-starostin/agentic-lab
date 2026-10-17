@@ -125,17 +125,15 @@ Tied to one GPU VM. Uses tokens freely. Humans don't talk to it directly.
 - Like every agent, it is **attached to one human for tokens** (it runs on their seat). This
   is separate from who may use it: access is either **dedicated** (only one human's manager
   may submit tasks) or **shared** (any manager may). Both are set in `lab.yaml`.
-- **Debug console**, at two levels:
-  - `lab console` (everyday): a human `ssh`es in and attaches to the live headless session.
-    It streams the transcript and lets the human type messages, which are queued in order
-    with incoming tasks, and interrupt. The worker keeps serving tasks meanwhile.
-  - `lab console --takeover` (deep debugging): pauses the worker service and opens the real
-    `claude --resume <session-id>` on the same session, with the full Claude Code UI (slash
-    commands, rewind, plan mode, …). On exit, the service resumes the session. (SDK and
-    CLI share session storage. SDK sessions don't appear in the picker or in `--continue`,
-    but `--resume <id>` finds them when the config dir is the same.)
-  - Either way, approvals for console-typed work go to that human's Slack DM, so the console
-    never bypasses the gate.
+- **Watching and debugging** (the same for every agent):
+  - **Everyday:** the web UI (§9) shows each agent's recent transcript (its messages, tool
+    calls and their results) for a reasonable period. It is read from the agent's own
+    session files; nothing extra runs on the agent.
+  - **Real debugging: `lab debug <agent>`.** On the agent's host, the admin runs it: it
+    stops the agent's service and opens **the same session** in the classic Claude Code
+    console, as the agent's own user, with its own sandbox settings. The admin talks to the
+    agent directly; permission prompts appear right there at the console. On exit, the
+    service starts again (and resumes any task it was on).
 - Reports progress (and W&B links) back through MCP. **There is no fixed results contract**:
   tasks vary, so a result may be a text report, a git commit, a W&B run, files, or any mix of
   these. The worker follows the project's conventions.
@@ -273,9 +271,10 @@ be enforced.
   ```
 - **Every grant is visible**: active grants, their expiry and who gave them are shown in the
   web UI. Expired grants are removed automatically.
-- Implementation detail to verify in M1: whether a running session picks up a sandbox
-  config change. If not, the agent service restarts and resumes the session, which is
-  invisible to humans.
+- **A grant applies by restarting the agent's session.** A running session doesn't pick
+  up a changed allowlist (verified), so the runner interrupts it and resumes the same
+  session with the new settings and a note ("your sandbox now allows arxiv.org until
+  15:00; retry"). Resuming is seamless (verified: the agent carries on where it was).
 
 ### 6.3 Approvals: the broker, not the manager, decides who answered
 
@@ -440,8 +439,8 @@ prompt or dialog.
   callback *is* the gate: it checks active grants, then asks the broker. So "never prompts
   the wrong place" is enforceable.
 - Sessions persist on disk and resume after restarts.
-- `lab console` (§4.2) gives humans an interactive view of a headless agent, and
-  `--takeover` opens the full Claude Code UI on the same session when needed.
+- Humans watch agents in the web UI, and `lab debug <agent>` (§4.2) opens an agent's
+  session in the classic Claude Code console when needed.
 - **Each agent runs as a system service under its own dedicated Unix user**, with no tmux
   and no login session anywhere. **One user per agent, even when several agents share a
   host** (like the managers on the shared manager VM). The user is named after the agent:
@@ -454,8 +453,8 @@ prompt or dialog.
     folder, memory or tokens.
   - A system-level unit (e.g. `lab-worker-a.service`, `User=lab-worker-a`) starts it at boot
     and restarts it if it dies.
-  - Humans SSH in as themselves. `lab console` reaches the agent through a socket the
-    service creates under `/run/agentic-lab/`, which the sandbox hides from the agent.
+  - Humans SSH in as themselves; `lab debug <agent>` (run with sudo) switches to the
+    agent's user for a debugging session.
   - Why: GPU agents must allow Unix sockets (CUDA needs one), so any socket server running
     *as the agent's user* would be a way out of the sandbox, for example a tmux session
     (`tmux send-keys`) or a forwarded SSH agent in `/tmp`. Nobody ever runs anything as
@@ -538,7 +537,7 @@ agentic_lab/
   registry/      lab.yaml schema, loader, `lab check`
   policy/        sandbox settings generator (per agent) + grant store + tests
   broker/        approval broker + permission channel (Slack DM; an interface for more later)
-  worker/        worker service: MCP server, durable queue, agent runner, `lab console`
+  worker/        worker service: MCP server, durable queue, agent runner
   manager/       manager service: Slack face (from slack-facade) + MCP client + agent runner
   secretary/     scheduler, checks, web UI, chat
   providers/     cloud provider interface + nebius implementation
@@ -566,7 +565,7 @@ M1–M4 are developed and demoed on this setup first.
 | # | Milestone | Done when |
 |---|---|---|
 | M0 | **Skeleton**: repo, `lab.yaml` schema + `lab check`, per-agent sandbox settings generated from `lab.yaml` | `pytest` green; `lab check` validates the example lab |
-| M1 | **Worker**: MCP server, durable queue, SDK agent runner, built-in sandbox, grants, `lab console` | A manager played by hand over MCP submits a task to a cloud GPU VM, watches progress and gets the result |
+| M1 | **Worker**: MCP server, durable queue, SDK agent runner, built-in sandbox, `lab debug` | A manager played by hand over MCP submits a task to a cloud GPU VM, watches progress and gets the result |
 | M2 | **Broker + Slack DM channel**: signed decisions, grants buttons, timeout policy | A worker's `pip install` reaches the human's DM. Approve and deny both work, the timeout denies, and **the manager agent provably cannot approve** (test) |
 | M3 | **Manager**: Slack face + MCP client + its own guardrails | "@manager run exp X on a GPU worker" in Slack → task → approval in DM → result in thread |
 | M3a | **Guided setup**: `lab-admin` skill, `lab init/plan/apply/doctor/secret` | From a fresh secretary host, Claude guides an admin to a working single-VM lab without the admin reading code |
@@ -587,7 +586,7 @@ after M3–M4 as needed.
 | 2026-10-17 | Repo is private now and public later, so it stays generic. MIT license. |
 | 2026-10-17 | Shared workers: **first come, first served**. No quotas or priorities. |
 | 2026-10-17 | **No fixed results contract**: tasks vary, so a result is whatever fits (report, commit, W&B run, files). |
-| 2026-10-17 | **Agent SDK runtime** behind an `AgentRunner` interface. `lab console` + `--takeover` (real `claude --resume`) for humans. A tmux runner is only a fallback. |
+| 2026-10-17 | **Agent SDK runtime** behind an `AgentRunner` interface. Humans watch agents in the web UI and debug with `lab debug <agent>` (real `claude --resume` on the agent's session). A tmux runner is only a fallback. |
 | 2026-10-17 | **Every agent is attached to a human member in terms of tokens** (runs on their seat). Access is set separately. The secretary is attached to the lab owner. |
 | 2026-10-17 | **One simple sandbox model for all agents** (§6.1): inside = no internet, tailnet, working folder + tmp, auto-allowed; outside = internet and writes need permission, reads free. Enforced by Claude Code's built-in sandbox, with no command parsing. **Grants** (once / for a while / standing) customise it on the fly (§6.2). |
 | 2026-10-17 | **Guardrail changes through the manager**: human asks manager → manager initiates the change on the worker over MCP → the worker's attempt raises a permission request → through the broker back to the human → applied only on approval. |
@@ -595,6 +594,7 @@ after M3–M4 as needed.
 | 2026-10-17 | **Permissions only in Slack DM** in the first version; more channels maybe later. The **web UI is for monitoring only**. |
 | 2026-10-17 | **Agents run as system services, each under its own dedicated Unix user** (`lab-<agent-id>`), even when several agents share a host. Nobody logs into these users (no tmux, no login sessions, lingering off). Humans attach with `lab console`. |
 | 2026-10-17 | **Setup and maintenance are guided by Claude**: a `lab-admin` skill in the repo, run by the admin's own Claude Code on the secretary host, over declarative, idempotent `lab` commands. Secrets never pass through the chat. |
+| 2026-10-17 | **No `lab console`.** The web UI shows each agent's recent transcript; `lab debug <agent>` stops its service and opens the same session in the classic Claude Code console. |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
 
 ## 14. Open questions
