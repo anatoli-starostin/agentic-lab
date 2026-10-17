@@ -35,11 +35,19 @@ so they ship the pinned code:
 `cd ~/agentic-lab && sudo .venv/bin/lab --lab ~/lab-config/lab.yaml plan`.
 Below, `lab` is short for that.
 
-**Framework pinning.** `lab apply` ships the framework checkout only if it is clean and
-at the commit in `framework.lock` (the first apply writes the pin). To upgrade the lab:
-`git -C ~/agentic-lab pull`, then `sudo lab apply --update-framework`, then commit
-`framework.lock`. After every change to `lab.yaml` or `framework.lock`, Claude commits
-and pushes the config repo.
+**Only reviewed configuration is deployed.** `lab apply` fetches the config repo and
+deploys `lab.yaml` and `framework.lock` **as they are on `main`**, never the working copy.
+Every change goes: Claude edits on a branch → `lab plan --working-tree` (preview) → commit,
+push → `lab pr-link` → Claude tells the admin "here is the PR, review and merge it" → once
+merged, `sudo lab apply` deploys exactly that commit. Each host records which config and
+framework commits it runs (`/etc/agentic-lab/applied.yaml`; shown by `lab doctor` and on the
+web UI). Break glass: `sudo lab apply --unreviewed` deploys the working copy, and every host
+records it as unreviewed until a reviewed apply replaces it.
+
+**Framework pinning.** `lab apply` ships the framework checkout only if it is clean and at
+the commit in `framework.lock` on `main`. To upgrade: `git -C ~/agentic-lab pull`, then
+`lab apply --update-framework` (it only rewrites `framework.lock` in the working copy),
+then a PR as above.
 
 **Claude Code's auto mode** may refuse `sudo lab apply` (it changes the system) until the
 admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected.
@@ -68,6 +76,8 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      half, and asks the admin to add it at
      `https://github.com/<org>/lab-config/settings/keys` with **Allow write access**
      ticked. Claude clones it to `~/lab-config` with that key (`core.sshCommand` set).
+   - Suggest protecting `main` (Settings → Branches: require a pull request) **after** the
+     first commit is pushed (step 5), so the first push can go straight to `main`.
 
 5. **The lab's description** (Claude asks, Admin answers)
    - **Names first.** Claude asks how each agent should be called: the secretary, the
@@ -82,7 +92,8 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      web UI's logs) from this machine's owner, and writes `framework.lock`. A separate VM
      for managers: `--manager-host mgr-vm`. Optionally add an `announcements` channel.
      `lab check` must pass.
-   - Claude commits and pushes both files to the config repo.
+   - Claude commits both files and pushes them **directly to `main`** (the one exception:
+     the repo is empty and unprotected). From now on, every change is a PR.
 
 6. **The secretary's own services** (Claude)
    - `sudo lab apply --host <secretary host> --allow-missing`: installs the framework in
@@ -113,9 +124,9 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
         Copy the token (`xapp-…`).
      5. Open the one-time link, paste both tokens, *Send*. Then tell Claude "done".
         **Never paste a token into the chat.**
-   - Claude checks it at once: `sudo lab slack-verify <broker|secretary|manager id>
-     --write` asks Slack whether both tokens work, prints the app's name, workspace and
-     App ID, and for a manager records the App ID in `lab.yaml` (Claude commits it). If
+   - Claude checks it at once: `sudo lab slack-verify <broker|secretary|manager id>`
+     asks Slack whether both tokens work and prints the app's name, workspace and App ID;
+     for a manager, Claude adds `slack_app: <App ID>` to `lab.yaml` in the next PR. If
      a check fails, it says which token and how to fix it; a new one-time link replaces
      the tokens.
 
@@ -164,7 +175,9 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
 - **The secretary** keeps the lab running: machine states and idle stops, token-expiry
   notices, usage per account, answers about the lab in Slack.
 - **The admin's Claude** makes every change the same way: edit `~/lab-config/lab.yaml` →
-  `lab check` → `sudo lab plan` → `sudo lab apply` → commit and push the config repo.
+  on a branch: edit `~/lab-config/lab.yaml` → `lab check` → `sudo lab plan --working-tree`
+  → commit, push → `lab pr-link` → "here is the PR, review and merge it" → after the merge,
+  `sudo lab apply`.
   New agents' names are asked, never invented (step 5).
   - **Add a member:** add them to `lab.yaml` (name, Slack id). At that moment, send them
     their Claude-token command (step 8, for them). Then add their manager (and workers):

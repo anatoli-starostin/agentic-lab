@@ -3,8 +3,8 @@
 Run on the secretary host with sudo (it reads the intake's store). Asks Slack who the bot
 is (`auth.test`) and which app it belongs to (`bots.info`), checks the app-level token can
 open a Socket Mode connection (`apps.connections.open`), and prints the app's name,
-workspace and App ID. With `--write`, records the App ID in lab.yaml (`slack_app`) for a
-manager, so nobody has to look it up. Tokens are never printed.
+workspace and App ID (for a manager, the line to put in lab.yaml, via the next PR: tools
+never write lab.yaml themselves). Tokens are never printed.
 """
 import json
 import urllib.parse
@@ -43,25 +43,3 @@ def verify(owner, store_get=intake_secret, call=_call):
             "app_id": b.get("app_id"), "bot_user": who.get("user_id"),
             "socket_ok": bool(sock.get("ok")), "socket_error": sock.get("error")}
 
-
-def write_app_id(lab_path, agent, app_id):
-    """Record a manager's App ID in lab.yaml, keeping the file as written otherwise."""
-    with open(lab_path) as f:
-        lines = f.read().split("\n")
-    out, i, done = [], 0, False
-    while i < len(lines):
-        out.append(lines[i])
-        if lines[i].rstrip() == f"  {agent}:":
-            j = i + 1
-            while j < len(lines) and lines[j].startswith("    "):
-                if not lines[j].lstrip().startswith("slack_app:"):
-                    out.append(lines[j])
-                j += 1
-            out.append(f"    slack_app: {app_id}")
-            i, done = j, True
-            continue
-        i += 1
-    if not done:
-        raise VerifyError(f"no agent {agent!r} in {lab_path}")
-    with open(lab_path, "w") as f:
-        f.write("\n".join(out))

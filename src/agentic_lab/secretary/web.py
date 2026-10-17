@@ -291,7 +291,11 @@ def render(state):
         title, when = "Agentic Lab", ""
     else:
         title = f"{state['lab']} · Agentic Lab"
-        when = f"updated {ago(state['at'])}"
+        ap = state.get("applied") or {}
+        when = f"updated {ago(state['at'])}" + (
+            f" · config {str(ap.get('config_commit'))[:7]}"
+            f"{' (UNREVIEWED)' if ap.get('unreviewed') else ''}"
+            f" · framework {str(ap.get('framework_commit'))[:7]}" if ap.get("config_commit") else "")
         body = ("<main>" + _accounts(state) + _workers(state) + _approvals(state) +
                 _hosts(state) + _agents(state) + "</main>")
     return (f"<!doctype html><html><head><meta charset='utf-8'><title>{e(title)}</title>"

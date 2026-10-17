@@ -164,6 +164,24 @@ def address_checks(name, port):
                        "is the service running and bound to the tailnet IP?")]
 
 
+def applied_checks(path="/etc/agentic-lab/applied.yaml"):
+    """Which configuration and framework commits this host runs, and were they reviewed?"""
+    import yaml
+    try:
+        with open(path) as f:
+            a = yaml.safe_load(f) or {}
+    except OSError:
+        return [Result(WARN, "no record of what was applied here",
+                       "sudo lab apply (from the secretary host)")]
+    what = (f"config {str(a.get('config_commit', '?'))[:10]} ({a.get('branch') or '?'}), "
+            f"framework {str(a.get('framework_commit', '?'))[:10]}, applied "
+            f"{a.get('applied_at', '?')} by {a.get('applied_by', '?')}")
+    if a.get("unreviewed"):
+        return [Result(WARN, f"UNREVIEWED: {what}",
+                       "merge those changes to main via a PR, then sudo lab apply")]
+    return [Result(OK, what)]
+
+
 def run(lab_path, host=None):
     lab = load_lab(lab_path)
     sections = []
@@ -171,7 +189,7 @@ def run(lab_path, host=None):
     errs = [i for i in issues if i.level == "error"]
     sections.append(("lab.yaml", [Result(OK, "lab check: no errors") if not errs else
                                   Result(FAIL, f"lab check: {len(errs)} error(s)",
-                                         f"lab check {lab_path}")]))
+                                         f"lab check {lab_path}")] + applied_checks()))
     host = host or this_host(lab)
     if host is None:
         sections.append(("host", [Result(FAIL, "this machine isn't a host in lab.yaml",

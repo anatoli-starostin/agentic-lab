@@ -139,4 +139,14 @@ async def collect(lab, workers: Workers, broker=None, local_units=None, managers
 
     approvals = await broker_overview(*broker) if broker else {"error": "no broker configured"}
     return {"lab": lab.name, "at": _now(), "agents": agents, "accounts": accounts,
-            "approvals": approvals}
+            "approvals": approvals, "applied": _applied()}
+
+
+def _applied(path="/etc/agentic-lab/applied.yaml"):
+    """What this host runs: the config and framework commits of the last `lab apply`."""
+    import yaml
+    try:
+        with open(path) as f:
+            return yaml.safe_load(f) or {}
+    except (OSError, ValueError):
+        return {}

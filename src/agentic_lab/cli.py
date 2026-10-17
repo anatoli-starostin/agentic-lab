@@ -62,7 +62,7 @@ def cmd_init(args):
         commit = lock.write(path, find_source())
         print(f"wrote {lock.path_for(path)} (framework pinned to {commit[:10]})")
     except Exception as e:      # noqa: BLE001 - the lab.yaml is what matters here
-        print(f"couldn't pin the framework ({e}); `lab apply` will pin it")
+        print(f"couldn't pin the framework ({e}); pin it with `lab apply --update-framework`")
     args.lab = path
     return cmd_check(args)
 
@@ -193,9 +193,20 @@ def cmd_doctor(args):
 
 
 def cmd_plan(args):
+    from . import configrepo as CR
     from .apply import ApplyError, describe, plan_all
     try:
-        _, _, plans = plan_all(args.lab, hosts=args.host or None)
+        if args.working_tree:
+            lab_path = args.lab
+            print(f"config: the working copy ({args.lab}), as a preview\n")
+        else:
+            lab_path, info = CR.fetch_main(args.lab)
+            print(f"config: {info['config_commit'][:10]} ({CR.BRANCH})"
+                  + ("; your working copy differs (preview it: --working-tree)"
+                     if info["differs"] else "") + "\n")
+        _, _, plans = plan_all(lab_path, hosts=args.host or None)
+    except CR.ConfigError as e:
+        sys.exit(f"lab plan: {e}")
     except (ApplyError, PermissionError) as e:
         sys.exit(f"lab plan: {e} (run it with sudo on the secretary host)")
     print("\n\n".join(describe(p) for p in plans))
@@ -205,19 +216,41 @@ def cmd_plan(args):
 def cmd_apply(args):
     import os
 
+    from . import configrepo as CR
     from . import lock
     from .apply import ApplyError, describe, find_source, has_work, plan_all, run_bundle
     from .doctor import this_host
-    if os.geteuid() != 0:
-        sys.exit("lab apply needs root (it reads the lab's secrets): sudo lab apply ...")
+    admin = args.admin or os.environ.get("SUDO_USER") or "root"
     try:
         source = args.source or find_source()
-        print(lock.check(args.lab, source, update=args.update_framework) + "\n")
-        lab, tokens, plans = plan_all(args.lab, hosts=args.host or None)
-    except (ApplyError, lock.LockError) as e:
+        if args.update_framework:       # a change like any other: it goes through a PR
+            print(lock.check(args.lab, source, update=True))
+            print("Nothing applied: commit framework.lock on a branch, open a pull request; "
+                  "once it's merged, `sudo lab apply` deploys it.")
+            return 0
+        if os.geteuid() != 0:
+            sys.exit("lab apply needs root (it reads the lab's secrets): sudo lab apply ...")
+        if args.unreviewed:
+            lab_path, info = args.lab, CR.working_tree_info(args.lab)
+            print("!! --unreviewed: deploying the WORKING COPY, not a reviewed commit on "
+                  f"{CR.BRANCH}. Every host will record it as unreviewed. Open a PR with these "
+                  "changes as soon as you can.\n")
+            print(lock.check(lab_path, source) + "\n")
+        else:
+            lab_path, info = CR.fetch_main(args.lab)
+            print(f"config: {info['config_commit'][:10]} ({CR.BRANCH})")
+            if info["differs"]:
+                print("  note: your working copy differs from it; those changes are NOT "
+                      "deployed until they're merged (preview: lab plan --working-tree)")
+            if lock.read(lab_path) is None:
+                raise CR.ConfigError(f"no framework.lock on {CR.BRANCH}: `lab apply "
+                                     "--update-framework`, then a PR")
+            print(lock.check(lab_path, source) + "\n")
+        record = CR.applied_record(info, lock.current(source)[1], admin)
+        lab, tokens, plans = plan_all(lab_path, hosts=args.host or None)
+    except (ApplyError, lock.LockError, CR.ConfigError) as e:
         sys.exit(f"lab apply: {e}")
     here = this_host(lab)
-    admin = args.admin or os.environ.get("SUDO_USER") or "root"
     tokens.save()                  # generated tokens are kept before anything uses them
     failed = 0
     for p in plans:
@@ -229,7 +262,7 @@ def cmd_apply(args):
             print("  skipped: secrets missing (or pass --allow-missing)\n")
             failed += 1
             continue
-        p["lab_path"], p["source"] = os.path.abspath(args.lab), source
+        p["lab_path"], p["source"], p["applied"] = os.path.abspath(lab_path), source, record
         rc = run_bundle(p, local=(p["host"] == here), admin=admin)
         print(f"  -> {'done' if rc == 0 else f'FAILED (exit {rc})'}\n")
         failed += rc != 0
@@ -298,8 +331,22 @@ def cmd_nebius_connect(args):
     return 0
 
 
+def cmd_pr_link(args):
+    from . import configrepo as CR
+    try:
+        top, _ = CR.repo_of(args.lab)
+        branch = args.branch or CR.git(top, "branch", "--show-current").strip()
+        if branch == CR.BRANCH:
+            sys.exit(f"lab pr-link: you're on {CR.BRANCH}; changes go on a branch, then a PR")
+        link = CR.pr_link(args.lab, branch)
+    except CR.ConfigError as e:
+        sys.exit(f"lab pr-link: {e}")
+    print(link or "the config repo isn't on GitHub: open the pull request there by hand")
+    return 0
+
+
 def cmd_slack_verify(args):
-    from .slack_verify import VerifyError, verify, write_app_id
+    from .slack_verify import VerifyError, verify
     owner = args.owner if args.owner.startswith("service:") else f"service:{args.owner}"
     try:
         r = verify(owner)
@@ -312,9 +359,8 @@ def cmd_slack_verify(args):
           "scope connections:write; Socket Mode on)")
     agent = owner[8:]
     lab = _load_lab(args.lab)
-    if args.write and lab.agents.get(agent, {}).get("role") == "manager" and r["app_id"]:
-        write_app_id(args.lab, agent, r["app_id"])
-        print(f"  recorded slack_app: {r['app_id']} for {agent} in {args.lab}")
+    if lab.agents.get(agent, {}).get("role") == "manager" and r["app_id"]:
+        print(f"  for lab.yaml (in the next PR): agents.{agent}.slack_app: {r['app_id']}")
     return 0 if r["socket_ok"] else 1
 
 
@@ -437,6 +483,8 @@ def main(argv=None):
 
     pl = sub.add_parser("plan", help="what lab apply would do; missing secrets")
     pl.add_argument("--host", action="append", help="only this host (repeatable)")
+    pl.add_argument("--working-tree", action="store_true",
+                    help="preview the working copy (e.g. a PR's branch), not main")
     pl.set_defaults(fn=cmd_plan)
     ap_ = sub.add_parser("apply", help="make the hosts match lab.yaml (sudo, secretary host)")
     ap_.add_argument("--host", action="append", help="only this host (repeatable)")
@@ -445,7 +493,11 @@ def main(argv=None):
     ap_.add_argument("--allow-missing", action="store_true",
                      help="apply hosts even if some of their secrets are missing")
     ap_.add_argument("--update-framework", action="store_true",
-                     help="move the lab's framework pin (framework.lock) to this checkout")
+                     help="move the framework pin (framework.lock, in the working copy) to "
+                     "this checkout; deploys nothing (the pin goes through a PR)")
+    ap_.add_argument("--unreviewed", action="store_true",
+                     help="break glass: deploy the working copy instead of main (recorded "
+                     "on every host as unreviewed)")
     ap_.set_defaults(fn=cmd_apply)
 
     lg = sub.add_parser("logs", help="an agent's event log (sudo, on its host)")
@@ -468,9 +520,12 @@ def main(argv=None):
     sv = sub.add_parser("slack-verify", help="check a Slack app's tokens right after they arrive "
                         "(sudo, secretary host)")
     sv.add_argument("owner", help="broker, secretary or a manager's id")
-    sv.add_argument("--write", action="store_true",
-                    help="record a manager's App ID in lab.yaml")
     sv.set_defaults(fn=cmd_slack_verify)
+
+    pr = sub.add_parser("pr-link", help="the link to open a pull request for the config "
+                        "repo's current branch (push it first)")
+    pr.add_argument("branch", nargs="?", help="default: the current branch")
+    pr.set_defaults(fn=cmd_pr_link)
 
     sm = sub.add_parser("slack-manifest", help="print a Slack app manifest")
     sm.add_argument("agent", help="a manager or the secretary, or 'approvals'")
