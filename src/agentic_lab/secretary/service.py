@@ -24,7 +24,7 @@ from ..worker.service import _read_secret
 from ..manager.workers import Workers
 from ..broker.service import _env_file
 from ..manager.state import ManagerState
-from ..secrets.intake import Intake, message
+from ..secrets.intake import Intake, form_url, message
 from ..slackio import SILENT, SlackIO
 from .brain import SecretaryBrain, expiry_notices
 from ..eventlog import EventLog
@@ -81,7 +81,10 @@ class Secretary:
             read_config=lambda: self.read_config(asked_by=human),
             propose_change=lambda summary, lab_yaml, framework_commit=None:
                 self.propose_change(summary, lab_yaml, framework_commit, asked_by=human),
-            offer_apply=lambda: self.offer_apply(asked_by=human, conv=conv),
+            offer_apply=lambda redeploy=False: self.offer_apply(asked_by=human, conv=conv,
+                                                                redeploy=redeploy),
+            request_slack_app=lambda agent: self.request_slack_app(agent, asked_by=human,
+                                                                   conv=conv),
             slack_verify=lambda owner: self.slack_verify(owner, asked_by=human))
 
     # ── administering the lab from Slack (selfadmin.py) ──────────────────────
@@ -123,9 +126,46 @@ class Secretary:
                 f"merge; you never merge): {r['link'] or '(not GitHub: open it by hand)'}\n"
                 f"diff:\n{r['diff'][:6000]}")
 
-    async def offer_apply(self, asked_by=None, conv=None):
+    async def request_slack_app(self, agent, asked_by=None, conv=None):
+        """Hand an admin what they need to create a manager's (or the secretary's, or the
+        approvals') Slack app: the manifest, the link, the clicks, and a one-time link for
+        its tokens. Posted as is (no retyping by the model)."""
+        refused = self._admin_only(asked_by, "set up Slack apps")
+        if refused:
+            return refused
+        from .. import slack_manifest as M
+        if agent in ("broker", "approvals"):
+            owner, manifest = "service:broker", M.approvals(self.lab)
+        elif self.lab.agents.get(agent, {}).get("role") in ("manager", "secretary"):
+            owner = f"service:{agent}"
+            manifest = M.for_agent(self.lab, agent)
+        else:
+            return (f"{agent!r} isn't a manager or the secretary in the deployed lab.yaml: "
+                    "propose it, have it merged, deploy it, then ask again")
+        if self.slack is None or conv is None:
+            return "this needs Slack; from the console: lab slack-manifest + lab secret request"
+        code = self.intake.request(owner, "slack-app")
+        name = manifest["display_information"]["name"]
+        steps = (f"*Slack app for {name}* (one-time link valid 24 h)\n"
+                 "1. Open https://api.slack.com/apps?new_app=1 → *From a manifest* → this "
+                 "workspace → *Next*.\n"
+                 "2. *YAML* tab, replace everything with the manifest below → *Next* → *Create*.\n"
+                 "3. *Install App* → *Install to Workspace* → *Allow*. Copy the *Bot User "
+                 "OAuth Token* (xoxb-…).\n"
+                 "4. *Basic Information* → *App-Level Tokens* → *Generate Token and Scopes* → "
+                 "any name → scope `connections:write` → *Generate*. Copy it (xapp-…).\n"
+                 f"5. Paste both here (never in Slack): {form_url(code, self.intake_url)}\n"
+                 "Then tell me \"done\": I check the tokens and offer the deploy that starts it.")
+        await self.slack.post(conv.channel, conv.thread_ts, steps)
+        await self.slack.post(conv.channel, conv.thread_ts,
+                              f"```{M.render(manifest)}```")
+        return (f"posted the steps, the manifest and the one-time link for {name}'s app. "
+                "When the admin says done: check_slack_app, then offer_deploy with redeploy.")
+
+    async def offer_apply(self, asked_by=None, conv=None, redeploy=False):
         """Post a 'Deploy' button for main's current commit. Nothing is deployed until an
-        admin clicks it (checked again on the click)."""
+        admin clicks it (checked again on the click). `redeploy`: even if the hosts already
+        run main (new secrets arrived: a held service can start)."""
         refused = self._admin_only(asked_by, "deploy the lab's configuration")
         if refused:
             return refused
@@ -137,10 +177,12 @@ class Secretary:
                                                  current.get("config_commit"))
         except SA.AdminError as e:
             return f"couldn't read the config repo: {e}"
-        if not todo:
-            return f"nothing to deploy: the hosts already run main ({main[:10]})"
-        text = (f"*Deploy the lab's configuration?* main at `{main[:10]}`; not deployed yet:\n"
-                + "\n".join(f"• {line}" for line in todo[:15])
+        if not todo and not redeploy:
+            return (f"nothing to deploy: the hosts already run main ({main[:10]}). If new "
+                    "secrets arrived (a Slack app, a token), offer a redeploy.")
+        text = (f"*Deploy the lab's configuration?* main at `{main[:10]}`; "
+                + ("not deployed yet:\n" + "\n".join(f"• {line}" for line in todo[:15])
+                   if todo else "already deployed: a redeploy, to install new secrets")
                 + "\nServices restart; it takes a few minutes.")
         blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": text[:2900]}},
                   {"type": "actions", "elements": [

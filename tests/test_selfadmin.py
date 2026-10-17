@@ -95,7 +95,8 @@ def test_admin_only_and_the_click_decides(monkeypatch):
     sec.slack = SimpleNamespace(post=post, web=SimpleNamespace(chat_update=chat_update))
     run = asyncio.run
     for call in (sec.ctx("bob").propose_change("x", "y"), sec.ctx("bob").offer_apply(),
-                 sec.ctx("bob").read_config(), sec.ctx("bob").slack_verify("broker")):
+                 sec.ctx("bob").read_config(), sec.ctx("bob").slack_verify("broker"),
+                 sec.ctx("bob").request_slack_app("mgr-alice")):
         assert run(call).startswith("refused: only an admin")
     # a non-admin's click on the Deploy button does nothing but say so
     monkeypatch.setattr(SA, "start_apply", lambda: started.append(1) or "/tmp/x.log")

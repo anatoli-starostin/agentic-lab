@@ -86,7 +86,8 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      `mgr-flash`); the admin may also pick ids. Avoid naming an agent "Admin" (people
      confuse it with the human admin) or after a Slack built-in ("Slackbot").
    - Then: the lab's name, the admin's member id and name, their Slack member id (Slack:
-     profile → ⋯ → Copy member ID), and the first workers' hosts. Claude runs:
+     profile → ⋯ → Copy member ID), and (optional, else later from Slack) the admin's
+     manager and the first workers' hosts. Claude runs:
      `lab init ~/lab-config/lab.yaml --name ... --admin ... --admin-name ... --slack-user ... --manager mgr-flash --worker worker-a@gpu-a --display secretary=Iris --display mgr-flash=Flash --display worker-a=Bolt`
    - `lab init` marks the admin `admin: true`, fills in their Tailscale login (for the
      web UI's logs) from this machine's owner, and writes `framework.lock`. A separate VM
@@ -104,8 +105,10 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      final `lab apply` starts them.
 
 7. **Slack apps** (Admin creates them, Claude guides; ~3 minutes each)
-   - Three apps: **Lab Approvals** (the broker's), **the secretary**, and **the admin's
-     manager**. **One at a time**: finish, verify, then the next. For each app Claude
+   - Two apps at install: **Lab Approvals** (the broker's) and **the secretary**.
+     Managers (the admin's own included) and workers are best added afterwards, from
+     Slack (see "Afterwards"); `lab init` without `--manager`/`--worker` gives that
+     minimal lab. **One at a time**: finish, verify, then the next. For each app Claude
      puts in the chat, in this order:
      1. the manifest itself, pasted in full in a code block (`lab slack-manifest
         approvals | secretary | <manager id>`; a manifest holds no secrets);
@@ -164,29 +167,42 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
       secrets and services. The tokens agents use to reach each other are generated and
       never shown.
     - `sudo lab doctor` on each host: every check passes, or says how to fix it.
+    - **The secretary's deploy key.** The first apply prints a public key for the
+      secretary: add it to the config repo (Settings → Deploy keys) **with write access**
+      (it pushes branches; branch protection keeps it from `main`), then `sudo lab apply`
+      once more. From then on the lab is administered from Slack (see "Afterwards").
+    - The secretary's Slack app needs **Interactivity** on (the manifest has it) for the
+      Deploy button.
 
 12. **First task** (Admin)
     - DM the manager: *"Run a quick GPU smoke test on worker-a and show me a loss
       curve."* Progress, the plot and a summary come back in Slack; any approval comes as a
       DM from Lab Approvals. The web UI shows it all.
 
-## Afterwards
+## Afterwards: the lab is administered from Slack
 
-- **The secretary** keeps the lab running: machine states and idle stops, token-expiry
-  notices, usage per account, answers about the lab in Slack.
-- **The admin's Claude** makes every change the same way: edit `~/lab-config/lab.yaml` →
-  on a branch: edit `~/lab-config/lab.yaml` → `lab check` → `sudo lab plan --working-tree`
-  → commit, push → `lab pr-link` → "here is the PR, review and merge it" → after the merge,
-  `sudo lab apply`.
-  New agents' names are asked, never invented (step 5).
-  - **Add a member:** add them to `lab.yaml` (name, Slack id). At that moment, send them
-    their Claude-token command (step 8, for them). Then add their manager (and workers):
-    its Slack app (step 7), `sudo lab apply`.
-  - **Add a worker:** create the VM and join the tailnet (step 10), add it to `lab.yaml`,
-    `sudo lab apply`.
-  - **Remove an agent:** remove it from `lab.yaml`, `sudo lab apply`; on its host,
-    `sudo systemctl disable --now lab-<role>@<id>` and, after the admin confirms,
-    `sudo userdel -r lab-<id>` (offer to archive its work folder first).
+After the install, the admin works with **the secretary in a Slack DM**; the console is for
+emergencies. The rule is the same: only what's merged to the config repo's `main` is
+deployed, and the secretary checks in code that the person asking is an admin.
+
+- **Any change** (a member, an agent, a GPU machine, grants, names, a framework upgrade):
+  tell the secretary. It reads `lab.yaml` from `main`, writes the change on a branch
+  (checked), and replies with the diff and "here is the PR, review and merge it". After
+  the merge, tell it so: it posts a **Deploy** button; only an admin's click deploys
+  (`lab apply-main`, its one sudo command). The result is posted back in the DM.
+- **Add a member:** their name and Slack member ID → PR → merge → deploy; the secretary
+  then DMs them their Claude-token command.
+- **Add a manager:** its name → PR → merge → deploy (its service waits for its Slack
+  app) → the secretary posts the app's manifest, the clicks and a one-time link for its
+  tokens → you create the app (~3 minutes, in the browser) → "done" → it checks the
+  tokens and offers a redeploy, which starts the manager.
+- **Add a GPU worker:** first create the VM (Nebius console, Ubuntu with NVIDIA drivers),
+  join it to the tailnet and give the admin SSH with passwordless sudo (step 10); then tell
+  the secretary its tailnet name (and Nebius instance id for power) → PR → merge → deploy.
+- **Remove an agent:** PR → merge → deploy. Its Unix user and work folder stay on its host
+  until removed at the console (`sudo userdel -r lab-<id>`, after archiving its work).
+- **From the console** (break glass, or if Slack is down): the same flow with the admin's
+  Claude: a branch → `lab pr-link` → merge → `sudo lab apply`.
 - **Watching and debugging:** the web UI (`:8774`, logs for admins); `sudo lab logs
   <agent>`; `sudo lab debug <agent>` (the agent's own session, in the classic console);
   `lab manager ask` / `lab secretary ask` (talk without Slack).

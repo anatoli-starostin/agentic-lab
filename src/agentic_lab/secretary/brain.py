@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
 
 TOOL_NAMES = ("lab_state", "worker_tasks", "task_result", "ask_member_for_claude_token",
               "announce", "power", "read_lab_config", "propose_lab_change", "offer_deploy",
-              "check_slack_app")
+              "check_slack_app", "request_slack_app")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
 
 
@@ -55,9 +55,14 @@ agents. You keep the lab running and answer questions about it, in Slack.
      You never merge, and never say a change is live before it's deployed;
   4. when the admin says it's merged, offer_deploy: it posts a Deploy button that only an
      admin's click starts. You'll see the result posted in the conversation.
-  Names of new agents are the admin's choice: ask, never invent. A new member also needs
-  their Claude token (ask_member_for_claude_token) and a new manager its Slack app: that
-  part is still done with the admin at the console (docs/install.md, step 7).
+  Names of new agents are the admin's choice: ask, never invent (and a member's Slack
+  member ID: ask, Slack profile → ⋯ → Copy member ID). After a deploy:
+  - a new member: ask_member_for_claude_token (their agents need it to run);
+  - a new manager: request_slack_app; when the admin says done, check_slack_app, then
+    offer_deploy with redeploy so its service starts.
+  - a new GPU machine must exist first: created in the cloud console, on the tailnet, with
+    SSH for the admin (passwordless sudo). Ask the admin for its tailnet name and, for
+    power, its Nebius instance id.
 - Don't change lab.yaml without the admin asking for that change.
 - Numbers about usage are readings with a time and a source: say how old they are.
 - You never approve anything; approvals come to members as DMs from the approvals app.
@@ -134,10 +139,18 @@ def build_tools(ctx):
                                              args.get("framework_commit") or None))
 
     @tool("offer_deploy", "Admins only, after the admin merged a change: post a Deploy "
-          "button (what main holds that isn't deployed yet). Only an admin's click deploys.",
-          {})
+          "button (what main holds that isn't deployed yet). Only an admin's click deploys. "
+          "redeploy=true: even if nothing changed on main (new secrets arrived, e.g. a Slack "
+          "app's tokens, so a waiting service can start).", {"redeploy": bool})
     async def offer_deploy(args):
-        return text(await ctx.offer_apply())
+        return text(await ctx.offer_apply(bool(args.get("redeploy"))))
+
+    @tool("request_slack_app", "Admins only: a new manager's Slack app (or 'secretary', "
+          "'approvals'). Posts the manifest, the exact clicks and a one-time link for its "
+          "tokens in this conversation. The agent must already be deployed.",
+          {"agent": str})
+    async def request_slack_app(args):
+        return text(await ctx.request_slack_app(args["agent"]))
 
     @tool("check_slack_app", "Admins only: do a Slack app's tokens work (bot token, Socket "
           "Mode)? owner: broker, secretary or a manager's id. Gives its App ID too.",
@@ -147,7 +160,8 @@ def build_tools(ctx):
 
     return create_sdk_mcp_server("lab", tools=[lab_state, worker_tasks, task_result,
                                                ask_member, announce, power, read_config,
-                                               propose, offer_deploy, check_slack_app])
+                                               propose, offer_deploy, check_slack_app,
+                                               request_slack_app])
 
 
 class SecretaryBrain:
