@@ -22,6 +22,7 @@ def test_base_model():
     assert sb["filesystem"]["allowRead"] == []
     assert sb["network"]["allowAllUnixSockets"] is False           # seccomp socket block on
     assert s["permissions"]["defaultMode"] == "default"
+    assert s["env"]["XDG_CACHE_HOME"] == f"{HOME}/work/.cache"     # caches inside the sandbox
     assert s["permissions"]["allow"] == [f"Edit(/{HOME}/work/**)", "Edit(//tmp/**)"]
 
 

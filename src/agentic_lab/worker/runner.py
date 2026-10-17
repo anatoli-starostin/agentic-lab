@@ -27,6 +27,21 @@ CANCEL_POLL_S = 2.0
 LAB_TOOLS = ("mcp__lab__report_progress", "mcp__lab__finish_task")
 
 
+def allowed_without_asking(tool_name, tool_input):
+    """Calls our permission callback allows on its own.
+
+    Claude Code sends some sandboxed Bash commands for approval anyway: `export X=...`, an
+    env prefix (`FOO=bar cmd`), some `python3 -c` one-liners, loops over variables. Our
+    sandbox confines every command that runs in it (verified on a worker host: writes
+    outside, unlisted hosts and the systemd bus all stay refused), so a Bash command that
+    stays inside the sandbox needs no human. Only one asking to run OUTSIDE it
+    (`dangerouslyDisableSandbox`) does.
+    """
+    if tool_name in LAB_TOOLS:
+        return True
+    return tool_name == "Bash" and not tool_input.get("dangerouslyDisableSandbox")
+
+
 class AgentRunner(Protocol):
     async def run(self, task: T.Task, store: T.TaskStore) -> None:
         """Run `task` to a terminal state, recording progress and the result in `store`."""
@@ -101,7 +116,7 @@ class SdkRunner:
 
     def _options(self, task, store, outcome):
         async def can_use_tool(tool_name, tool_input, context):
-            if tool_name in LAB_TOOLS:
+            if allowed_without_asking(tool_name, tool_input):
                 return PermissionResultAllow()
             if store.get(task.id).cancel_requested:
                 return PermissionResultDeny(message="The task was cancelled.", interrupt=True)

@@ -59,6 +59,10 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
     for g in live:
         {"domain": domains, "write": writes, "tool": tools}[g.kind].append(g.value)
     writable = [_abs(workdir), TMP] + [_abs(w) for w in writes]
+    # Tools keep their caches (pip, uv, Hugging Face, torch hub...) under XDG_CACHE_HOME.
+    # ~/.cache isn't writable in the sandbox, so point it into the working folder: caches
+    # then persist between tasks without widening the sandbox.
+    cache = os.path.join(_abs(workdir), ".cache")
 
     return {
         "sandbox": {
@@ -79,6 +83,7 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
                 "allowRead": list(GPU_VISIBLE) if gpu else [],
             },
         },
+        "env": {"XDG_CACHE_HOME": cache},
         "permissions": {
             "defaultMode": "default",           # anything not allowed -> permission request
             "allow": _dedup(tools + [f"Edit({_rule_path(w)}/**)" for w in writable]),

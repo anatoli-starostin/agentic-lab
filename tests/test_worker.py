@@ -215,3 +215,15 @@ def test_run_tasks_fifo_and_survives_runner_errors(tmp_path):
     assert states["one"] == (T.DONE, None)
     assert states["two"] == (T.FAILED, "RuntimeError: boom")
     assert states["three"][0] == T.DONE
+
+
+# ── the runner's own permission decisions ────────────────────────────────────
+
+def test_sandboxed_bash_needs_no_human():
+    from agentic_lab.worker.runner import allowed_without_asking
+    assert allowed_without_asking("Bash", {"command": "export X=1 && make"})
+    assert allowed_without_asking("mcp__lab__finish_task", {"summary": "x"})
+    # running outside the sandbox, or other tools, go to a human
+    assert not allowed_without_asking("Bash", {"command": "make", "dangerouslyDisableSandbox": True})
+    for tool in ("Write", "Edit", "WebFetch", "mcp__github__push"):
+        assert not allowed_without_asking(tool, {})
