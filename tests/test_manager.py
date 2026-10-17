@@ -298,6 +298,20 @@ def test_admin_only_actions(monkeypatch):
     assert run(sec.ctx("alice").power("gpu-a", "force_off")).startswith("gpu-a: powering off")
     assert stopped == ["gpu-b", "gpu-a"]
     assert "refused" in run(sec.ctx("bob").request_token("alice"))
+    # the GPU counts too: a process on it (anyone's), or utilization
+    gpu_proc = {"up": True, "queue": {}, "gpu_processes": [{"pid": 7, "name": "python"}]}
+    hot = {"up": True, "queue": {}, "gpus": [{"name": "H100", "util": 85}]}
+    cool = {"up": True, "queue": {}, "gpus": [{"name": "H100", "util": 3}], "gpu_processes": []}
+    for seen, why in ((gpu_proc, "1 process(es) on the GPU (python)"), (hot, "GPU 85% busy"),
+                      (cool, None)):
+        assert P.busy(lab, "gpu-b", {"agents": {"worker-b": seen}}) == why
+    w = P.IdleWatch()
+    import datetime as dt
+    t0 = dt.datetime(2026, 10, 17, 12, tzinfo=dt.timezone.utc)
+    snap = {"agents": {"worker-a": cool, "worker-b": gpu_proc}}
+    w.candidates(lab, snap, now=t0)
+    later = w.candidates(lab, snap, now=t0 + dt.timedelta(hours=2))
+    assert "gpu-b" not in later and "gpu-a" in later       # never idle-stopped mid-GPU-job
 
 
 def test_secretary_home_tab():

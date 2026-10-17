@@ -5,7 +5,9 @@ key). A host can be powered if lab.yaml gives it `kind: cloud`, `provider: nebiu
 `instance` id. The secretary's own host is never powered off by it.
 
 Idle stop: a host whose `power` is `on_demand` and that runs only workers is stopped once all
-its workers have had nothing running, queued or waiting for `idle_stop_min` minutes.
+its workers have had nothing running, queued or waiting, and its GPUs nothing on them
+(nvidia-smi, via the workers' health checks), for `idle_stop_min` minutes. The same "busy"
+decides who may power a host off (only admins, when busy).
 """
 import asyncio
 import datetime as dt
@@ -17,6 +19,7 @@ if not os.path.exists(NEBIUS) and os.path.exists("/usr/local/bin/nebius"):
     NEBIUS = "/usr/local/bin/nebius"
 PROFILE = "lab"
 BUSY = ("running", "queued", "awaiting_approval")
+GPU_BUSY_UTIL = 10              # % utilization at which a GPU counts as in use
 
 
 class PowerError(RuntimeError):
@@ -77,9 +80,27 @@ async def stop(lab, host):
     await _cli("compute", "instance", "stop", "--id", lab.hosts[host]["instance"])
 
 
+def worker_busy(name, seen):
+    """Why a worker's machine is busy (None if it isn't), from its health readings: tasks
+    running, queued or waiting, or the GPUs in use by anything (nvidia-smi: a process on a
+    GPU, the lab's or anyone's, or utilization of GPU_BUSY_UTIL % and more)."""
+    q = seen.get("queue") or {}
+    n = {k: q.get(k, 0) for k in BUSY if q.get(k)}
+    if n:
+        return f"{name} has " + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in n.items())
+    procs = seen.get("gpu_processes") or []
+    if procs:
+        names = ", ".join(sorted({p.get("name") or "?" for p in procs}))
+        return f"{len(procs)} process(es) on the GPU ({names})"
+    hot = [g for g in seen.get("gpus") or [] if (g.get("util") or 0) >= GPU_BUSY_UTIL]
+    if hot:
+        return f"GPU {max(g['util'] for g in hot)}% busy"
+    return None
+
+
 def busy(lab, host, snapshot):
-    """Why powering `host` off would interrupt work (None if it wouldn't): a worker with
-    something running, queued or waiting, or a manager there."""
+    """Why powering `host` off would interrupt work (None if it wouldn't): a worker busy
+    (see worker_busy), or a manager there."""
     for aid, a in lab.agents.items():
         if a.get("host") != host:
             continue
@@ -88,11 +109,9 @@ def busy(lab, host, snapshot):
         s = (snapshot or {}).get("agents", {}).get(aid, {})
         if not s.get("up"):
             continue                    # a stopped machine's workers are down: nothing to lose
-        q = s.get("queue") or {}
-        n = {k: q.get(k, 0) for k in BUSY if q.get(k)}
-        if n:
-            return (f"{lab.display_name(aid)} has "
-                    + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in n.items()))
+        why = worker_busy(lab.display_name(aid), s)
+        if why:
+            return why
     return None
 
 
@@ -117,8 +136,7 @@ class IdleWatch:
             if not all(s.get("up") for s in seen):
                 self.idle_since.pop(host, None)     # down or unreachable: not ours to judge
                 continue
-            busy = any(sum((s.get("queue") or {}).get(k, 0) for k in BUSY) for s in seen)
-            if busy:
+            if any(worker_busy(a, s) for a, s in zip(agents, seen)):
                 self.idle_since.pop(host, None)
                 continue
             since = self.idle_since.setdefault(host, now)
