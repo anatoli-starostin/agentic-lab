@@ -199,16 +199,14 @@ deployed, and the secretary checks in code that the person asking is an admin.
 - **Add a GPU worker:** first create the VM (Nebius console, Ubuntu with NVIDIA drivers),
   join it to the tailnet and give the admin SSH with passwordless sudo (step 10); then tell
   the secretary its tailnet name (and Nebius instance id for power) → PR → merge → deploy.
-- **GitHub for agents (bot accounts):** create the bot's GitHub account yourself (a
-  machine user: shared, e.g. `claudebot`, or one per member); add it to the org with access
-  to the lab's repos only. Then tell the secretary: it adds it to `lab.yaml`
-  (`github.accounts`, and `github: <bot>` on each manager and worker that uses it: its
-  default identity) → PR → merge → deploy; then it posts how to make the bot's
-  fine-grained token (contents, pull requests and issues of those repos) and a one-time
-  link for it; then a redeploy. Agents use git and `gh` as that bot, for each piece of work
-  only with their default bot, shared bots, or the requester's own. **Protect `main`** in
-  each repo (pull requests only, reviews by human code owners, no bypass for bots): that
-  is what keeps bots from approving or merging.
+- **GitHub for an agent:** each manager or worker may have one GitHub identity, a bot
+  account (a machine user you create, e.g. `flash-bot`, added to the org with access to
+  the lab's private repos only). Tell the secretary: it adds the bot to `lab.yaml`
+  (`github.accounts`, and `github: <bot>` on the agent) → PR → merge → deploy; then it
+  posts how to make the bot's fine-grained token (contents, pull requests and issues of
+  those repos) and a one-time link for it; then a redeploy. The agent then uses git and
+  `gh` as that bot. **Protect `main`** in each repo (pull requests only, reviews by human
+  code owners, no bypass for bots): that is what keeps bots from approving or merging.
 - **Remove an agent:** PR → merge → deploy. Its Unix user and work folder stay on its host
   until removed at the console (`sudo userdel -r lab-<id>`, after archiving its work).
 - **From the console** (break glass, or if Slack is down): the same flow with the admin's

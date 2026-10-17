@@ -36,7 +36,7 @@ _TOP = {"lab": (str, True), "tailnet": (str, False), "trust_tailnet": (bool, Fal
         "announcements": (str, False),     # Slack channel (id or #name) for lab-wide notices
         "humans": (dict, True),
         "agents": (dict, True), "hosts": (dict, True), "credentials": (list, False),
-        "github": (dict, False)}            # the agents' GitHub identities (bot accounts)
+        "github": (dict, False)}            # the agents' GitHub bot accounts
 _HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, False),
           "admin": (bool, False),           # may see agents' logs in the web UI
           "tailscale_login": (str, False)}  # how the web UI recognises them (tailscale whois)
@@ -47,14 +47,14 @@ _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "display_name": (str, False), "compact_percent": (int, False),
           "grants": (list, False),
           "slack_app": (str, False), "max_parallel_gpu_tasks": (int, False),
-          "github": (str, False)}           # its default GitHub identity (an account below)
+          "github": (str, False)}           # its GitHub identity: a bot in github.accounts
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
          "preemptible": (bool, False), "power": (str, False), "idle_stop_min": (int, False),
          "restart_by": (str, False), "tailnet_name": (str, False),
          "ssh_user": (str, False)}      # who `lab apply` logs in as (default: the admin)
 _GITHUB = {"accounts": (dict, True)}
-# a bot account (a GitHub machine user): shared by the lab, or a member's personal bot
-_GH_ACCOUNT = {"member": (str, False), "email": (str, False),
+# a bot account (a GitHub machine user) an agent acts as
+_GH_ACCOUNT = {"email": (str, False),                       # default: its noreply address
                "expires": ((dt.date, type(None)), False)}   # its token's expiry date
 _GH_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 _CRED = {"name": (str, True), "host": (str, True), "expires": ((dt.date, type(None)), True),
@@ -146,35 +146,6 @@ class Lab:
         """The commit email of a bot account (its noreply address unless lab.yaml says)."""
         a = self.github_accounts.get(account) or {}
         return a.get("email") or f"{account}@users.noreply.github.com"
-
-    def github_identity(self, agent_id, requester=None, asked=None):
-        """(account, None) the agent acts as on GitHub for work asked by `requester`, or
-        (None, why not). Its default, unless `asked` names another: a shared account, or
-        the requester's own bot; never another member's."""
-        default = (self.agents.get(agent_id) or {}).get("github")
-        if not default:
-            return None, f"{agent_id} has no GitHub identity in lab.yaml"
-        if not asked or asked == default:
-            return default, None
-        acc = self.github_accounts.get(asked)
-        if acc is None:
-            return None, f"no GitHub account {asked!r} in lab.yaml"
-        owner = (acc or {}).get("member")
-        if owner is not None and owner != requester:
-            return None, (f"{asked} is {owner}'s own bot: only their work may use it "
-                          f"(this work is for {requester})")
-        return asked, None
-
-    def github_usable(self, agent_id):
-        """The bot accounts the agent may ever act as: its default, the shared ones, and the
-        personal bots of the members who may use it (its own member's, if it's dedicated)."""
-        a = self.agents.get(agent_id) or {}
-        if not a.get("github"):
-            return []
-        users = (set(self.humans) if a.get("access", "dedicated") == "shared"
-                 else {a.get("human")})
-        return [login for login, acc in self.github_accounts.items()
-                if login == a["github"] or (acc or {}).get("member") in users | {None}]
 
     def display_name(self, agent_id):
         """How humans see the agent (Slack, web UI, how it introduces itself)."""
@@ -303,8 +274,6 @@ def check(lab: Lab, today: dt.date | None = None):
                 E(where, "must be the bot's GitHub login (letters, digits, '-')")
             if not _fields(acc or {}, _GH_ACCOUNT, where, issues):
                 continue
-            if (acc or {}).get("member") is not None and acc["member"] not in lab.humans:
-                E(where, f"member {acc['member']!r} is not in humans")
             exp = (acc or {}).get("expires")
             if isinstance(exp, dt.date):
                 left = (exp - today).days
@@ -321,11 +290,6 @@ def check(lab: Lab, today: dt.date | None = None):
             E(where, "'github' applies to managers and workers only")
         elif acc_name not in lab.github_accounts:
             E(where, f"github account {acc_name!r} is not in github.accounts")
-        else:
-            owner = (lab.github_accounts[acc_name] or {}).get("member")
-            if owner is not None and owner != a.get("human"):
-                E(where, f"{acc_name} is {owner}'s own bot; an agent's default identity is "
-                         "a shared account or its own member's bot")
 
     for hid, h in lab.humans.items():
         if (h or {}).get("admin") and not (h or {}).get("tailscale_login"):

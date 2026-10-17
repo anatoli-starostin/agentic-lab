@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import yaml
 
+from .. import github as GH
 from ..broker.service import _env_file
 from ..eventlog import EventLog
 from ..registry import load as load_lab
@@ -138,6 +139,7 @@ async def serve(lab_path, agent_id, host=None, port=None):
     seat = _read_secret(f"{CONFIG}/claude-oauth-token")
     if seat:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
+    env.update(GH.env_for(lab, agent_id))      # its GitHub bot, if it has one
 
     workdir = os.path.expanduser(a.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
@@ -154,7 +156,7 @@ async def serve(lab_path, agent_id, host=None, port=None):
 
     brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
                   approver=approver, model=a.get("model"), env=env, usage=usage, events=events,
-                  per_turn=github_for(lab, agent_id))
+                  prompt_extra=GH.instructions(lab, agent_id))
     members = {(h or {}).get("slack_user"): hid for hid, h in lab.humans.items()
                if (h or {}).get("slack_user")}
     mgr = Manager(lab, agent_id, None, brain, workers, broker, state, memory, workdir)
@@ -191,15 +193,6 @@ async def serve(lab_path, agent_id, host=None, port=None):
     await slack.stop()
     follower.cancel()
     prober.cancel()
-
-
-def github_for(lab, agent_id):
-    """The bots the manager may act as for the member in the conversation."""
-    if not (lab.agents.get(agent_id) or {}).get("github"):
-        return None
-    from .. import github as GH
-    return lambda ctx: (GH.env_for(lab, agent_id, ctx.requester),
-                        GH.instructions(lab, agent_id, ctx.requester))
 
 
 class ConsoleIO:
@@ -243,6 +236,7 @@ async def ask(lab_path, agent_id, human, text, wait_s=900):
     seat = _read_secret(f"{CONFIG}/claude-oauth-token")
     if seat:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
+    env.update(GH.env_for(lab, agent_id))      # its GitHub bot, if it has one
     workdir = os.path.expanduser(a.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
     state_root = os.path.expanduser(STATE)
@@ -255,7 +249,7 @@ async def ask(lab_path, agent_id, human, text, wait_s=900):
 
     brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
                   approver=approver or NoChannelApprover(), model=a.get("model"), env=env,
-                  per_turn=github_for(lab, agent_id))
+                  prompt_extra=GH.instructions(lab, agent_id))
     io = ConsoleIO()
     mgr = Manager(lab, agent_id, io, brain, workers, broker, state, memory, workdir)
     ok, why = mgr.may_use(human)

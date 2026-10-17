@@ -17,6 +17,7 @@ import os
 import uvicorn
 import yaml
 
+from .. import github as GH
 from ..registry import load as load_lab
 from . import tasks as T
 from .approver import BrokerApprover
@@ -71,6 +72,7 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
     seat_token = _read_secret(f"{CONFIG}/claude-oauth-token")
     if seat_token:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat_token
+    env.update(GH.env_for(lab, agent_id))      # its GitHub bot, if it has one
     workdir = os.path.expanduser(a.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
     broker_cfg = yaml.safe_load(_read_secret(f"{CONFIG}/broker.yaml") or "") or {}
@@ -87,14 +89,9 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
         return lab.agent_settings(agent_id, extra_grants=grants,
                                   now=dt.datetime.now(dt.timezone.utc))
 
-    def github(task):                   # the bots it may act as for this task's requester
-        from .. import github as GH
-        return (GH.env_for(lab, agent_id, task.requester),
-                GH.instructions(lab, agent_id, task.requester))
-
     runner = SdkRunner(agent_id, workdir, settings_for, approver=approver,
                        model=model or a.get("model"), env=env, usage=usage, events=events,
-                       per_task=github)
+                       prompt_extra=GH.instructions(lab, agent_id))
 
     async def guardrails():
         active = await approver.active_grants()

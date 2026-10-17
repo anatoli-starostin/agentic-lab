@@ -60,10 +60,10 @@ agents. You keep the lab running and answer questions about it, in Slack.
   - a new member: ask_member_for_claude_token (their agents need it to run);
   - a new manager: request_slack_app; when the admin says done, check_slack_app, then
     offer_deploy with redeploy so its service starts.
-  - a GitHub bot account (github.accounts in lab.yaml: shared, or `member: <id>` for a
-    member's own bot; each manager or worker that uses GitHub gets `github: <account>`,
-    its default identity): the admin creates the GitHub account itself; then
-    request_github_token, the token's expiry date into lab.yaml, and a redeploy.
+  - GitHub for an agent: one bot account per agent (github.accounts in lab.yaml, and
+    `github: <bot>` on the manager or worker). The admin creates the bot's GitHub account
+    itself; then request_github_token, the token's expiry date into lab.yaml, and a
+    redeploy.
   - a new GPU machine must exist first: created in the cloud console, on the tailnet, with
     SSH for the admin (passwordless sudo). Ask the admin for its tailnet name and, for
     power, its Nebius instance id.

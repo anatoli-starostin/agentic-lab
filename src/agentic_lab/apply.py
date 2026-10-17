@@ -159,20 +159,15 @@ def host_plan(lab, host, tokens, intake=intake_secret):
             _, port = lab.address(aid)
             envs[f"/etc/agentic-lab/manager-{aid}.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={port}\n"
             units.append(("lab-manager@.service", f"lab-manager@{aid}"))
-        if a.get("github"):             # its GitHub identities: tokens for its service only
-            accounts = {}
-            for login in lab.github_usable(aid):
-                tok = intake(f"service:github-{login.lower()}", "github-token")
-                if tok is None:         # optional: GitHub work waits, the agent runs
-                    later.append(f"{login}'s GitHub token (lab secret request "
-                                 f"service:github-{login.lower()} github-token)")
-                    continue
-                files[f"/home/{user}/.config/agentic-lab/github/{login}.token"] = (
-                    user, "600", tok + "\n")
-                accounts[login] = {"email": lab.github_email(login),
-                                   "member": (lab.github_accounts[login] or {}).get("member")}
-            files[f"/home/{user}/.config/agentic-lab/github.yaml"] = (user, "600", yaml.safe_dump(
-                {"default": a["github"], "accounts": accounts}))
+        if a.get("github"):             # its GitHub bot's token (its service hands it over)
+            bot = a["github"]
+            tok = intake(f"service:github-{bot.lower()}", "github-token")
+            if tok is None:             # optional: the agent runs, just without GitHub yet
+                later.append(f"{bot}'s GitHub token (lab secret request "
+                             f"service:github-{bot.lower()} github-token)")
+            else:
+                files[f"/home/{user}/.config/agentic-lab/github.token"] = (user, "600",
+                                                                         tok + "\n")
 
     if host == sec_host:
         sec_user = lab.unix_user(secretary)
