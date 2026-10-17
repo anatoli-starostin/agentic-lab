@@ -592,7 +592,7 @@ after M3–M4 as needed.
 | 2026-10-17 | **Guardrail changes through the manager**: human asks manager → manager initiates the change on the worker over MCP → the worker's attempt raises a permission request → through the broker back to the human → applied only on approval. |
 | 2026-10-17 | **All managers share one cloud CPU VM**, one Unix user each. |
 | 2026-10-17 | **Permissions only in Slack DM** in the first version; more channels maybe later. The **web UI is for monitoring only**. |
-| 2026-10-17 | **Agents run as system services, each under its own dedicated Unix user** (`lab-<agent-id>`), even when several agents share a host. Nobody logs into these users (no tmux, no login sessions, lingering off). Humans attach with `lab console`. |
+| 2026-10-17 | **Agents run as system services, each under its own dedicated Unix user** (`lab-<agent-id>`), even when several agents share a host. Nobody logs into these users (no tmux, no login sessions, lingering off). Humans debug an agent with `lab debug <agent>`. |
 | 2026-10-17 | **Setup and maintenance are guided by Claude**: a `lab-admin` skill in the repo, run by the admin's own Claude Code on the secretary host, over declarative, idempotent `lab` commands. Secrets never pass through the chat. |
 | 2026-10-17 | **No `lab console`.** The web UI shows each agent's recent transcript; `lab debug <agent>` stops its service and opens the same session in the classic Claude Code console. |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
