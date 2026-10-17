@@ -1,85 +1,82 @@
-# Installing an Agentic Lab (draft)
+# Installing an Agentic Lab
 
-The basic steps from nothing to a working lab. The admin's Claude Code on the secretary
-host walks the admin through each one (the `lab-admin` skill, DESIGN.md §11a). Each step
-says **who** does it:
+Three steps by hand, then Claude guides the rest. The admin's Claude Code on the secretary
+host does the guiding (the `lab-admin` skill, DESIGN.md §11a). Each step says who acts:
 
 - **Admin**: the human who runs the lab's infrastructure.
 - **Member**: any human in the team.
 - **Claude**: the admin's own Claude Code session on the secretary host.
-- **Secretary**: the lab's 24/7 secretary agent, once it is running.
+- **Secretary**: the lab's 24/7 secretary agent, from step 4 on.
 
-Status marks: ✅ exists today · 🚧 partly (manual scripts) · ⏳ planned (milestone).
+Status marks: ✅ exists · 🚧 partly (manual scripts) · ⏳ planned.
+
+**Accounts the admin needs:** a Tailscale tailnet, a cloud account (Nebius) with GPU
+quota, a Slack workspace where they can create apps, a Claude seat (Team or Max) for each
+member whose agents will run, and optionally W&B.
 
 ---
 
-## 0. Accounts (Admin, once)
+## By hand
 
-- A **Tailscale** tailnet. The admin's and members' computers join it.
-- A **cloud account** (Nebius) with GPU quota, and an API key.
-- A **Slack workspace** where the admin can create apps.
-- A **Claude seat** (Team or Max) for each member whose agents will run.
-- Optional: a **W&B** account.
+1. **Allocate the secretary VM** (Admin). An always-on, small machine, Ubuntu 24.04 or
+   newer: an on-prem box or a small cloud VM.
+2. **Install Claude Code** (Admin) and log in with the admin's own account.
+3. **Give Claude the first message** (Admin):
+   > Set up an Agentic Lab on this machine: https://github.com/anatoli-starostin/agentic-lab
 
-## 1. The secretary host (Admin, once)
+   Claude clones the repo, reads `BOOTSTRAP.md`, and takes over.
+   (While the repo is private, this machine needs GitHub access to clone it.)
 
-An always-on machine (on-prem box or small VM), Ubuntu 24.04 or newer.
+## Guided by Claude
 
-1. Join it to the tailnet.
-2. Install Claude Code and log in with the admin's own account.
-3. Clone this repo and open Claude Code in it. From here on, Claude guides.
+4. **Secretary on Slack** (Claude, Admin) ⏳
+   - Claude installs the framework (`/opt/agentic-lab`) and the secretary's services, under
+     its own user `lab-secretary`.
+   - Claude walks the admin through creating the secretary's Slack app from the manifest
+     in the repo, and installing it to the workspace.
+   - The admin enters the app's tokens hidden (`lab secret set`), never in the chat.
+   - Check: the admin DMs the secretary and it answers. From here on, the secretary can
+     reach anyone in the team.
+5. **Tailnet** (Claude, Admin) ⏳
+   - Claude joins this machine to the tailnet if it isn't already.
+   - The admin creates one **reusable, tagged Tailscale auth key** and enters it hidden.
+     Every later host then joins the tailnet without a human login.
+6. **Describe the lab** (Claude, Admin) ⏳ `lab init`
+   - Claude and the admin write `lab.yaml` together: lab name, tailnet, members, and which
+     managers and workers to run. The secretary looks up members' Slack ids by name or
+     email. `lab check` ✅ validates it.
+7. **Members' Claude tokens** (Secretary, each Member) ✅
+   - The secretary DMs each member a one-time command (`client/lab-member.py`). The member
+     runs it on their own computer: it runs `claude setup-token` and sends the token
+     straight to the lab, never through chat. Once a year per member.
+8. **Cloud access** (Admin) ⏳
+   - The admin enters the cloud API key hidden. Only the secretary holds it.
+9. **Hosts** (Secretary, Claude) 🚧
+   - The secretary creates the manager VM and the GPU VMs through the cloud API (or the
+     admin creates them in the console). They join the tailnet with the auth key.
+   - `lab apply <host>`: base packages, the sandbox fix-ups (✅ `setup-sandbox.sh`), the
+     framework.
+10. **Managers** (Claude, Admin) ⏳
+    - Each manager needs its own Slack app. With a Slack *app configuration token* (the
+      admin creates one once), Claude creates each manager's app through Slack's manifest
+      API; the admin only clicks "Install" once per manager.
+    - `lab apply <manager>`.
+11. **Workers** (Claude) 🚧 `lab apply <worker>`: no human steps.
+    - Its Unix user (✅ `create-agent-user.sh`), its human's Claude token from step 7, the
+      tokens managers use to reach it (generated, never handled by a human), its service
+      (✅ `lab-worker@.service`).
+12. **Check** (Claude) ⏳
+    - `lab doctor`: every service up, sandboxes start, GPU visible, tokens valid, Slack
+      reachable. The web UI shows the whole lab.
+    - A first task: a member asks their manager in Slack; a worker runs it; the result
+      comes back in the thread.
 
-## 2. Bootstrap the lab (Claude, with the Admin)
+## Afterwards
 
-1. ⏳ `lab init`: write the first `lab.yaml` from a few questions (lab name, tailnet, the
-   admin as first member).
-2. 🚧 `lab apply secretary`: install the framework (`/opt/agentic-lab`), create the
-   `lab-secretary` user, start its services: the secret intake ✅, the secretary agent
-   and web UI ⏳ (M4).
-3. ⏳ `lab secret set cloud-api-key`: the admin types the cloud key, hidden. Only the
-   secretary holds it.
-
-## 3. Members (Admin adds, each Member acts once a year)
-
-1. ✅ The admin adds the member to `lab.yaml` (name, Slack user id).
-2. ✅ The secretary sends the member a Slack DM with a one-time code and one command line.
-   The member runs it on their own computer: `lab-member.py claude-token`, which runs
-   `claude setup-token` and sends the token straight to the lab, never through chat.
-3. The secretary asks again before the token expires (one year).
-
-## 4. Managers' Slack identities (Admin, per manager)
-
-1. ⏳ Create a Slack app from the manifest in the repo; Claude walks through the clicks.
-2. ⏳ `lab secret set slack/<manager>`: the admin pastes the app's two tokens, hidden.
-
-## 5. Hosts (Admin + Claude, per host)
-
-1. Create the VM: in the cloud console today; ⏳ by the secretary later.
-2. Join it to the tailnet, and let the secretary host's admin SSH key in.
-3. 🚧 `lab apply <host>`: base packages, the sandbox fix-ups (AppArmor, GPU wrapper,
-   managed settings ✅ as `setup-sandbox.sh`), the framework.
-
-## 6. Agents (Claude, per agent; no human steps)
-
-🚧 `lab apply <agent>`:
-- create its Unix user `lab-<agent-id>` ✅ (`create-agent-user.sh`);
-- give it its human's Claude token, from the intake ✅ (manual copy today);
-- generate the manager-to-worker tokens, so no human ever handles them ⏳;
-- install and start its service ✅ (`lab-worker@.service` for workers; managers ⏳ M3).
-
-## 7. Check (Claude)
-
-1. ⏳ `lab doctor`: every service up, sandboxes start, GPU visible, tokens valid, Slack
-   reachable.
-2. ⏳ A first task end to end: a member asks their manager in Slack, a worker runs it, the
-   result comes back in the thread.
-
-## Maintenance
-
-The same commands, again: edit `lab.yaml` → `lab check` → `lab plan` → `lab apply`.
-
-- **Add an agent:** add it to `lab.yaml`, then `lab apply <agent>`.
-- **Add a member:** add them to `lab.yaml`; the secretary DMs them for their token.
-- **Remove an agent:** remove it from `lab.yaml`; `lab apply` stops its service and,
-  after the admin confirms, deletes its user (offering to archive its work folder).
-- **Renew a token:** the secretary DMs the member when it's due; it's step 3 again.
+- **The secretary** keeps the lab running: monitoring, VM power, and token renewals (it
+  DMs members when their token is due).
+- **The admin's Claude** makes changes, always the same way: edit `lab.yaml` →
+  `lab check` → `lab plan` → `lab apply`.
+  - **Add an agent / a member / a host:** add it to `lab.yaml`, `lab apply`.
+  - **Remove an agent:** remove it from `lab.yaml`; `lab apply` stops its service and,
+    after the admin confirms, deletes its user (offering to archive its work folder).

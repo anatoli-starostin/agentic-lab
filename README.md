@@ -14,7 +14,16 @@ that, not a prompt.
 Status: **M0** (skeleton, `lab.yaml` registry, per-agent sandbox settings). See [DESIGN.md](DESIGN.md) for the
 design and [docs/security-notes.md](docs/security-notes.md) for known gaps.
 
-## Quick start
+## Install
+
+Three steps by hand, then Claude guides the rest (`docs/install.md`):
+
+1. Allocate a small always-on VM for the lab's secretary (Ubuntu 24.04+).
+2. Install Claude Code on it and log in.
+3. Tell Claude: *"Set up an Agentic Lab on this machine:
+   https://github.com/anatoli-starostin/agentic-lab"*. It reads `BOOTSTRAP.md` and takes over.
+
+## Development quick start
 
 ```sh
 uv venv && uv pip install -e ".[dev]"

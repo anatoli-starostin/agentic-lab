@@ -41,7 +41,12 @@ Coming, by milestone: worker service (M1), broker and Slack DM approvals (M2), m
 (M3), `lab init / plan / apply / doctor / secret` (M3a), secretary and web UI (M4). Until
 `lab apply` exists, do host steps with the scripts above, over SSH, one host at a time.
 
-## First-time setup (today's manual path)
+## First-time setup
+
+The full sequence is `docs/install.md` (steps 1–3 by hand, 4–12 guided by you). Where a
+step is marked ⏳ it isn't built yet: say so, and use today's manual path below.
+
+### Today's manual path
 
 1. **Prerequisites** (the admin's accounts; walk them through any that are missing): a
    Tailscale tailnet with every host joined; a cloud account (Nebius) with GPU quota; a
