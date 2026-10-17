@@ -36,14 +36,14 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 | Validate `lab.yaml` | `lab check lab.yaml` |
 | What would change; missing secrets | `sudo lab --lab lab.yaml plan` |
 | Make the hosts match `lab.yaml` | `sudo lab --lab lab.yaml apply [--host H]` (run from the repo checkout so it ships the current code; remote hosts over SSH as the admin, who needs passwordless sudo there) |
-| Is this host healthy? | `sudo lab --lab /etc/agentic-lab/lab.yaml doctor` (on any host; every failure says how to fix it) |
-| A member's Claude token | `sudo -u lab-secretary lab --lab lab.yaml secret request <member> claude-token --url http://<secretary>:8771` → give them the message |
-| A Slack app's tokens / a Nebius service account | `sudo -u lab-secretary lab ... secret request service:<broker\|secretary\|manager-id> slack-app --url ...` (or `service:secretary nebius-sa`) → a one-time link to paste in a browser |
+| Is this host healthy? | `sudo lab doctor` (on any host; every failure says how to fix it) |
+| A member's Claude token | `sudo -u lab-secretary lab secret request <member> claude-token --url http://<secretary>:8771` → give them the message |
+| A Slack app's tokens / a Nebius service account | `sudo -u lab-secretary lab secret request service:<broker\|secretary\|manager-id> slack-app --url ...` (or `service:secretary nebius-sa`) → a one-time link to paste in a browser |
 | A Slack app manifest | `lab --lab lab.yaml slack-manifest <manager or secretary>` / `slack-manifest approvals` |
 | VM power | after the admin's one Nebius browser login: `sudo lab --lab lab.yaml nebius connect --project <id> [--forget-admin]` |
-| Talk to an agent without Slack | `sudo -u lab-<id> lab --lab /etc/agentic-lab/lab.yaml manager ask <id> --as <member> "..."` (or `secretary ask --as <member> "..."`) |
-| An agent's log | web UI `/logs/<agent>` (admins), or `sudo lab --lab /etc/agentic-lab/lab.yaml logs <agent> [--hours N]` on its host |
-| Talk to an agent in the classic console | `sudo lab --lab /etc/agentic-lab/lab.yaml debug <agent>` (`--print "q"` for one question) |
+| Talk to an agent without Slack | `sudo -u lab-<id> lab manager ask <id> --as <member> "..."` (or `secretary ask --as <member> "..."`) |
+| An agent's log | web UI `/logs/<agent>` (admins), or `sudo lab logs <agent> [--hours N]` on its host |
+| Talk to an agent in the classic console | `sudo lab debug <agent>` (`--print "q"` for one question) |
 | The lab's web UI | `http://<secretary host>:8774/` on the tailnet |
 
 ## First-time setup
@@ -65,7 +65,7 @@ in order; tell the admin before each step what they will need to do themselves.
 
 - **See what an agent is doing or did:** the web UI's transcript view (M4); until then,
   `sudo journalctl -u lab-worker@<id>` for the service, and:
-- **Talk to an agent directly:** `sudo lab --lab /etc/agentic-lab/lab.yaml debug <agent>`
+- **Talk to an agent directly:** `sudo lab debug <agent>`
   stops its service and opens its latest session in the classic Claude Code console, as
   the agent's user with its sandbox; the service restarts on exit. `--print "question"`
   asks one question without opening the console; `--new` starts a fresh session.

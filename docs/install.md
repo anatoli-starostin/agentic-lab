@@ -16,10 +16,12 @@ member. Other members join afterwards, one at a time ("Add a member" below).
 Slack workspace where they can create apps; a Claude seat (Team or Max) for each member
 whose agents will run; optionally W&B.
 
-Commands below run on the secretary host from the repo checkout (`~/agentic-lab`), with
-the framework installed there for the admin: `uv venv && uv pip install -e .`, so `lab`
-means `~/agentic-lab/.venv/bin/lab`. `sudo` commands need the full path:
-`sudo ~/agentic-lab/.venv/bin/lab ...`.
+Until the first `lab apply`, `lab` means the repo checkout's own (`~/agentic-lab`, set up
+with `uv venv && uv pip install -e .`): `~/agentic-lab/.venv/bin/lab`, also under sudo.
+`lab apply` then puts `lab` on every lab host's PATH (`/usr/local/bin/lab`), where it reads
+`/etc/agentic-lab/lab.yaml` by default; that's what commands run as the lab's users use.
+**Always run `lab plan` / `lab apply` from the checkout**, so they ship its code:
+`cd ~/agentic-lab && sudo .venv/bin/lab plan`.
 
 ---
 
@@ -83,7 +85,8 @@ means `~/agentic-lab/.venv/bin/lab`. `sudo` commands need the full path:
 
 9. **GPU hosts** (Admin + Claude, per host)
    - Create the VM (Nebius console, Ubuntu 24.04 with NVIDIA drivers), join it to the
-     tailnet, and let the admin SSH in with passwordless sudo.
+     tailnet, and let the admin SSH in with passwordless sudo. If the image's login user
+     isn't the admin's name, add `ssh_user: <user>` to the host in `lab.yaml`.
 
 10. **Everything else** (Claude)
     - `sudo lab plan` (nothing missing?), then `sudo lab apply`: every host gets the

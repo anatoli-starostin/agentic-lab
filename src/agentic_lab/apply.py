@@ -35,9 +35,16 @@ class ApplyError(RuntimeError):
     pass
 
 
+def _is_source(d):
+    return os.path.exists(os.path.join(d, "pyproject.toml")) and os.path.isdir(
+        os.path.join(d, "deploy")) and os.path.isdir(os.path.join(d, "src", "agentic_lab"))
+
+
 def find_source():
-    """The framework's source tree: the repo this package was installed from, or the copy
-    `lab apply` keeps in /opt/agentic-lab/src."""
+    """The framework's source tree to ship: the checkout you're in, else the repo this
+    package was installed from, else the copy `lab apply` keeps in /opt/agentic-lab/src."""
+    if _is_source(os.getcwd()):
+        return os.getcwd()
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(4):
         d = os.path.dirname(d)
@@ -195,7 +202,8 @@ def host_plan(lab, host, tokens, intake=intake_secret):
     held = sorted(u for u, owner in unit_user.items() if owner in waiting)
     return {"host": host, "name": name, "files": files, "users": users, "units": units,
             "envs": envs, "missing": missing, "secretary_host": host == sec_host,
-            "nebius_cli": locals().get("nebius_cli"), "held": held}
+            "nebius_cli": locals().get("nebius_cli"), "held": held,
+            "ssh_user": (lab.hosts.get(host) or {}).get("ssh_user")}
 
 
 # ── the script each host runs ────────────────────────────────────────────────
@@ -219,6 +227,7 @@ uv pip install -q -p /opt/agentic-lab/venv --reinstall-package agentic-lab /opt/
 install -d /opt/agentic-lab/client
 install -m 644 /opt/agentic-lab/src/client/lab-member.py /opt/agentic-lab/client/
 install -m 644 "$B/lab.yaml" /etc/agentic-lab/lab.yaml
+ln -sf /opt/agentic-lab/venv/bin/lab /usr/local/bin/lab     # `lab` for every user here
 
 say "sandbox prerequisites"
 /opt/agentic-lab/src/deploy/worker/setup-sandbox.sh
@@ -315,7 +324,7 @@ def run_bundle(plan, local, admin):
         bundle(plan, plan["lab_path"], plan["source"], b)
         if local:
             return subprocess.run(["bash", os.path.join(b, "apply.sh")]).returncode
-        target = f"{admin}@{plan['name']}"
+        target = f"{plan.get('ssh_user') or admin}@{plan['name']}"
         remote = f"/tmp/lab-apply-{pysecrets.token_hex(4)}"
         as_admin = ["sudo", "-u", admin] if os.geteuid() == 0 and admin != "root" else []
         if as_admin:        # hand the staging folder to the admin only (it stays mode 700)

@@ -47,7 +47,8 @@ _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "slack_app": (str, False), "max_parallel_gpu_tasks": (int, False)}
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
          "preemptible": (bool, False), "power": (str, False), "idle_stop_min": (int, False),
-         "restart_by": (str, False), "tailnet_name": (str, False)}
+         "restart_by": (str, False), "tailnet_name": (str, False),
+         "ssh_user": (str, False)}      # who `lab apply` logs in as (default: the admin)
 _CRED = {"name": (str, True), "host": (str, True), "expires": ((dt.date, type(None)), True),
          "scope": (str, False), "agent": (str, False)}
 

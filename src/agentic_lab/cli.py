@@ -28,6 +28,7 @@
 """
 import argparse
 import json
+import os
 import sys
 
 from . import registry
@@ -302,7 +303,11 @@ def cmd_debug_session(args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(prog="lab", description="Agentic Lab command line")
-    ap.add_argument("--lab", default="lab.yaml", help="path to lab.yaml (default: ./lab.yaml)")
+    default_lab = "lab.yaml"
+    if not os.path.exists(default_lab) and os.path.exists("/etc/agentic-lab/lab.yaml"):
+        default_lab = "/etc/agentic-lab/lab.yaml"     # on a lab host
+    ap.add_argument("--lab", default=default_lab,
+                    help="path to lab.yaml (default: ./lab.yaml, else /etc/agentic-lab/lab.yaml)")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     i = sub.add_parser("init", help="write a lab's first lab.yaml")
