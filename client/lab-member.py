@@ -26,10 +26,10 @@ import urllib.request
 VERSION = 1
 
 
-# every escape sequence a terminal UI may print: CSI (private ones like `ESC[>0q` too), OSC
-# ended by BEL or ST (hyperlinks), charset selection, and two-byte ones (`ESC 7`, `ESC 8`)
-_ANSI = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
-                   r"|\x1b[()*+#].|\x1b[^\[\]()*+#]")
+# one escape sequence: CSI (with its parameters and final byte), OSC ended by BEL or ST
+# (hyperlinks), charset selection, or a two-byte one (`ESC 7`, `ESC 8`)
+_ESC = re.compile(r"\x1b\[([0-?]*)[ -/]*([@-~])|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)"
+                  r"|\x1b[()*+#].|\x1b(.)")
 _TOKEN_CHARS = set("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_")
 
 
@@ -98,33 +98,100 @@ def run_capturing(argv):
     return code, out.decode(errors="replace")
 
 
-def find_token(text):
-    """The last sk-ant- token in terminal output. The terminal may have wrapped it over
-    several lines, so a line break (with padding before it and indentation after it)
-    doesn't end it; a blank line does."""
-    text = _ANSI.sub("", text).replace("\r", "")
-    start = text.rfind("sk-ant-")
-    if start < 0:
-        return None
-    token, i = [], start
+def screen(text):
+    """What `text` (a terminal UI's output) leaves on the screen, as lines. Terminal UIs
+    draw with cursor moves (Claude Code writes `ESC[7G` where a space goes), so stripping
+    the escape sequences isn't enough: this replays the moves that matter."""
+    rows, r, c, saved = [[]], 0, 0, (0, 0)
+
+    def put(ch):
+        row = rows[r]
+        row.extend(" " * (c + 1 - len(row)))
+        row[c] = ch
+
+    i = 0
     while i < len(text):
-        c = text[i]
-        if c in _TOKEN_CHARS:
-            token.append(c)
+        m = _ESC.match(text, i) if text[i] == "\x1b" else None
+        if m:
+            i = m.end()
+            params, final, two = m.group(1), m.group(2), m.group(3)
+            if final:
+                if params.startswith(("?", ">", "<", "=")):
+                    continue                            # modes and queries: no drawing
+                nums = [int(x) if x.isdigit() else 0 for x in params.split(";")] if params else []
+                n = max(nums[0], 1) if nums else 1
+                if final == "G":
+                    c = n - 1
+                elif final == "C":
+                    c += n
+                elif final == "D":
+                    c = max(c - n, 0)
+                elif final in "AF":
+                    r, c = max(r - n, 0), (0 if final == "F" else c)
+                elif final in "BE":
+                    r, c = r + n, (0 if final == "E" else c)
+                elif final in "Hf":
+                    r = (nums[0] if nums else 1) - 1
+                    c = (nums[1] if len(nums) > 1 and nums[1] else 1) - 1
+                elif final == "K":
+                    mode = nums[0] if nums else 0
+                    if mode == 0:
+                        del rows[r][c:]
+                    else:
+                        rows[r] = [] if mode == 2 else [" "] * min(c + 1, len(rows[r]))
+                elif final == "J" and nums and nums[0] in (2, 3):
+                    rows, r, c = [[]], 0, 0
+                elif final == "s":
+                    saved = (r, c)
+                elif final == "u":
+                    r, c = saved
+            elif two == "7":
+                saved = (r, c)
+            elif two == "8":
+                r, c = saved
+        else:
+            ch = text[i]
             i += 1
-            continue
-        j = i
-        while j < len(text) and text[j] in " \t":
-            j += 1
-        if j < len(text) and text[j] == "\n":
-            j += 1
-            while j < len(text) and text[j] in " \t":
-                j += 1
-            if j < len(text) and text[j] in _TOKEN_CHARS:
-                i = j          # the token continues on the next line
-                continue
-        break
-    return "".join(token)
+            if ch == "\r":
+                c = 0
+            elif ch == "\n":
+                r += 1
+            elif ch == "\b":
+                c = max(c - 1, 0)
+            elif ch == "\t":
+                c = (c // 8 + 1) * 8
+            elif ch >= " ":
+                put(ch)
+                c += 1
+        while len(rows) <= r:
+            rows.append([])
+    return ["".join(row).rstrip() for row in rows]
+
+
+def find_token(text):
+    """The last sk-ant- token on the screen `text` leaves. A long token may be wrapped over
+    several lines: a following line counts as more of it only if it is nothing but token
+    characters (so "Store this token securely." below it doesn't)."""
+    lines = screen(text)
+    for n in range(len(lines) - 1, -1, -1):
+        start = lines[n].rfind("sk-ant-")
+        if start >= 0:
+            break
+    else:
+        return None
+    line = lines[n][start:]
+    end = 0
+    while end < len(line) and line[end] in _TOKEN_CHARS:
+        end += 1
+    token = line[:end]
+    if line[end:].strip():                  # more text right after it: not wrapped
+        return token
+    for nxt in lines[n + 1:]:
+        part = nxt.strip()
+        if not part or not set(part) <= _TOKEN_CHARS:
+            break
+        token += part
+    return token
 
 
 def looks_like_token(t):

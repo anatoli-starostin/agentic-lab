@@ -141,6 +141,19 @@ def test_client_finds_token_in_a_tui_rendering():
     assert client.find_token("  " + tok + " export X=1") == tok                 # a space ends it
 
 
+def test_client_stops_at_the_end_of_the_token():
+    """A token on one row, then text drawn with cursor moves for spaces: the text isn't
+    more of the token (it was once read as "...AAAStorethistokensecurely")."""
+    client = _load_client()
+    tok = "sk-ant-oat01-" + "U4Gc-Qaop_" * 9 + "AAAAAA"
+    out = ("\x1b[2G\x1b[1mYour\x1b[7GOAuth\x1b[13Gtoken:\r\r\n\r\r\n\x1b[2G" + tok + "\r\r\n"
+           "\x1b[2G\r\r\n\x1b[2GStore\x1b[8Gthis\x1b[13Gtoken\x1b[19Gsecurely.\r\r\n")
+    assert client.find_token(out) == tok
+    tight = "\x1b[2G" + tok + "\r\r\n\x1b[2GStore\x1b[8Gthis\r\r\n"          # no blank row
+    assert client.find_token(tight) == tok
+    assert client.screen("\x1b[2GStore\x1b[8Gthis\x1b[13Gtoken") == [" Store this token"]
+
+
 def test_intake_verifies_claude_tokens(tmp_path):
     def verify(value):
         if value != TOKEN:
