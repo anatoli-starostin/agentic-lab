@@ -74,7 +74,7 @@ def test_grant_str():
 @pytest.mark.parametrize("m", [
     {"domain": "*.huggingface.co"}, {"domain": "localhost.example:8080"},
     {"write": "/data/shared"}, {"write": "~/datasets"},
-    {"tool": "WebSearch"}, {"tool": "mcp__wandb__get_*"},
+    {"tool": "WebSearch"}, {"tool": "mcp__tracker__get_*"},
     {"domain": "arxiv.org", "reason": "papers"},
 ])
 def test_valid_grants(m):

@@ -112,7 +112,7 @@ How you work here:
 - Report progress with the report_progress tool at meaningful steps (a few per task, not
   every command).
 - When the task is done (or can't be done), call finish_task exactly once: a summary for
-  the human, and the artifacts (file paths, commit ids, W&B run URLs) worth keeping.
+  the human, and the artifacts (file paths, commit ids, URLs) worth keeping.
 """
 
 

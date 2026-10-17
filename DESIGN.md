@@ -33,12 +33,14 @@ deployment's own `lab.yaml` and secret files, which never enter this repo.
   host walks the human admin through the first setup, and afterwards helps with every
   maintenance task: adding or removing agents, hosts and humans, rotating tokens,
   diagnosing problems (§11a).
-- **Portable.** No hard-coded hosts or providers. Nebius, Slack, W&B and Tailscale come
-  first, behind small interfaces.
+- **Portable.** No hard-coded hosts or providers. Nebius, Slack and Tailscale come
+  first, behind small interfaces. Project tools (experiment trackers, data stores...) are
+  extensions a lab adds, not part of the framework.
 
 **Non-goals (for now)**
 - A general multi-tenant SaaS. One lab = one deployment = one tailnet.
-- Replacing W&B or git. Experiment tracking stays in W&B, and code and results stay in git.
+- Replacing a project's own tools: code and results stay in git, experiment tracking in
+  whatever the project uses.
 - **Per-token (API) billing.** In this version every agent runs on a human member's Claude
   seat, and nothing is billed per token.
 - Agents that approve each other. There is no agent-to-agent authority over boundary crossings.
@@ -48,7 +50,6 @@ deployment's own `lab.yaml` and secret files, which never enter this repo.
 ## 2. Prerequisites
 
 - A **cloud account** with balance (Nebius first) for GPU workers and CPU manager VMs.
-- A **W&B** account (or a self-hosted server) for experiment tracking.
 - A **Slack workspace** (for teams). Each manager is its own Slack app and bot user.
 - **Tailscale.** Every host is on one tailnet. No service listens on a public interface.
 - An **always-on box** for the secretary (a small NUC or similar; no GPU needed).
@@ -76,7 +77,7 @@ deployment's own `lab.yaml` and secret files, which never enter this repo.
      │ GPU, sbx   │ │ GPU, sbx   │  │ GPU, sbx   │└── approval requests
      │ worker svc │ │ worker svc │  │ worker svc │    (worker → broker)
      └────────────┘ └────────────┘  └────────────┘
-                   all hosts on one tailnet · W&B · git
+                   all hosts on one tailnet · git
 ```
 
 - **Secretary**: always-on, on-prem, holds the cloud power keys. One per lab.
@@ -100,16 +101,16 @@ Cheap and always on. **Mostly deterministic code. The LLM only handles conversat
 | Check that agent services came back after a VM restart, and restart them if not | Approve anything for anyone |
 | Check each credential's **expiry date** in `lab.yaml` and warn ahead of time | Read secret *values* (it only needs expiry dates, plus its own cloud key) |
 | Restart preempted manager VMs | |
-| Answer simple analytical questions: "did exp042 finish?", "compare A vs B in W&B" | |
+| Answer simple analytical questions: "did exp042 finish?", "compare tasks A and B" | |
 | Politely redirect research tasks to a manager | |
 
 - **Scheduler and checks** run as a systemd service and use no LLM tokens. Each check is a
   small plugin (`vm_state`, `agent_health`, `token_expiry`, `cost_burn`, `disk`) that writes
   into one `state.json`.
 - **Web UI**: the secretary hosts it (§9).
-- **Chat**: a small model (Haiku-class) with **read-only** tools over `state.json`, `lab.yaml`
-  and W&B, plus the power tools. Any team member (or their manager) may power VMs on or off
-  without an approval. There are no spend limits. Every power action is logged and shown in
+- **Chat**: a small model (Haiku-class) with **read-only** tools over `state.json` and
+  `lab.yaml`, plus the power tools. Any team member may power VMs on, or off when idle,
+  without an approval (a busy machine: admins only). There are no spend limits. Every power action is logged and shown in
   the web UI with who asked for it.
 - **Who watches the secretary?** Every manager probes the secretary's health endpoint and
   tells its human if the secretary stops answering. The secretary runs under systemd with
@@ -134,8 +135,8 @@ Tied to one GPU VM. Uses tokens freely. Humans don't talk to it directly.
     console, as the agent's own user, with its own sandbox settings. The admin talks to the
     agent directly; permission prompts appear right there at the console. On exit, the
     service starts again (and resumes any task it was on).
-- Reports progress (and W&B links) back through MCP. **There is no fixed results contract**:
-  tasks vary, so a result may be a text report, a git commit, a W&B run, files, or any mix of
+- Reports progress (and links to results) back through MCP. **There is no fixed results contract**:
+  tasks vary, so a result may be a text report, a git commit, a link, files, or any mix of
   these. The worker follows the project's conventions.
 
 ### 4.3 Manager — "the team member humans talk to"
@@ -178,8 +179,8 @@ token listed in `lab.yaml`. A dedicated worker rejects managers other than its o
 | Tool | Purpose |
 |---|---|
 | `submit_task(spec) -> task_id` | Queue a task (FIFO). `spec` = instruction, project, requester (human), optional deadline. |
-| `task_status(task_id)` | `queued \| running \| awaiting_approval \| done \| failed \| cancelled`, plus last progress line and W&B links. |
-| `task_result(task_id)` | Final report (text and artifact pointers: git commit, W&B run, files). |
+| `task_status(task_id)` | `queued \| running \| awaiting_approval \| done \| failed \| cancelled`, plus last progress line. |
+| `task_result(task_id)` | Final report (text and artifact pointers: git commit, links, files). |
 | `cancel_task(task_id)` | Cooperative cancel, then kill after a grace period. |
 | `list_tasks(filter)` | Queue overview. |
 | `pending_approvals()` | Read-only view of what the worker is blocked on (for context only; see §6.3). |
@@ -419,7 +420,7 @@ with no public exposure.
 - **Live overview**: hosts (up/down, GPU use, cost per hour), agents (alive, model, current
   task), each worker's queue.
 - **Tasks**: who asked, which manager and worker, status, live progress, results (report,
-  commits, W&B links).
+  commits, links).
 - **Approvals**: pending requests (who is being asked, on which channel, time left) and the
   full history (who approved or denied what, and when).
 - **Guardrails**: each agent's effective policy and the history of changes (who, why, diff).
@@ -606,7 +607,7 @@ after M3–M4 as needed.
 | 2026-10-17 | Secretary runs on an on-prem always-on box. Every other host is a cloud VM, as close to real use as possible. |
 | 2026-10-17 | Repo is private now and public later, so it stays generic. MIT license. |
 | 2026-10-17 | Shared workers: **first come, first served**. No quotas or priorities. |
-| 2026-10-17 | **No fixed results contract**: tasks vary, so a result is whatever fits (report, commit, W&B run, files). |
+| 2026-10-17 | **No fixed results contract**: tasks vary, so a result is whatever fits (report, commit, link, files). |
 | 2026-10-17 | **Agent SDK runtime** behind an `AgentRunner` interface. Humans watch agents in the web UI and debug with `lab debug <agent>` (real `claude --resume` on the agent's session). A tmux runner is only a fallback. |
 | 2026-10-17 | **Every agent is attached to a human member in terms of tokens** (runs on their seat). Access is set separately. The secretary is attached to the lab owner. |
 | 2026-10-17 | **One simple sandbox model for all agents** (§6.1): inside = no internet, tailnet, working folder + tmp, auto-allowed; outside = internet and writes need permission, reads free. Enforced by Claude Code's built-in sandbox, with no command parsing. **Grants** (once / for a while / standing) customise it on the fly (§6.2). |

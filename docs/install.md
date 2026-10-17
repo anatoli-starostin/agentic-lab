@@ -15,7 +15,7 @@ member. Other members join afterwards, one at a time ("Add a member" below).
 **Accounts the admin needs:** a Tailscale tailnet; a Nebius account with GPU quota; a
 Slack workspace where they can create apps; a Claude seat (Team or Max) for each member
 whose agents will run; a GitHub account (or organisation) for the lab's private
-configuration repository; optionally W&B.
+configuration repository.
 
 **Two repositories:**
 - **The framework** (this repository): code, read-only for the lab. Never edited on the
