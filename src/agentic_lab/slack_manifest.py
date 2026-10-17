@@ -52,10 +52,10 @@ def for_agent(lab, agent_id):
         raise ValueError(f"{agent_id} is a {role}: only managers and the secretary use Slack")
     what = ("a member's team member: delegates work to the lab's workers" if role == "manager"
             else "keeps the lab running: machines, agents, tokens, status")
-    if role == "secretary":         # its Home tab: the lab at a glance
+    if role == "secretary":         # its Home tab: the lab at a glance; buttons (deploy)
         return manifest(lab.display_name(agent_id), f"Agentic Lab {lab.name}: {what}",
                         CONVERSATIONAL_SCOPES, CONVERSATIONAL_EVENTS + ["app_home_opened"],
-                        home_tab=True)
+                        interactive=True, home_tab=True)
     return manifest(lab.display_name(agent_id), f"Agentic Lab {lab.name}: {what}",
                     CONVERSATIONAL_SCOPES, CONVERSATIONAL_EVENTS)
 

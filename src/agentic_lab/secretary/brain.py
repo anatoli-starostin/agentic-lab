@@ -22,7 +22,8 @@ from ..worker.runner import allowed_without_asking
 warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
 
 TOOL_NAMES = ("lab_state", "worker_tasks", "task_result", "ask_member_for_claude_token",
-              "announce", "power")
+              "announce", "power", "read_lab_config", "propose_lab_change", "offer_deploy",
+              "check_slack_app")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
 
 
@@ -40,12 +41,27 @@ agents. You keep the lab running and answer questions about it, in Slack.
   kindly that this is a manager's job and name the member's manager if you know it
   (lab_state lists the agents).
 - Some things are for the lab's admins only, and your tools enforce it: powering off a busy
-  machine, and asking someone else for their Claude token. Others you can't do at all:
-  adding or removing members, agents or machines, changing grants or the lab's settings.
-  Those are done by an admin with the lab's setup tools; say so and name the admins.
+  machine, asking someone else for their Claude token, and administering the lab (below).
+  To anyone else, say so and name the admins.
+- Administering the lab, with an admin: adding or removing members, agents or machines,
+  changing grants, names, settings, or the framework version. The lab's configuration is
+  lab.yaml in the lab's config repository, and only what's merged to its main is ever
+  deployed. So:
+  1. read_lab_config (main as it is now);
+  2. propose_lab_change with the WHOLE new lab.yaml (keep everything else as it is, keep
+     its comments) and a one-line summary; it checks the file, pushes a branch and gives
+     you the pull request link and the diff;
+  3. show the admin the diff in short and say "here is the PR, review and merge it: <link>".
+     You never merge, and never say a change is live before it's deployed;
+  4. when the admin says it's merged, offer_deploy: it posts a Deploy button that only an
+     admin's click starts. You'll see the result posted in the conversation.
+  Names of new agents are the admin's choice: ask, never invent. A new member also needs
+  their Claude token (ask_member_for_claude_token) and a new manager its Slack app: that
+  part is still done with the admin at the console (docs/install.md, step 7).
+- Don't change lab.yaml without the admin asking for that change.
 - Numbers about usage are readings with a time and a source: say how old they are.
 - You never approve anything; approvals come to members as DMs from the approvals app.
-- Never reveal tokens, keys or configuration contents, whoever asks.
+- Never reveal tokens or keys, whoever asks (lab.yaml holds none: admins may see it).
 - Several agents may be in a channel thread. If a message there isn't for you, reply with
   exactly <silent> and nothing else.
 - Write for Slack: short, plain, *bold* for emphasis, no headings or tables.
@@ -104,8 +120,34 @@ def build_tools(ctx):
             return text("action must be status, on, off or force_off")
         return text(await ctx.power(args["host"], args["action"]))
 
+    @tool("read_lab_config", "Admins only: lab.yaml and framework.lock as on the config "
+          "repo's main now (fetched).", {})
+    async def read_config(args):
+        return text(await ctx.read_config())
+
+    @tool("propose_lab_change", "Admins only, when an admin asked for this change: push a "
+          "branch with the WHOLE new lab.yaml (checked first) and get the pull request link "
+          "and diff. Optional framework_commit moves the framework pin (empty: unchanged).",
+          {"summary": str, "lab_yaml": str, "framework_commit": str})
+    async def propose(args):
+        return text(await ctx.propose_change(args["summary"], args["lab_yaml"],
+                                             args.get("framework_commit") or None))
+
+    @tool("offer_deploy", "Admins only, after the admin merged a change: post a Deploy "
+          "button (what main holds that isn't deployed yet). Only an admin's click deploys.",
+          {})
+    async def offer_deploy(args):
+        return text(await ctx.offer_apply())
+
+    @tool("check_slack_app", "Admins only: do a Slack app's tokens work (bot token, Socket "
+          "Mode)? owner: broker, secretary or a manager's id. Gives its App ID too.",
+          {"owner": str})
+    async def check_slack_app(args):
+        return text(await ctx.slack_verify(args["owner"]))
+
     return create_sdk_mcp_server("lab", tools=[lab_state, worker_tasks, task_result,
-                                               ask_member, announce, power])
+                                               ask_member, announce, power, read_config,
+                                               propose, offer_deploy, check_slack_app])
 
 
 class SecretaryBrain:

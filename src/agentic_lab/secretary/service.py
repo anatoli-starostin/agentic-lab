@@ -28,6 +28,7 @@ from ..secrets.intake import Intake, message
 from ..slackio import SILENT, SlackIO
 from .brain import SecretaryBrain, expiry_notices
 from ..eventlog import EventLog
+from .. import selfadmin as SA
 from ..worker.usage import UsageLog, probe_loop, probe_now
 from . import home as H
 from . import power as P
@@ -67,15 +68,173 @@ class Secretary:
         self.intake_url = f"http://{name}:{INTAKE_PORT}"
         self.intake = Intake(os.path.expanduser(STATE))     # the same store the intake serves
 
-    def ctx(self, human=None):
-        """The tools' view of the lab, for one turn on behalf of `human` (a lab member)."""
+    def ctx(self, human=None, conv=None):
+        """The tools' view of the lab, for one turn on behalf of `human` (a lab member), in
+        conversation `conv` (where a deploy button goes)."""
         who = (self.lab.humans.get(human) or {}).get("name") or human
         return SimpleNamespace(
             state=lambda: self.latest["state"], workers=self.workers,
             request_token=lambda member: self.request_token(member, asked_by=human),
             announce=self.announce, save=self.state.save,
             power=lambda host, action: self.power(host, action, f"asked by {who} in Slack",
-                                                  asked_by=human))
+                                                  asked_by=human),
+            read_config=lambda: self.read_config(asked_by=human),
+            propose_change=lambda summary, lab_yaml, framework_commit=None:
+                self.propose_change(summary, lab_yaml, framework_commit, asked_by=human),
+            offer_apply=lambda: self.offer_apply(asked_by=human, conv=conv),
+            slack_verify=lambda owner: self.slack_verify(owner, asked_by=human))
+
+    # ── administering the lab from Slack (selfadmin.py) ──────────────────────
+
+    def _admin_only(self, human, what):
+        if not self.is_admin(human):
+            return f"refused: only an admin ({self.admins()}) may {what}."
+        return None
+
+    def config_copy(self):
+        sa = SA.applied(SA.APPLY_MAIN)          # where lab.yaml sits in the config repo
+        return SA.ConfigCopy(sa.get("lab_rel") or "lab.yaml", author=(
+            f"{self.lab.display_name(sec_id_of(self.lab))} (lab secretary)",
+            f"{self.lab.unix_user(sec_id_of(self.lab))}@agentic-lab"))
+
+    async def read_config(self, asked_by=None):
+        refused = self._admin_only(asked_by, "read the lab's configuration")
+        if refused:
+            return refused
+        try:
+            m = await asyncio.to_thread(self.config_copy().read_main)
+        except SA.AdminError as e:
+            return f"couldn't read the config repo: {e}"
+        return (f"config repo main at {m['commit'][:10]}\n--- lab.yaml ---\n{m['lab.yaml']}"
+                f"\n--- framework.lock ---\n{m.get('framework.lock') or '(none)'}")
+
+    async def propose_change(self, summary, lab_yaml, framework_commit=None, asked_by=None):
+        refused = self._admin_only(asked_by, "change the lab's configuration")
+        if refused:
+            return refused
+        try:
+            r = await asyncio.to_thread(self.config_copy().propose, summary, lab_yaml,
+                                        framework_commit)
+        except SA.AdminError as e:
+            return f"not proposed: {e}"
+        if self.events is not None:
+            self.events.add("note", f"proposed {r['branch']}: {summary}", member=asked_by)
+        return (f"pushed branch {r['branch']}. PR link (give it to the admin to review and "
+                f"merge; you never merge): {r['link'] or '(not GitHub: open it by hand)'}\n"
+                f"diff:\n{r['diff'][:6000]}")
+
+    async def offer_apply(self, asked_by=None, conv=None):
+        """Post a 'Deploy' button for main's current commit. Nothing is deployed until an
+        admin clicks it (checked again on the click)."""
+        refused = self._admin_only(asked_by, "deploy the lab's configuration")
+        if refused:
+            return refused
+        if self.slack is None or conv is None:
+            return "deploying needs Slack (a button an admin clicks); from the console: sudo lab apply"
+        current = SA.applied()
+        try:
+            main, todo = await asyncio.to_thread(self.config_copy().not_applied,
+                                                 current.get("config_commit"))
+        except SA.AdminError as e:
+            return f"couldn't read the config repo: {e}"
+        if not todo:
+            return f"nothing to deploy: the hosts already run main ({main[:10]})"
+        text = (f"*Deploy the lab's configuration?* main at `{main[:10]}`; not deployed yet:\n"
+                + "\n".join(f"• {line}" for line in todo[:15])
+                + "\nServices restart; it takes a few minutes.")
+        blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": text[:2900]}},
+                  {"type": "actions", "elements": [
+                      {"type": "button", "style": "primary", "action_id": "lab_apply",
+                       "text": {"type": "plain_text", "text": "Deploy"}, "value": main},
+                      {"type": "button", "action_id": "lab_apply_cancel",
+                       "text": {"type": "plain_text", "text": "Not now"}, "value": main}]},
+                  {"type": "context", "elements": [{"type": "mrkdwn", "text":
+                      f"Only an admin's click counts ({self.admins()})."}]}]
+        await self.slack.post_blocks(conv.channel, conv.thread_ts, "Deploy the lab?", blocks)
+        return ("posted a Deploy button in this conversation. Tell the admin to click it; "
+                "you can't deploy by yourself.")
+
+    async def on_action(self, slack_user, human, action_id, value, where):
+        if action_id not in ("lab_apply", "lab_apply_cancel"):
+            return
+
+        async def say(text):
+            await self.slack.web.chat_update(channel=where["channel"], ts=where["ts"],
+                                             text=text, blocks=[{"type": "section", "text": {
+                                                 "type": "mrkdwn", "text": text}}])
+        if not self.is_admin(human):
+            await self.slack.post(where["channel"], where.get("thread_ts") or where["ts"],
+                                  f"<@{slack_user}> only an admin ({self.admins()}) may "
+                                  "deploy; the button is still there for them.")
+            return
+        who = (self.lab.humans.get(human) or {}).get("name") or human
+        if action_id == "lab_apply_cancel":
+            await say(f"Not deployed ({who} said not now).")
+            return
+        try:
+            main = (await asyncio.to_thread(self.config_copy().read_main))["commit"]
+            if main != value:
+                await say(f"main moved to `{main[:10]}` since this button was posted: ask "
+                          "me again to deploy, so you see what's in it.")
+                return
+            log_path = await asyncio.to_thread(SA.start_apply)
+        except SA.AdminError as e:
+            await say(f"Couldn't deploy: {e}")
+            return
+        await say(f":rocket: Deploying `{value[:10]}` (started by {who}). I'll post the "
+                  "result here.")
+        if self.events is not None:
+            self.events.add("note", f"deploy {value[:10]} started by {human}: {log_path}")
+        self._pending_applies(add={"log": log_path, "channel": where["channel"],
+                                   "thread_ts": where.get("thread_ts") or where["ts"],
+                                   "commit": value, "by": who})
+
+    def _pending_applies(self, add=None, remove=None):
+        path = os.path.expanduser(f"{STATE}/pending-applies.json")
+        try:
+            with open(path) as f:
+                items = json.load(f)
+        except (OSError, ValueError):
+            items = []
+        if add:
+            items.append(add)
+        if remove:
+            items = [i for i in items if i["log"] != remove]
+        if add or remove:
+            with open(path, "w") as f:
+                json.dump(items, f)
+        return items
+
+    async def check_applies(self):
+        """Post the result of each deployment that finished (also after this service was
+        restarted by that very deployment)."""
+        for item in self._pending_applies():
+            r = SA.apply_result(item["log"])
+            if r is None:
+                continue
+            ok, tail = r
+            if self.slack is not None:
+                await self.slack.post(item["channel"], item["thread_ts"],
+                                      (":white_check_mark: Deployed" if ok else ":x: Deploy FAILED")
+                                      + f" `{item['commit'][:10]}` (started by {item['by']}).\n"
+                                      f"```{tail[-1200:]}```")
+            if ok:
+                await self.announce(f":rocket: The lab now runs config `{item['commit'][:10]}` "
+                                    f"(deployed by {item['by']}).")
+            self._pending_applies(remove=item["log"])
+
+    async def slack_verify(self, owner, asked_by=None):
+        refused = self._admin_only(asked_by, "check the lab's Slack apps")
+        if refused:
+            return refused
+        from ..slack_verify import VerifyError, verify
+        try:
+            r = await asyncio.to_thread(verify, owner if owner.startswith("service:")
+                                        else f"service:{owner}")
+        except (VerifyError, OSError) as e:
+            return f"check failed: {e}"
+        return (f"bot token works: app {r['name']!r} in {r['team']!r}, App ID {r['app_id']}; "
+                f"app-level token: {'ok (Socket Mode)' if r['socket_ok'] else r['socket_error']}")
 
     def is_admin(self, human):
         return bool((self.lab.humans.get(human) or {}).get("admin"))
@@ -143,7 +302,7 @@ class Secretary:
                                      f"you, otherwise reply exactly {SILENT}.)"]))
         async with lock:
             try:
-                reply = await self.brain.turn(self.ctx(msg.human), conv, prompt)
+                reply = await self.brain.turn(self.ctx(msg.human, conv), conv, prompt)
             except Exception as e:
                 log.exception("secretary turn failed")
                 reply = f"Sorry, something went wrong on my side ({type(e).__name__})."
@@ -324,7 +483,7 @@ async def serve(lab_path, host, port):
         sec.slack = SlackIO(slack_env["SLACK_BOT_TOKEN"], slack_env["SLACK_APP_TOKEN"],
                             members, lambda human: (True, ""), sec.on_message,
                             os.path.join(workdir, "inbox"), engaged=sec.state.engaged,
-                            on_home=sec.publish_home)
+                            on_home=sec.publish_home, on_action=sec.on_action)
         await sec.slack.start()
 
     async def notice_loop():
@@ -371,8 +530,21 @@ async def serve(lab_path, host, port):
                                            host=host, port=port, log_level="warning"))
     log.info("secretary: watching %d worker(s), slack=%s, web UI on http://%s:%d/",
              len(workers.known()), sec.slack is not None, host, port)
+    async def apply_watch():
+        """Deployments started from Slack: post each one's result when it finishes."""
+        while not stop.is_set():
+            try:
+                await sec.check_applies()
+            except Exception:
+                log.exception("checking deployments failed")
+            try:
+                await asyncio.wait_for(stop.wait(), 10)
+            except asyncio.TimeoutError:
+                pass
+
     tasks = [asyncio.create_task(collector()), asyncio.create_task(notice_loop()),
-             asyncio.create_task(probe_loop(usage, seat, stop))]
+             asyncio.create_task(probe_loop(usage, seat, stop)),
+             asyncio.create_task(apply_watch())]
     await server.serve()
     stop.set()
     if sec.slack is not None:

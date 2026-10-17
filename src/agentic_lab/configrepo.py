@@ -11,7 +11,8 @@ commit, and every host records which one (/etc/agentic-lab/applied.yaml). Uncomm
 and branches can be previewed (`lab plan --working-tree`) but not deployed, except with
 `lab apply --unreviewed` (break glass: recorded as such).
 
-git runs as the admin (SUDO_USER) under sudo: their working copy, their deploy key.
+git runs as the admin (SUDO_USER) under sudo: their working copy, their deploy key; for
+`lab apply-main` (from Slack), as the secretary (LAB_GIT_USER), with its own clone and key.
 """
 import datetime as dt
 import os
@@ -29,8 +30,8 @@ class ConfigError(RuntimeError):
 
 
 def git(repo, *args, timeout=60):
-    as_admin = (["sudo", "-u", os.environ["SUDO_USER"], "-H"]
-                if os.geteuid() == 0 and os.environ.get("SUDO_USER") else [])
+    user = os.environ.get("LAB_GIT_USER") or os.environ.get("SUDO_USER")
+    as_admin = ["sudo", "-u", user, "-H"] if os.geteuid() == 0 and user else []
     r = subprocess.run([*as_admin, "git", "-C", repo, *args], capture_output=True, text=True,
                        timeout=timeout)
     if r.returncode:

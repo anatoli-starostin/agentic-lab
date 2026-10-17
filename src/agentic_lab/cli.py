@@ -246,11 +246,32 @@ def cmd_apply(args):
                 raise CR.ConfigError(f"no framework.lock on {CR.BRANCH}: `lab apply "
                                      "--update-framework`, then a PR")
             print(lock.check(lab_path, source) + "\n")
-        record = CR.applied_record(info, lock.current(source)[1], admin)
-        lab, tokens, plans = plan_all(lab_path, hosts=args.host or None)
+        try:                        # what the secretary needs to deploy main itself
+            top, rel = CR.repo_of(args.lab)
+            self_admin = {"config_url": CR.git(top, "remote", "get-url", "origin").strip(),
+                          "lab_rel": rel, "framework_source": os.path.abspath(source),
+                          "framework_owner": admin}
+        except CR.ConfigError:
+            self_admin = None
     except (ApplyError, lock.LockError, CR.ConfigError) as e:
         sys.exit(f"lab apply: {e}")
-    here = this_host(lab)
+    return deploy(lab_path, info, source, admin, args.host, args.allow_missing, self_admin)
+
+
+def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_admin=None):
+    """Ship `lab_path` (already the reviewed one) and framework `source` to the hosts."""
+    import os
+
+    from . import configrepo as CR
+    from . import lock
+    from .apply import ApplyError, describe, has_work, plan_all, run_bundle, secretary_host
+    from .doctor import this_host
+    try:
+        record = CR.applied_record(info, lock.current(source)[1], admin)
+        lab, tokens, plans = plan_all(lab_path, hosts=hosts or None)
+    except (ApplyError, lock.LockError) as e:
+        sys.exit(f"lab apply: {e}")
+    here, sec_host = this_host(lab), secretary_host(lab)[0]
     tokens.save()                  # generated tokens are kept before anything uses them
     failed = 0
     for p in plans:
@@ -258,15 +279,85 @@ def cmd_apply(args):
             print(f"host {p['host']}: nothing to install (no agents there)\n")
             continue
         print(describe(p))
-        if p["missing"] and not args.allow_missing:
+        if p["missing"] and not allow_missing:
             print("  skipped: secrets missing (or pass --allow-missing)\n")
             failed += 1
             continue
         p["lab_path"], p["source"], p["applied"] = os.path.abspath(lab_path), source, record
+        if p["host"] == sec_host and self_admin:
+            p["self_admin"] = {**self_admin, "config_owner": lab.unix_user(
+                secretary_host(lab)[1])}
         rc = run_bundle(p, local=(p["host"] == here), admin=admin)
         print(f"  -> {'done' if rc == 0 else f'FAILED (exit {rc})'}\n")
         failed += rc != 0
     return 1 if failed else 0
+
+
+def cmd_apply_main(args):
+    """The secretary's one root command (sudoers): deploy the config repo's main. Starts
+    the deployment as its own systemd unit (the secretary's service restarts during it)
+    and prints the log's path."""
+    import datetime as dt
+    import os
+    import subprocess
+
+    import yaml
+
+    from . import configrepo as CR
+    from . import lock
+    from .selfadmin import APPLY_MAIN, LOG_DIR, RESULT
+    if os.geteuid() != 0:
+        sys.exit("lab apply-main: run it with sudo")
+    try:
+        with open(APPLY_MAIN) as f:
+            cfg = yaml.safe_load(f) or {}
+    except OSError:
+        sys.exit(f"lab apply-main: no {APPLY_MAIN} (run sudo lab apply once from the console)")
+    if not args.run:
+        os.makedirs(LOG_DIR, mode=0o755, exist_ok=True)
+        stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
+        log = os.path.join(LOG_DIR, f"apply-{stamp}.log")
+        open(log, "w").close()
+        os.chmod(log, 0o644)
+        subprocess.run(["systemd-run", f"--unit=lab-apply-{stamp}", "--collect", "--quiet",
+                        f"--property=StandardOutput=append:{log}",
+                        f"--property=StandardError=append:{log}",
+                        "/usr/local/bin/lab", "apply-main", "--run"], check=True)
+        print(f"started; log: {log}")
+        return 0
+
+    def done(ok):
+        print(f"{RESULT} {'ok' if ok else 'failed'}", flush=True)
+        return 0 if ok else 1
+    os.environ["LAB_GIT_USER"] = cfg["config_owner"]       # its clone, its deploy key
+    config = os.path.join(os.path.expanduser(f"~{cfg['config_owner']}"),
+                          ".local/state/agentic-lab/config-repo", cfg.get("lab_rel", "lab.yaml"))
+    try:
+        lab_path, info = CR.fetch_main(config)
+        print(f"config: {info['config_commit'][:10]} ({CR.BRANCH})", flush=True)
+        pin = (lock.read(lab_path) or {}).get("commit")
+        if not pin:
+            raise CR.ConfigError(f"no framework.lock on {CR.BRANCH}")
+        src, owner = cfg["framework_source"], cfg["framework_owner"]
+        as_owner = ["sudo", "-u", owner, "-H", "git", "-C", src]
+        head = subprocess.run([*as_owner, "rev-parse", "HEAD"], capture_output=True,
+                              text=True).stdout.strip()
+        if head != pin:                 # move the framework checkout to the pinned commit
+            subprocess.run([*as_owner, "fetch", "--quiet", "origin"], check=True)
+            subprocess.run([*as_owner, "checkout", "--quiet", "--detach", pin], check=True)
+            print(f"framework checkout moved to {pin[:10]}", flush=True)
+        print(lock.check(lab_path, src) + "\n", flush=True)
+    except (CR.ConfigError, lock.LockError, subprocess.CalledProcessError, KeyError) as e:
+        print(f"lab apply-main: {e}", flush=True)
+        return done(False)
+    try:
+        rc = deploy(lab_path, {**info, "via": "slack"}, src, owner, allow_missing=True,
+                    self_admin={k: cfg[k] for k in ("config_url", "lab_rel", "framework_source",
+                                                    "framework_owner")})
+    except SystemExit as e:
+        print(e, flush=True)
+        rc = 1
+    return done(rc == 0)
 
 
 def cmd_secretary_serve(args):
@@ -499,6 +590,10 @@ def main(argv=None):
                      help="break glass: deploy the working copy instead of main (recorded "
                      "on every host as unreviewed)")
     ap_.set_defaults(fn=cmd_apply)
+    am = sub.add_parser("apply-main", help="deploy the config repo's main (the secretary's "
+                        "one sudo command; started from Slack by an admin)")
+    am.add_argument("--run", action="store_true", help=argparse.SUPPRESS)
+    am.set_defaults(fn=cmd_apply_main)
 
     lg = sub.add_parser("logs", help="an agent's event log (sudo, on its host)")
     lg.add_argument("agent")
