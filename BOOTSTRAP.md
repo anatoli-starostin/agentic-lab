@@ -8,7 +8,9 @@ and the admin approves each step at the console.
    it first), and work from there.
 2. **Read the `lab-admin` skill** (`.claude/skills/lab-admin/SKILL.md`): your ground rules
    and recipes. Claude Code also loads it automatically when started inside the repo.
-3. **Follow `docs/install.md` from step 4.** Steps 1–3 (this machine, Claude Code, the
+3. **Install the framework for the admin** in the checkout: `uv venv && uv pip install -e .`
+   (install `uv` first if it's missing), so `lab` is `~/agentic-lab/.venv/bin/lab`.
+4. **Follow `docs/install.md` from step 4.** Steps 1–3 (this machine, Claude Code, the
    first message) are done. Tell the admin the plan in a few lines first: what you'll do,
    what they will need to do themselves (create a Slack app, enter tokens, run commands in
    their terminal), and roughly how long it takes.
@@ -20,5 +22,5 @@ Ground rules, in short (the skill has the rest):
 - **Explain, then act.** Before a step that changes the system (sudo, new users,
   services), say what it does and why.
 - **`lab.yaml` is the source of truth**, kept in git. Every change goes through it.
-- If a step isn't built yet (marked ⏳ in `docs/install.md`), say so plainly and do the
-  manual equivalent with the admin, or stop there.
+- If a step fails, `sudo lab doctor` usually says why; fix and re-run (every step is
+  safe to repeat).

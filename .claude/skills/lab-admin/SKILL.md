@@ -28,41 +28,28 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 - **Re-running is safe.** The setup scripts are idempotent; when unsure of a host's state,
   re-run the step rather than guessing.
 
-## What exists today
+## The commands
 
 | Step | How |
 |---|---|
-| Validate `lab.yaml` | `lab check [path]` |
-| What would change on each host; missing secrets | `sudo lab --lab <lab.yaml> plan` (on the secretary host) |
-| Make the hosts match `lab.yaml` | `sudo lab --lab <lab.yaml> apply [--host H]` (secretary host; remote hosts over SSH as the admin, who needs passwordless sudo there). Run it from the repo checkout, so it ships the current code. |
-| Is this host healthy? | `sudo lab --lab /etc/agentic-lab/lab.yaml doctor` (on any host): every failure comes with a fix |
-| Ask a member for their Claude token | `sudo -u lab-secretary lab --lab <lab.yaml> secret request <member> claude-token --url http://<secretary>:8771` → send them the message |
-| Get a Slack app's tokens (pasted in a browser) | `sudo -u lab-secretary lab ... secret request service:<agent or broker> slack-app --url ...` → send the admin the link |
-| A Slack app manifest | `lab --lab <lab.yaml> slack-manifest <manager or secretary>` or `... slack-manifest approvals` |
-| Talk to a manager without Slack | `sudo -u lab-<id> lab --lab /etc/agentic-lab/lab.yaml manager ask <id> --as <member> "..."` |
+| Write the first `lab.yaml` | `lab init lab.yaml --name ... --admin ... --admin-name ... --slack-user ... [--manager ...] [--worker id@host ...]` |
+| Validate `lab.yaml` | `lab check lab.yaml` |
+| What would change; missing secrets | `sudo lab --lab lab.yaml plan` |
+| Make the hosts match `lab.yaml` | `sudo lab --lab lab.yaml apply [--host H]` (run from the repo checkout so it ships the current code; remote hosts over SSH as the admin, who needs passwordless sudo there) |
+| Is this host healthy? | `sudo lab --lab /etc/agentic-lab/lab.yaml doctor` (on any host; every failure says how to fix it) |
+| A member's Claude token | `sudo -u lab-secretary lab --lab lab.yaml secret request <member> claude-token --url http://<secretary>:8771` → give them the message |
+| A Slack app's tokens / a Nebius service account | `sudo -u lab-secretary lab ... secret request service:<broker\|secretary\|manager-id> slack-app --url ...` (or `service:secretary nebius-sa`) → a one-time link to paste in a browser |
+| A Slack app manifest | `lab --lab lab.yaml slack-manifest <manager or secretary>` / `slack-manifest approvals` |
+| VM power | after the admin's one Nebius browser login: `sudo lab --lab lab.yaml nebius connect --project <id> [--forget-admin]` |
+| Talk to an agent without Slack | `sudo -u lab-<id> lab --lab /etc/agentic-lab/lab.yaml manager ask <id> --as <member> "..."` (or `secretary ask --as <member> "..."`) |
+| An agent's log | web UI `/logs/<agent>` (admins), or `sudo lab --lab /etc/agentic-lab/lab.yaml logs <agent> [--hours N]` on its host |
 | Talk to an agent in the classic console | `sudo lab --lab /etc/agentic-lab/lab.yaml debug <agent>` (`--print "q"` for one question) |
-| The lab's web UI (monitoring) | `http://<secretary host>:8774/` on the tailnet |
-
-Coming: the secretary's own chat agent in Slack, VM power and token-expiry notices (M4),
-`lab init` (M3a). Until then, write `lab.yaml` by hand from `examples/`.
+| The lab's web UI | `http://<secretary host>:8774/` on the tailnet |
 
 ## First-time setup
 
-The full sequence is `docs/install.md` (steps 1–3 by hand, 4–12 guided by you). Where a
-step is marked ⏳ it isn't built yet: say so, and use today's manual path below.
-
-### Today's manual path
-
-1. **Prerequisites** (the admin's accounts; walk them through any that are missing): a
-   Tailscale tailnet with every host joined; a cloud account (Nebius) with GPU quota; a
-   Slack workspace where they can create apps; a Claude seat (Team or Max) per human whose
-   agents will run; a W&B account if experiments log there.
-2. **Write `lab.yaml`** together, starting from `examples/single-vm/lab.yaml` (everything
-   on one GPU VM, the easiest start) or `examples/minimal/lab.yaml`. Run `lab check` until
-   it reports no errors.
-3. **Each GPU worker host:** run `setup-sandbox.sh`, then `create-agent-user.sh` for each
-   agent on it. Check the sandbox: `lab doctor` will do this in M3a; for now see
-   "Diagnosis" below.
+The full sequence is `docs/install.md`: steps 1–3 by hand, 4–11 guided by you. Follow it
+in order; tell the admin before each step what they will need to do themselves.
 
 ## Maintenance recipes
 
