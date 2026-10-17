@@ -8,6 +8,7 @@ roles, channels, policies, expiring credentials) and returns every issue at once
 `lab check` run shows everything that's wrong.
 """
 import datetime as dt
+import re
 from dataclasses import dataclass, field
 
 import yaml
@@ -17,6 +18,9 @@ from ..policy import sandbox
 
 ROLES = ("worker", "manager", "secretary")
 DEFAULT_WORKDIR = "~/work"
+USER_PREFIX = "lab-"
+# an agent id becomes part of its Unix user name: lab-<agent-id>, at most 32 characters
+_AGENT_ID = re.compile(r"^[a-z][a-z0-9-]*$")
 CHANNEL_TYPES = ("slack_dm",)   # first version: Slack DM only (DESIGN.md §7)
 ACCESS = ("shared", "dedicated")
 HOST_KINDS = ("onprem", "cloud")
@@ -76,6 +80,10 @@ class Lab:
     @property
     def credentials(self):
         return self.data.get("credentials") or []
+
+    def unix_user(self, agent_id):
+        """The dedicated Unix user the agent runs as (DESIGN.md §10)."""
+        return USER_PREFIX + agent_id
 
     def standing_grants(self, agent_id):
         """The agent's standing grants from lab.yaml (raises GrantError if malformed)."""
@@ -166,6 +174,10 @@ def check(lab: Lab, today: dt.date | None = None):
             continue
         role = a.get("role")
         roles.setdefault(role, []).append(aid)
+        if not _AGENT_ID.match(aid) or len(USER_PREFIX + aid) > 32:
+            E(where, f"agent id must be lowercase letters, digits and '-', starting with a "
+                     f"letter, at most {32 - len(USER_PREFIX)} characters: it becomes the "
+                     f"Unix user {USER_PREFIX}{aid}")
         if role not in ROLES:
             E(where, f"role must be one of {ROLES}, got {role!r}")
         if a.get("human") not in lab.humans:

@@ -1,8 +1,11 @@
 #!/bin/bash
 # Create the dedicated Unix user an agent runs as (DESIGN.md §10).
-# Run as root:  sudo ./create-agent-user.sh [user]      (default: lab-agent)
+# Run as root:  sudo ./create-agent-user.sh lab-<agent-id>
 #
-# Nobody ever logs in as this user, and nothing but the agent's service runs as it. GPU
+# One user per agent, even when several agents share a host: agents on the same host are
+# then separated by ordinary Unix permissions (one can't read another's working folder,
+# memory or tokens). Nobody ever logs in as this user, and nothing but the agent's service
+# runs as it. GPU
 # agents allow Unix sockets (CUDA needs one), so any socket server running as this user
 # (tmux, a forwarded SSH agent, Jupyter, ...) would be a way out of the sandbox.
 #
@@ -10,7 +13,7 @@
 #   - lingering off: no per-user systemd manager
 #   - home with the working folder ~/work, private to the user
 set -euo pipefail
-user=${1:-lab-agent}
+user=${1:?usage: create-agent-user.sh lab-<agent-id>}
 
 if id "$user" >/dev/null 2>&1; then
   echo "user $user exists"

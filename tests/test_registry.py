@@ -63,6 +63,19 @@ def test_timed_grant_through_registry():
     assert "arxiv.org" in s["sandbox"]["network"]["allowedDomains"]
 
 
+def test_unix_users():
+    lab = registry.load(EXAMPLE / "lab.yaml")
+    users = [lab.unix_user(a) for a in lab.agents]
+    assert users == ["lab-secretary", "lab-mgr-alice", "lab-worker-a", "lab-worker-b"]
+
+
+@pytest.mark.parametrize("bad", ["Worker_A", "1worker", "w" * 29, "mgr.alice"])
+def test_agent_id_must_make_a_unix_user(lab_dir, bad):
+    errs = errors(edit(lab_dir, lambda d: d["agents"].update(
+        {bad: {"role": "worker", "human": "alice", "host": "gpu-a"}})))
+    assert any("becomes the Unix user" in e for e in errs)
+
+
 def test_every_agent_needs_a_human(lab_dir):
     errs = errors(edit(lab_dir, lambda d: d["agents"]["worker-a"].update(human="bob")))
     assert any("human 'bob' is not in humans" in e for e in errs)
