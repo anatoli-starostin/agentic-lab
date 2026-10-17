@@ -47,6 +47,33 @@ async def manager_status(lab, manager, token, hours=0):
         return r.json()
 
 
+async def check_seat(lab, human, workers: Workers, managers, own=None):
+    """Have one agent on `human`'s seat read the seat's limits now: the secretary itself
+    (`own`: (its id, async check)), else a manager, else a worker. Returns the agent asked."""
+    errors = []
+    for aid, a in lab.agents.items():
+        if a.get("human") != human:
+            continue
+        try:
+            if own is not None and aid == own[0]:
+                await own[1]()
+            elif a.get("role") == "manager" and aid in managers:
+                name, port = lab.address(aid)
+                async with httpx2.AsyncClient(timeout=40, headers={
+                        "Authorization": f"Bearer {managers[aid]}"}) as c:
+                    r = await c.post(f"http://{name}:{port}/v1/usage/check")
+                    if r.status_code != 200:
+                        raise ValueError((r.json() or {}).get("error") or r.status_code)
+            elif a.get("role") == "worker" and aid in workers.known():
+                await workers.call(aid, "check_usage", retries=0)
+            else:
+                continue
+            return aid
+        except Exception as e:
+            errors.append(f"{lab.display_name(aid)}: {e}")
+    raise RuntimeError("; ".join(errors) or "no running agent on this seat to ask")
+
+
 async def collect(lab, workers: Workers, broker=None, local_units=None, managers=None,
                   own=None):
     """One snapshot of the lab. `managers`: {manager-id: the secretary's token there};
@@ -85,16 +112,27 @@ async def collect(lab, workers: Workers, broker=None, local_units=None, managers
     for hid, h in lab.humans.items():
         mine = [aid for aid, a in agents.items() if a.get("human") == hid]
         limits, tokens_today, today = {}, {}, dt.date.today().isoformat()
+        measured = {}               # kind -> (the freshest reading with a percentage, when)
         for aid in mine:
             u = agents[aid].get("usage") or {}
             for kind, lim in (u.get("limits") or {}).items():
                 if kind not in limits or lim.get("observed_at", "") > limits[kind].get("observed_at", ""):
                     limits[kind] = {**lim, "from": aid}
+                if lim.get("utilization") is not None:
+                    pct_at = lim.get("utilization_at") or lim.get("observed_at", "")
+                    best = measured.get(kind)
+                    if best is None or pct_at > best[1]:
+                        measured[kind] = (lim, pct_at)
             for model, t in ((u.get("days") or {}).get(today) or {}).items():
                 acc = tokens_today.setdefault(aid, {"new": 0, "cached": 0})
                 acc["cached"] += t.get("cacheReadInputTokens", 0)
                 acc["new"] += (t.get("inputTokens", 0) + t.get("outputTokens", 0)
                                + t.get("cacheCreationInputTokens", 0))
+        for kind, lim in limits.items():
+            m = measured.get(kind)
+            if (lim.get("utilization") is None and m
+                    and m[0].get("resets_at") == lim.get("resets_at")):
+                lim.update(utilization=m[0]["utilization"], utilization_at=m[1])
         accounts[hid] = {"name": (h or {}).get("name") or hid, "agents": mine,
                          "limits": limits, "tokens_today": tokens_today}
 

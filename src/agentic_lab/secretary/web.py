@@ -11,7 +11,7 @@ import datetime as dt
 import html
 
 from starlette.applications import Starlette
-from starlette.responses import HTMLResponse, JSONResponse
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
 from starlette.routing import Route
 
 REFRESH_S = 20
@@ -51,6 +51,10 @@ border-radius:5px}.mfoot{font-size:13px}.mstatus{margin:6px 0 2px}.mstatus.good{
 .lname{min-width:120px}
 a{color:inherit}.pill{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--line);
 font-size:12px}code{font-size:12px;word-break:break-all}
+.ahead{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.ahead h3{margin-bottom:0}.check{margin:14px 0 0}.check button{font:12px system-ui,sans-serif;
+padding:3px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card);
+color:var(--fg);cursor:pointer}.check button:hover{border-color:var(--meter)}
 @media (max-width:420px){main{padding:12px;grid-template-columns:1fr}header{padding:14px 16px}}
 """
 
@@ -130,7 +134,8 @@ def _meter(kind, lim):
                 f"</i></div><div class='mfoot'><b>{pct}% used</b>"
                 + (f" <span class='{role}'>{icon} {e(word)}</span>" if role != "good" else "")
                 + "</div>")
-    seen = (f"<div class='muted small'>as of {e(ago(lim.get('observed_at')))}, "
+    seen = (f"<div class='muted small'>as of "
+            f"{e(ago(lim.get('utilization_at') or lim.get('observed_at')))}, "
             f"from {e(lim.get('from'))}</div>")
     return f"<div class='mblock'>{head}{body}{seen}</div>"
 
@@ -181,9 +186,17 @@ def _accounts(state):
             acc["limits"], key=lambda k: order.index(k) if k in order else 99)]
         if not meters:
             meters = ["<p class='muted small'>No limit readings yet: they arrive while an "
-                      "agent on this seat is running.</p>"]
-        cards.append(f"<div class='account'><h3>{e(acc['name'])}</h3><div class='muted small'>"
-                     f"seat used by: {agents}</div>{''.join(meters)}{_tokens(state, acc)}</div>")
+                      "agent on this seat is running, or press <i>Check now</i>.</p>"]
+        check = (f"<form method='post' action='/usage/check/{e(hid)}' class='check'>"
+                 f"<button title='Ask an agent on this seat to read its limits now (one tiny "
+                 f"request; may start a 5-hour window if none is open)'>Check now</button>"
+                 f"</form>") if acc["agents"] else ""
+        note = state.get("checks", {}).get(hid)
+        note = (f"<div class='small {'bad' if note.get('error') else 'muted'}'>"
+                f"{e(note.get('error') or 'checked ' + ago(note.get('at')))}</div>") if note else ""
+        cards.append(f"<div class='account'><div class='ahead'><h3>{e(acc['name'])}</h3>{check}"
+                     f"</div><div class='muted small'>seat used by: {agents}</div>{note}"
+                     f"{''.join(meters)}{_tokens(state, acc)}</div>")
     return "<section><h2>Claude usage, by account</h2>" + "".join(cards) + "</section>"
 
 
@@ -308,8 +321,14 @@ def render_logs(state, agent, hours, events, error=None):
             f"<span class='muted small'>admins only</span></header>{body}</body></html>")
 
 
-def app(get_state, get_events=None, is_admin=None):
-    """`get_events(agent, hours)` (async) -> events; `is_admin(client_ip)` (async) -> bool."""
+def app(get_state, get_events=None, is_admin=None, check_usage=None):
+    """`get_events(agent, hours)` (async) -> events; `is_admin(client_ip)` (async) -> bool;
+    `check_usage(human)` (async): read that seat's limits now."""
+    async def check(request):
+        if check_usage is not None:
+            await check_usage(request.path_params["human"])
+        return RedirectResponse("/", status_code=303)
+
     async def page(request):
         return HTMLResponse(render(get_state()), headers=HEADERS)
 
@@ -332,4 +351,5 @@ def app(get_state, get_events=None, is_admin=None):
         return HTMLResponse(render_logs(get_state(), agent, hours, events, error), headers=HEADERS)
 
     return Starlette(routes=[Route("/", page), Route("/state.json", state_json),
-                             Route("/logs/{agent}", logs)])
+                             Route("/logs/{agent}", logs),
+                             Route("/usage/check/{human}", check, methods=["POST"])])
