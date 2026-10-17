@@ -201,7 +201,9 @@ def looks_like_token(t):
 def get_claude_token(paste):
     if not paste and shutil.which("claude"):
         print("Running `claude setup-token`: approve in your browser, as usual.")
-        print("(Your agents use this token to run on your Claude seat. It is valid for a year.)\n")
+        print("(Your agents use this token to run on your Claude seat. It is valid for a year.)")
+        print("It is a password: never paste it, or this window's output, into a chat (Slack,")
+        print("Claude, email). Only into this script's hidden prompt.\n")
         try:
             code, out = run_capturing(["claude", "setup-token"])
         except (ImportError, OSError):          # no pseudo-terminals here (e.g. Windows)
@@ -211,9 +213,11 @@ def get_claude_token(paste):
         token = find_token(out)
         if looks_like_token(token):
             print(f"\nFound the token: {token[:13]}…{token[-4:]} ({len(token)} characters).")
+            print("(If that doesn't match what you saw, answer n and paste it yourself.)")
             if input("Send it to the lab? [Y/n] ").strip().lower() in ("", "y", "yes"):
                 return token
         print("\nCopy the token from wherever it was shown: the output above, or your browser.")
+        print("Paste it ONLY into the hidden prompt below, never into a chat.")
     elif not paste:
         print("Claude Code isn't installed here. Get a token with `claude setup-token` on any")
         print("machine where it is, then paste it below.\n")

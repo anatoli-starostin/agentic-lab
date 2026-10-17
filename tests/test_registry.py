@@ -152,7 +152,7 @@ def test_warnings(lab_dir):
     issues = edit(lab_dir, lambda d: (d["agents"]["mgr-alice"].pop("slack_app"),
                                       d["hosts"]["nuc-01"].update(kind="cloud", provider="nebius")))
     warns = [i.message for i in issues if i.level == "warning"]
-    assert any("no slack_app" in w for w in warns)
+    assert not any("slack_app" in w for w in warns)     # filled in by lab slack-verify
     assert any("on-prem" in w for w in warns)
 
 
