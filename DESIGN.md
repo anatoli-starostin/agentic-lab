@@ -29,6 +29,10 @@ deployment's own `lab.yaml` and secret files, which never enter this repo.
   hosts, channels and credentials (with expiry dates), and every component reads it.
 - **Close to production from day one.** Workers and managers run on cloud VMs. Only the
   secretary runs on an always-on on-prem box.
+- **Easy to set up and maintain, guided by Claude.** A single Claude Code on the secretary
+  host walks the human admin through the first setup, and afterwards helps with every
+  maintenance task: adding or removing agents, hosts and humans, rotating tokens,
+  diagnosing problems (§11a).
 - **Portable.** No hard-coded hosts or providers. Nebius, Slack, W&B and Tailscale come
   first, behind small interfaces.
 
@@ -477,6 +481,56 @@ Sonnet-class for managers, the strongest available model for workers.
 
 ---
 
+## 11a. Setup and maintenance: guided by Claude
+
+The lab must be easy to set up. A human admin with Claude Code on the secretary host
+should be able to go from nothing to a working lab, and later maintain it, by talking to
+Claude.
+
+**Two different Claudes on the secretary host:**
+
+| | Admin assistant | Secretary agent |
+|---|---|---|
+| What | an ordinary interactive Claude Code session | the lab's 24/7 service (§4.1) |
+| Runs as | the admin's own Unix user, in a checkout of this repo | its own `lab-secretary` user |
+| Does | setup and maintenance: needs SSH and sudo across hosts | monitoring, power, health, the web UI |
+| Approvals | the admin, at the console | Slack DM, like every agent |
+
+Setup and maintenance need broad rights (SSH to every host, sudo), so they belong to the
+admin's own session, never to the always-on agent.
+
+**The guide ships with the repo as a Claude Code skill**, `.claude/skills/lab-admin/`.
+Opening Claude Code in the repo picks it up. It covers:
+- **first-time bootstrap**: prerequisites, preparing the secretary host, writing the first
+  `lab.yaml` together, preparing each host, creating each agent;
+- **maintenance**: add or remove an agent, a host or a human; change grants; rotate a token;
+  upgrade the framework;
+- **diagnosis**: an agent is down, a sandbox doesn't start, approvals don't arrive.
+
+**Underneath, everything is declarative and repeatable**, so Claude guides by running a
+few safe commands rather than improvising:
+
+| Command | Does |
+|---|---|
+| `lab init` | start a `lab.yaml` from questions (lab name, tailnet, first human) |
+| `lab check` | validate `lab.yaml` |
+| `lab plan` | show what would change on the hosts (users, sandbox setup, services, settings) |
+| `lab apply [host\|agent]` | make the hosts match `lab.yaml`, over SSH; idempotent, safe to re-run |
+| `lab doctor [agent]` | diagnose: service up? sandbox starts? GPU visible? tokens valid? Slack reachable? |
+| `lab secret set <name>` | store a secret on its host, read hidden from the terminal |
+
+"Add a worker" is then: add it to `lab.yaml` → `lab check` → `lab plan` → `lab apply`.
+Every change to the lab is a reviewable diff of `lab.yaml`, kept in git.
+
+**Secrets never pass through the chat.** Some steps only a human can do: creating the
+Slack app, running `claude setup-token`, getting the cloud API key. The skill explains
+these step by step. The admin types the values into `lab secret set` in their own terminal,
+so tokens never land in Claude's conversation or logs.
+
+**The bar:** a fresh secretary host, Claude Code and this repo, plus the admin's accounts
+(cloud, Slack, Claude seat, Tailscale), should be enough. The admin should never need to
+read the code.
+
 ## 11. Repo layout (proposed)
 
 ```
@@ -515,6 +569,7 @@ M1–M4 are developed and demoed on this setup first.
 | M1 | **Worker**: MCP server, durable queue, SDK agent runner, built-in sandbox, grants, `lab console` | A manager played by hand over MCP submits a task to a cloud GPU VM, watches progress and gets the result |
 | M2 | **Broker + Slack DM channel**: signed decisions, grants buttons, timeout policy | A worker's `pip install` reaches the human's DM. Approve and deny both work, the timeout denies, and **the manager agent provably cannot approve** (test) |
 | M3 | **Manager**: Slack face + MCP client + its own guardrails | "@manager run exp X on a GPU worker" in Slack → task → approval in DM → result in thread |
+| M3a | **Guided setup**: `lab-admin` skill, `lab init/plan/apply/doctor/secret` | From a fresh secretary host, Claude guides an admin to a working single-VM lab without the admin reading code |
 | M4 | **Secretary + web UI**: checks, cloud power, web UI (§9), chat | Web UI shows tasks, approvals, guardrails and spend live. A GPU VM idle 30 min is stopped. A preempted manager is restarted. A token expiring within 14 days is reported |
 | M5 | **Spiky pilot**: real spiky experiments run through the lab for a week | Spiky's existing ad-hoc tooling retired in favour of the lab |
 | M6 | **DeepSpike rollout**: separate deployment, its own `lab.yaml`, Slack workspace and tailnet | Team members use their own managers |
@@ -539,6 +594,7 @@ after M3–M4 as needed.
 | 2026-10-17 | **All managers share one cloud CPU VM**, one Unix user each. |
 | 2026-10-17 | **Permissions only in Slack DM** in the first version; more channels maybe later. The **web UI is for monitoring only**. |
 | 2026-10-17 | **Agents run as system services, each under its own dedicated Unix user** (`lab-<agent-id>`), even when several agents share a host. Nobody logs into these users (no tmux, no login sessions, lingering off). Humans attach with `lab console`. |
+| 2026-10-17 | **Setup and maintenance are guided by Claude**: a `lab-admin` skill in the repo, run by the admin's own Claude Code on the secretary host, over declarative, idempotent `lab` commands. Secrets never pass through the chat. |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
 
 ## 14. Open questions
