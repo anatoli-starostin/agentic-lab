@@ -5,10 +5,12 @@ configuration from lab.yaml and its secrets from files only that user can read:
 
     ~/.config/agentic-lab/manager-tokens.yaml   {manager-id: bearer token} for managers
     ~/.config/agentic-lab/claude-oauth-token    the seat token (`claude setup-token`)
+    ~/.config/agentic-lab/broker.yaml           {url: ..., token: ...} for approvals
 
 State (the task queue) lives in ~/.local/state/agentic-lab/tasks.
 """
 import asyncio
+import datetime as dt
 import logging
 import os
 import signal
@@ -18,8 +20,10 @@ import yaml
 
 from ..registry import load as load_lab
 from . import tasks as T
-from .runner import SdkRunner
+from .approver import BrokerApprover
+from .runner import NoChannelApprover, SdkRunner
 from .server import Access, Caller, build_mcp, http_app, run_tasks
+from .usage import UsageLog
 
 CONFIG = "~/.config/agentic-lab"
 STATE = "~/.local/state/agentic-lab"
@@ -61,20 +65,33 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
 
     access = access_for(lab, agent_id, _read_secret(f"{CONFIG}/manager-tokens.yaml"))
     store = T.TaskStore(os.path.expanduser(f"{STATE}/tasks"))
-    settings = lab.agent_settings(agent_id)
     env = {}
     seat_token = _read_secret(f"{CONFIG}/claude-oauth-token")
     if seat_token:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat_token
     workdir = os.path.expanduser(a.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
-    runner = SdkRunner(agent_id, workdir, settings, model=model or a.get("model"), env=env)
+    broker_cfg = yaml.safe_load(_read_secret(f"{CONFIG}/broker.yaml") or "") or {}
+    if broker_cfg.get("url") and broker_cfg.get("token"):
+        approver = BrokerApprover(broker_cfg["url"], broker_cfg["token"])
+    else:
+        log.warning("no broker configured: actions outside the sandbox will be denied")
+        approver = NoChannelApprover()
+    usage = UsageLog(os.path.expanduser(f"{STATE}/usage.json"))
 
-    mcp = build_mcp(agent_id, store, access, guardrails=lambda: {
-        "settings": lab.agent_settings(agent_id),
-        "standing_grants": a.get("grants") or [],
-        "active_grants": [],          # timed grants arrive with the broker (M2)
-    })
+    def settings_for(grants):
+        return lab.agent_settings(agent_id, extra_grants=grants,
+                                  now=dt.datetime.now(dt.timezone.utc))
+
+    runner = SdkRunner(agent_id, workdir, settings_for, approver=approver,
+                       model=model or a.get("model"), env=env, usage=usage)
+
+    async def guardrails():
+        active = await approver.active_grants()
+        return {"settings": lab.agent_settings(agent_id),
+                "standing_grants": a.get("grants") or [], "active_grants": active}
+
+    mcp = build_mcp(agent_id, store, access, guardrails=guardrails, usage=usage)
     # the names managers may use to reach us: the bind address, and e.g. the tailnet name
     allowed = [f"{h}:{port}" for h in (host, *names)]
     app, _ = http_app(mcp, access, allowed_hosts=allowed)

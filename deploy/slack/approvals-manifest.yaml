@@ -1,0 +1,33 @@
+# Slack app manifest for the lab's approval channel ("Lab Approvals", DESIGN.md §7).
+# Slack: api.slack.com/apps -> Create New App -> From a manifest -> paste this.
+# Rename freely (display_information.name, bot_user.display_name).
+#
+# Then: Install to Workspace -> copy the Bot User OAuth Token (xoxb-...);
+# Basic Information -> App-Level Tokens -> Generate (scope connections:write) -> xapp-...
+# Both go into the broker's ~/.config/agentic-lab/slack.env, entered hidden.
+display_information:
+  name: Lab Approvals
+  description: Asks lab members to approve what their agents can't do inside their sandbox.
+  background_color: "#2c2d30"
+features:
+  bot_user:
+    display_name: Lab Approvals
+    always_online: true
+  app_home:
+    messages_tab_enabled: true
+    messages_tab_read_only_enabled: false
+oauth_config:
+  scopes:
+    bot:
+      - chat:write      # post and update approval requests
+      - im:write        # open a DM with a member
+      - im:history      # read replies in a request's thread (deny with a note)
+settings:
+  event_subscriptions:
+    bot_events:
+      - message.im
+  interactivity:
+    is_enabled: true
+  socket_mode_enabled: true
+  org_deploy_enabled: false
+  token_rotation_enabled: false

@@ -244,3 +244,18 @@ def test_debug_finds_latest_session(tmp_path, monkeypatch):
 def test_debug_uses_the_bundled_cli():
     from agentic_lab.debug import claude_cli
     assert claude_cli().endswith("_bundled/claude")
+
+
+def test_usage_log(tmp_path):
+    from agentic_lab.worker.usage import UsageLog
+    u = UsageLog(tmp_path / "usage.json")
+    u.rate_limit({"status": "allowed_warning", "rate_limit_type": "five_hour",
+                  "utilization": 0.81, "resets_at": 1792245600})
+    u.run("t-1", {"claude-haiku-5-5": {"inputTokens": 10, "outputTokens": 5, "costUSD": 0.01}})
+    u.run("t-1", {"claude-haiku-5-5": {"inputTokens": 1, "outputTokens": 1}})
+    d = u.load()
+    lim = d["limits"]["five_hour"]
+    assert lim["utilization"] == 0.81 and lim["observed_at"] and lim["resets_at"].startswith("2026")
+    assert d["tasks"]["t-1"]["claude-haiku-5-5"]["inputTokens"] == 11
+    assert "costUSD" not in d["tasks"]["t-1"]["claude-haiku-5-5"]     # tokens, not dollars
+    assert d["updated_at"]

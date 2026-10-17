@@ -6,6 +6,7 @@
     lab secret request <human> <name> --url URL
                                 ask a human for a secret: prints the message to send them
     lab intake serve            the secretary's endpoint where members' clients send secrets
+    lab broker serve            the approval broker (on the secretary host, as lab-broker)
     lab debug <agent>           (sudo) stop the agent's service and open its session in the
                                 classic Claude Code console; restarts the service on exit
 """
@@ -98,6 +99,16 @@ def cmd_intake_serve(args):
     return 0
 
 
+def cmd_broker_serve(args):
+    import asyncio
+    import logging
+
+    from .broker.service import serve
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(message)s")
+    asyncio.run(serve(args.lab, args.host, args.port))
+    return 0
+
+
 def cmd_debug(args):
     from .debug import debug
     debug(args.lab, args.agent, session=args.session, new=args.new, ask=args.print)
@@ -154,6 +165,13 @@ def main(argv=None):
     iserve.add_argument("--client", default="/opt/agentic-lab/client/lab-member.py",
                         help="the member client file to serve")
     iserve.set_defaults(fn=cmd_intake_serve)
+
+    bk = sub.add_parser("broker", help="the approval broker")
+    bsub = bk.add_subparsers(dest="bcmd", required=True)
+    bserve = bsub.add_parser("serve", help="run the broker")
+    bserve.add_argument("--host", default="127.0.0.1", help="the tailnet IP in production")
+    bserve.add_argument("--port", type=int, default=8772)
+    bserve.set_defaults(fn=cmd_broker_serve)
 
     for name, fn, hlp in (
             ("debug", cmd_debug, "talk to an agent in the classic Claude Code console (sudo)"),

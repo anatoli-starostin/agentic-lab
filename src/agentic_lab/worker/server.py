@@ -56,7 +56,8 @@ class Access:
         raise AccessError("unknown token")
 
 
-def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=None):
+def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=None,
+              usage=None):
     """The worker's MCP server. `guardrails()` returns its current settings and grants."""
     mcp = MCPServer(name=f"agentic-lab worker {agent_id}",
                     instructions="Submit tasks to this worker and follow them.")
@@ -110,14 +111,18 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
                 if state is None or t.state == state]
 
     @mcp.tool(description="This worker's guardrails: its sandbox settings and grants.")
-    def get_guardrails(ctx: Context) -> dict:
+    async def get_guardrails(ctx: Context) -> dict:
         who(ctx)
-        return guardrails()
+        g = guardrails()
+        return await g if asyncio.iscoroutine(g) else g
 
     @mcp.tool(description="Liveness and state of this worker: queue, GPU, disk, versions.")
     def health_check(ctx: Context) -> dict:
         who(ctx)
-        return (health or default_health)(agent_id, store)
+        h = (health or default_health)(agent_id, store)
+        if usage is not None:
+            h["usage"] = usage.load()
+        return h
 
     return mcp
 

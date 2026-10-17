@@ -10,6 +10,8 @@ dependencies = [
     "claude-agent-sdk>=0.2.116",
     "mcp>=2.3,<3",
     "uvicorn>=0.31",
+    "slack_sdk>=3.33",
+    "aiohttp>=3.10",
 ]
 
 [project.optional-dependencies]
