@@ -116,9 +116,9 @@ Tied to one GPU VM. Uses tokens freely. Humans don't talk to it directly.
 - Executes tasks inside the **cage** (§6). In-cage work runs without prompts. A boundary
   crossing becomes an **approval request to the approval broker** of the manager that owns
   the task.
-- Like every agent, it is **attached to one human** (it runs on their seat). Its access is
-  either **dedicated** (only that human's manager may submit tasks) or **shared** (any
-  manager may). This is set in `lab.yaml`.
+- Like every agent, it is **attached to one human for tokens** (it runs on their seat). This
+  is separate from who may use it: access is either **dedicated** (only one human's manager
+  may submit tasks) or **shared** (any manager may). Both are set in `lab.yaml`.
 - **Debug console**, at two levels:
   - `lab console` (everyday): a human `ssh`es in and attaches to the live headless session.
     It streams the transcript and lets the human type messages, which are queued in order
@@ -383,12 +383,13 @@ prompt or dialog.
 - Each agent gets its own Unix user, working dir and memory dir. The policy and the broker
   run as different users from the agent they govern.
 
-### Every agent is attached to a human
+### Every agent is attached to a human, in terms of tokens
 
-Each agent in `lab.yaml` names the **human member it is attached to** (`human:`). It runs
+Each agent in `lab.yaml` names the **human member whose tokens it uses** (`human:`). It runs
 on that member's Claude seat, through a `claude setup-token` token stored on the agent's
-host. Its usage counts towards that member's seat limits, and the web UI shows it under that
-member.
+host, and its usage counts towards that seat's limits. The web UI shows each agent's token
+use under that member. This attachment only says whose tokens an agent uses. Who may use
+the agent is set separately (for example, a worker's `access`).
 
 **The secretary checks each agent's real auth.** A stray `ANTHROPIC_API_KEY` silently
 overrides seat login and bills per token, so the web UI flags it.
@@ -448,7 +449,7 @@ after M3–M4 as needed.
 | 2026-10-17 | Shared workers: **first come, first served**. No quotas or priorities. |
 | 2026-10-17 | **No fixed results contract**: tasks vary, so a result is whatever fits (report, commit, W&B run, files). |
 | 2026-10-17 | **Agent SDK runtime** behind an `AgentRunner` interface. `lab console` + `--takeover` (real `claude --resume`) for humans. A tmux runner is only a fallback. |
-| 2026-10-17 | **Every agent is attached to a human member** and runs on their seat. The secretary is attached to the lab owner. |
+| 2026-10-17 | **Every agent is attached to a human member in terms of tokens** (runs on their seat). Access is set separately. The secretary is attached to the lab owner. |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
 
 ## 14. Open questions
