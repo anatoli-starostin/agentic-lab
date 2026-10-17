@@ -142,6 +142,10 @@ Tied to one GPU VM. Uses tokens freely. Humans don't talk to it directly.
 
 On a CPU VM. Has its own **Slack identity**. Uses a moderate number of tokens.
 
+- Like workers, a manager is attached to a human **for tokens** (whose seat it runs on), and
+  has **access** of its own: `dedicated` (one member talks to it) or `shared` (several
+  members do; it may run on a general, e.g. administrative, account).
+
 - **Converses** in Slack and turns human requests into worker tasks. It picks the worker,
   writes the task, follows progress and reports results.
 - **Always has an active permission channel** with its human: their **Slack DM** in the
@@ -289,6 +293,13 @@ worker gate ──req──► APPROVAL BROKER (manager VM, separate Unix user, 
 worker gate ◄─signed decision── broker   (HMAC with a per-worker key the manager agent can't read)
 ```
 
+- **An approval always goes to the human the action is for**, never simply to the
+  agent's seat owner:
+  - a worker's request: the human who requested the task;
+  - a manager's own action (e.g. a GitHub write): the member whose Slack message started
+    the work. The manager's code (not its LLM) takes that member from the Slack event and
+    attaches it to every approval request made in that conversation;
+  - no requester (scheduled or background work): the agent's attached human.
 - The worker gate accepts only decisions **signed by the broker**. The broker signs only
   after a **verified human interaction** on a registered channel.
 - The manager agent can **see** pending requests and **add context** to the message shown to
@@ -601,6 +612,7 @@ after M3–M4 as needed.
 | 2026-10-17 | **Agents run as system services, each under its own dedicated Unix user** (`lab-<agent-id>`), even when several agents share a host. Nobody logs into these users (no tmux, no login sessions, lingering off). Humans debug an agent with `lab debug <agent>`. |
 | 2026-10-17 | **Setup and maintenance are guided by Claude**: a `lab-admin` skill in the repo, run by the admin's own Claude Code on the secretary host, over declarative, idempotent `lab` commands. Secrets never pass through the chat. |
 | 2026-10-17 | **No `lab console`.** The web UI shows each agent's recent transcript; `lab debug <agent>` stops its service and opens the same session in the classic Claude Code console. |
+| 2026-10-17 | **Approvals go to the human the action is for** (task requester, or the member whose message started a manager's work), not to the agent's seat owner. Managers, like workers, can be `dedicated` or `shared`. |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
 
 ## 14. Open questions
