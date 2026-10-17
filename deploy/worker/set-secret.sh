@@ -4,11 +4,13 @@
 #
 #   claude-oauth-token     the Claude seat token (from `claude setup-token`)
 #   manager-tokens.yaml    for a worker: `<manager-id>: <token>` lines (multi-line: end with Ctrl-D)
+#   slack.env              for the broker (or a manager): its Slack app's tokens, two lines
+#                          SLACK_BOT_TOKEN=xoxb-...  and  SLACK_APP_TOKEN=xapp-...  (end with Ctrl-D)
 set -euo pipefail
 user=${1:?usage: set-secret.sh lab-<agent-id> <name>}
 name=${2:?usage: set-secret.sh lab-<agent-id> <name>}
 case "$name" in
-  claude-oauth-token|manager-tokens.yaml) ;;
+  claude-oauth-token|manager-tokens.yaml|slack.env) ;;
   *) echo "unknown secret $name" >&2; exit 2 ;;
 esac
 home=$(getent passwd "$user" | cut -d: -f6)
@@ -19,6 +21,12 @@ install -d -m 700 -o "$user" -g "$user" "$home/.config" "$dir"
 if [ "$name" = "manager-tokens.yaml" ]; then
   echo "Type or paste '<manager-id>: <token>' lines, then Ctrl-D:"
   value=$(cat)
+elif [ "$name" = "slack.env" ]; then
+  read -r -s -p "Paste the Bot User OAuth Token (xoxb-..., hidden), then Enter: " bot; echo
+  read -r -s -p "Paste the App-Level Token (xapp-..., hidden), then Enter: " app; echo
+  case "$bot" in xoxb-*) ;; *) echo "that's not a bot token (xoxb-...); nothing stored" >&2; exit 1 ;; esac
+  case "$app" in xapp-*) ;; *) echo "that's not an app-level token (xapp-...); nothing stored" >&2; exit 1 ;; esac
+  value=$(printf 'SLACK_BOT_TOKEN=%s\nSLACK_APP_TOKEN=%s' "$bot" "$app")
 else
   read -r -s -p "Paste $name (input hidden), then Enter: " value; echo
 fi
