@@ -226,9 +226,10 @@ def script(plan):
     if plan.get("nebius_cli"):
         u = plan["nebius_cli"]
         lines.append('say "Nebius CLI (VM power)"')
+        # the documented installer; SHELL=/bin/sh keeps it from editing shell rc files
         lines.append(f"sudo -u {u} -H bash -c 'test -x ~/.nebius/bin/nebius || "
-                     "curl -sSL https://storage.eu-north1.nebius.cloud/cli/install.sh | bash "
-                     ">/dev/null'")
+                     "curl -sSL https://artifacts.nebius.cloud/cli/install.sh | "
+                     "SHELL=/bin/sh bash >/dev/null'")
     lines.append('say "secrets and config"')
     for i, (path, (owner, mode, _)) in enumerate(sorted(plan["files"].items())):
         d = os.path.dirname(path)
@@ -277,6 +278,12 @@ def plan_all(lab_path, hosts=None, tokens=None, intake=intake_secret):
     tokens = tokens or Tokens()
     chosen = hosts or list(lab.hosts)
     return lab, tokens, [host_plan(lab, h, tokens, intake) for h in chosen]
+
+
+def has_work(plan):
+    """Does the lab install anything on this host? (A host that's only powered, with no
+    agents on it, needs nothing, and may well be stopped.)"""
+    return bool(plan["users"] or plan["units"] or plan["files"])
 
 
 def describe(plan):

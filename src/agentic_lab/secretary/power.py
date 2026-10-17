@@ -13,6 +13,8 @@ import json
 import os
 
 NEBIUS = os.path.expanduser("~/.nebius/bin/nebius")
+if not os.path.exists(NEBIUS) and os.path.exists("/usr/local/bin/nebius"):
+    NEBIUS = "/usr/local/bin/nebius"
 PROFILE = "lab"
 BUSY = ("running", "queued", "awaiting_approval")
 
