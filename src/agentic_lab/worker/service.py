@@ -87,8 +87,14 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
         return lab.agent_settings(agent_id, extra_grants=grants,
                                   now=dt.datetime.now(dt.timezone.utc))
 
+    def github(task):                   # the bots it may act as for this task's requester
+        from .. import github as GH
+        return (GH.env_for(lab, agent_id, task.requester),
+                GH.instructions(lab, agent_id, task.requester))
+
     runner = SdkRunner(agent_id, workdir, settings_for, approver=approver,
-                       model=model or a.get("model"), env=env, usage=usage, events=events)
+                       model=model or a.get("model"), env=env, usage=usage, events=events,
+                       per_task=github)
 
     async def guardrails():
         active = await approver.active_grants()

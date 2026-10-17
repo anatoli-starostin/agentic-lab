@@ -153,7 +153,8 @@ async def serve(lab_path, agent_id, host=None, port=None):
                                   now=dt.datetime.now(dt.timezone.utc))
 
     brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
-                  approver=approver, model=a.get("model"), env=env, usage=usage, events=events)
+                  approver=approver, model=a.get("model"), env=env, usage=usage, events=events,
+                  per_turn=github_for(lab, agent_id))
     members = {(h or {}).get("slack_user"): hid for hid, h in lab.humans.items()
                if (h or {}).get("slack_user")}
     mgr = Manager(lab, agent_id, None, brain, workers, broker, state, memory, workdir)
@@ -190,6 +191,15 @@ async def serve(lab_path, agent_id, host=None, port=None):
     await slack.stop()
     follower.cancel()
     prober.cancel()
+
+
+def github_for(lab, agent_id):
+    """The bots the manager may act as for the member in the conversation."""
+    if not (lab.agents.get(agent_id) or {}).get("github"):
+        return None
+    from .. import github as GH
+    return lambda ctx: (GH.env_for(lab, agent_id, ctx.requester),
+                        GH.instructions(lab, agent_id, ctx.requester))
 
 
 class ConsoleIO:
@@ -244,7 +254,8 @@ async def ask(lab_path, agent_id, human, text, wait_s=900):
                                   now=dt.datetime.now(dt.timezone.utc))
 
     brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
-                  approver=approver or NoChannelApprover(), model=a.get("model"), env=env)
+                  approver=approver or NoChannelApprover(), model=a.get("model"), env=env,
+                  per_turn=github_for(lab, agent_id))
     io = ConsoleIO()
     mgr = Manager(lab, agent_id, io, brain, workers, broker, state, memory, workdir)
     ok, why = mgr.may_use(human)

@@ -23,13 +23,15 @@ import threading
 import time
 from dataclasses import dataclass
 
-NAMES = ("claude-token", "slack-app", "nebius-sa")
+NAMES = ("claude-token", "slack-app", "nebius-sa", "github-token")
 # what each secret is made of, for the web form: (field, label, required prefix)
 FIELDS = {
     "claude-token": [("value", "Claude token (sk-ant-…)", "sk-ant-")],
     "slack-app": [("bot", "Bot User OAuth Token (xoxb-…)", "xoxb-"),
                   ("app", "App-Level Token (xapp-…)", "xapp-")],
     # a Nebius service account's key, for VM power (the secretary's only)
+    # a GitHub bot account's token (owner service:github-<login>): fine-grained or classic
+    "github-token": [("value", "GitHub token (github_pat_… or ghp_…)", "")],
     "nebius-sa": [("service_account_id", "Service account id (serviceaccount-…)", "serviceaccount-"),
                   ("public_key_id", "Public key id (publickey-…)", "publickey-"),
                   ("private_key", "Private key (PEM)", "-----BEGIN")],
@@ -71,7 +73,30 @@ class Request:
     used: bool = False
 
 
-def verify_claude_token(token, timeout=20):
+def verify_github_token(token, owner=None, timeout=20):
+    """Ask GitHub whose token this is: it must be the bot account it's for
+    (owner service:github-<login>). Unreachable GitHub lets it through."""
+    import urllib.error
+    import urllib.request
+    req = urllib.request.Request("https://api.github.com/user", headers={
+        "Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json",
+        "User-Agent": "agentic-lab"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            login = json.loads(r.read()).get("login", "")
+    except urllib.error.HTTPError as e:
+        if e.code in (401, 403):
+            raise IntakeError("GitHub rejected this token: was all of it copied?") from None
+        return
+    except (urllib.error.URLError, OSError, ValueError):
+        return
+    want = (owner or "")[len("service:github-"):]
+    if want and login.lower() != want:
+        raise IntakeError(f"this is {login}'s token, not {want}'s: create it while logged "
+                          f"in as {want}")
+
+
+def verify_claude_token(token, owner=None, timeout=20):
     """Ask Anthropic whether `token` works, with a one-token request. Raises IntakeError if
     it's refused (e.g. cut short when copied); any other outcome (no network, an outage)
     lets the token through, since the lab can't tell it's bad."""
@@ -148,7 +173,7 @@ class Intake:
                 raise IntakeError(f"this code is for {req.name}, not {name}")
             value = check_value(name, value)
             if name in self.verify:
-                self.verify[name](value)
+                self.verify[name](value, req.human)
             self.store(req.human, name, value)
             req.used = True
             _write_private(path, json.dumps(req.__dict__))
@@ -204,6 +229,8 @@ def check_value(name, value):
         if not v.startswith(prefix) or len(v) < 20:
             raise IntakeError(f"that doesn't look like a {label}")
         out[key] = v
+    if name == "github-token" and not out["value"].startswith(("github_pat_", "ghp_")):
+        raise IntakeError("that doesn't look like a GitHub token (github_pat_… or ghp_…)")
     if name == "claude-token" and len(out["value"]) < 40:
         raise IntakeError("that doesn't look like a Claude token")
     if name == "slack-app":

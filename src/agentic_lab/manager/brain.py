@@ -61,7 +61,7 @@ def _grant(g):
 
 class Brain:
     def __init__(self, agent_id, lab_name, workdir, settings_for, approver=None, model=None,
-                 env=None, usage=None, cli_path=None, events=None):
+                 env=None, usage=None, cli_path=None, events=None, per_turn=None):
         self.agent_id = agent_id
         self.lab_name = lab_name
         self.workdir = workdir
@@ -72,6 +72,7 @@ class Brain:
         self.usage = usage
         self.cli_path = cli_path
         self.events = events
+        self.per_turn = per_turn        # (ctx) -> (environment, prompt text): e.g. GitHub
 
     async def turn(self, ctx, prompt):
         """Run one turn in `ctx.conv`'s session; returns the reply text."""
@@ -83,6 +84,7 @@ class Brain:
         tool_grants = {g["value"] for g in grants if g["kind"] == "tool"}
         violations = []
         asker = SimpleNamespace(id=None, requester=ctx.requester)
+        extra_env, extra_prompt = self.per_turn(ctx) if self.per_turn else ({}, "")
 
         async def can_use_tool(tool_name, tool_input, context):
             if (tool_name in lab_tools.LAB_TOOLS or tool_name in tool_grants
@@ -111,8 +113,8 @@ class Brain:
             mcp_servers={"lab": lab_tools.build(ctx)},
             allowed_tools=list(lab_tools.LAB_TOOLS),
             system_prompt={"type": "preset", "preset": "claude_code",
-                           "append": system_prompt(self.agent_id, self.lab_name)},
-            model=self.model, env=self.env, cli_path=self.cli_path,
+                           "append": system_prompt(self.agent_id, self.lab_name) + extra_prompt},
+            model=self.model, env={**self.env, **extra_env}, cli_path=self.cli_path,
             resume=ctx.conv.session_id)
 
         reply, last_text = None, None

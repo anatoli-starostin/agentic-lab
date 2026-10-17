@@ -132,9 +132,10 @@ def cmd_intake_serve(args):
 
     import uvicorn
 
-    from .secrets.intake import Intake, verify_claude_token
+    from .secrets.intake import Intake, verify_claude_token, verify_github_token
     from .secrets.server import app
-    intake = Intake(os.path.expanduser(args.state), verify={"claude-token": verify_claude_token})
+    intake = Intake(os.path.expanduser(args.state), verify={"claude-token": verify_claude_token,
+                                                            "github-token": verify_github_token})
     uvicorn.run(app(intake, args.client), host=args.host, port=args.port, log_level="info")
     return 0
 

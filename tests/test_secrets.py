@@ -155,7 +155,7 @@ def test_client_stops_at_the_end_of_the_token():
 
 
 def test_intake_verifies_claude_tokens(tmp_path):
-    def verify(value):
+    def verify(value, owner=None):
         if value != TOKEN:
             raise I.IntakeError("Claude rejected this token (61 characters)")
     it = I.Intake(tmp_path, verify={"claude-token": verify})
@@ -182,7 +182,7 @@ def test_verify_claude_token_lets_unknowns_through(monkeypatch):
 
 
 def test_client_pastes_when_the_found_token_is_rejected(tmp_path, monkeypatch, free_port):
-    def verify(value):
+    def verify(value, owner=None):
         if value != TOKEN:
             raise I.IntakeError("Claude rejected this token (40 characters)")
     it = I.Intake(tmp_path, verify={"claude-token": verify})

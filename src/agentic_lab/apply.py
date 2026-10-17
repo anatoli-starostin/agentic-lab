@@ -116,7 +116,7 @@ def host_plan(lab, host, tokens, intake=intake_secret):
     sec_host, secretary = secretary_host(lab)
     broker_url = f"http://{host_name(lab, sec_host)}:{PORTS['broker']}"
     name = host_name(lab, host)
-    files, users, units, envs, missing = {}, [], [], {}, []
+    files, users, units, envs, missing, later = {}, [], [], {}, [], []
     waiting = set()             # users whose service can't start yet (a secret is missing)
 
     def secret(user, fname, content, what):
@@ -159,6 +159,20 @@ def host_plan(lab, host, tokens, intake=intake_secret):
             _, port = lab.address(aid)
             envs[f"/etc/agentic-lab/manager-{aid}.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={port}\n"
             units.append(("lab-manager@.service", f"lab-manager@{aid}"))
+        if a.get("github"):             # its GitHub identities: tokens for its service only
+            accounts = {}
+            for login in lab.github_usable(aid):
+                tok = intake(f"service:github-{login.lower()}", "github-token")
+                if tok is None:         # optional: GitHub work waits, the agent runs
+                    later.append(f"{login}'s GitHub token (lab secret request "
+                                 f"service:github-{login.lower()} github-token)")
+                    continue
+                files[f"/home/{user}/.config/agentic-lab/github/{login}.token"] = (
+                    user, "600", tok + "\n")
+                accounts[login] = {"email": lab.github_email(login),
+                                   "member": (lab.github_accounts[login] or {}).get("member")}
+            files[f"/home/{user}/.config/agentic-lab/github.yaml"] = (user, "600", yaml.safe_dump(
+                {"default": a["github"], "accounts": accounts}))
 
     if host == sec_host:
         sec_user = lab.unix_user(secretary)
@@ -201,7 +215,8 @@ def host_plan(lab, host, tokens, intake=intake_secret):
                       "lab-secretary": "lab-secretary"}.get(u)) for _, u in units}
     held = sorted(u for u, owner in unit_user.items() if owner in waiting)
     return {"host": host, "name": name, "files": files, "users": users, "units": units,
-            "envs": envs, "missing": missing, "secretary_host": host == sec_host,
+            "envs": envs, "missing": missing, "later": later,
+            "secretary_host": host == sec_host,
             "nebius_cli": locals().get("nebius_cli"), "held": held,
             "ssh_user": (lab.hosts.get(host) or {}).get("ssh_user")}
 
@@ -354,6 +369,8 @@ def describe(plan):
     out.append(f"  files:    {len(plan['files'])} secret/config files, {len(plan['envs'])} env files")
     for m in plan["missing"]:
         out.append(f"  ✗ missing: {m}")
+    for m in plan.get("later") or []:
+        out.append(f"  · not yet (optional): {m}")
     return "\n".join(out)
 
 

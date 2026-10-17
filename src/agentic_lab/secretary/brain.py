@@ -23,7 +23,7 @@ warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
 
 TOOL_NAMES = ("lab_state", "worker_tasks", "task_result", "ask_member_for_claude_token",
               "announce", "power", "read_lab_config", "propose_lab_change", "offer_deploy",
-              "check_slack_app", "request_slack_app")
+              "check_slack_app", "request_slack_app", "request_github_token")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
 
 
@@ -60,6 +60,10 @@ agents. You keep the lab running and answer questions about it, in Slack.
   - a new member: ask_member_for_claude_token (their agents need it to run);
   - a new manager: request_slack_app; when the admin says done, check_slack_app, then
     offer_deploy with redeploy so its service starts.
+  - a GitHub bot account (github.accounts in lab.yaml: shared, or `member: <id>` for a
+    member's own bot; each manager or worker that uses GitHub gets `github: <account>`,
+    its default identity): the admin creates the GitHub account itself; then
+    request_github_token, the token's expiry date into lab.yaml, and a redeploy.
   - a new GPU machine must exist first: created in the cloud console, on the tailnet, with
     SSH for the admin (passwordless sudo). Ask the admin for its tailnet name and, for
     power, its Nebius instance id.
@@ -145,6 +149,12 @@ def build_tools(ctx):
     async def offer_deploy(args):
         return text(await ctx.offer_apply(bool(args.get("redeploy"))))
 
+    @tool("request_github_token", "Admins only: a one-time link (and the exact steps) for a "
+          "GitHub bot account's token. The account must be in the deployed lab.yaml.",
+          {"account": str})
+    async def request_github_token(args):
+        return text(await ctx.request_github_token(args["account"]))
+
     @tool("request_slack_app", "Admins only: a new manager's Slack app (or 'secretary', "
           "'approvals'). Posts the manifest, the exact clicks and a one-time link for its "
           "tokens in this conversation. The agent must already be deployed.",
@@ -161,7 +171,7 @@ def build_tools(ctx):
     return create_sdk_mcp_server("lab", tools=[lab_state, worker_tasks, task_result,
                                                ask_member, announce, power, read_config,
                                                propose, offer_deploy, check_slack_app,
-                                               request_slack_app])
+                                               request_slack_app, request_github_token])
 
 
 class SecretaryBrain:
@@ -216,7 +226,11 @@ def expiry_notices(lab, today=None, warn_days=14):
     """Credentials in lab.yaml expiring within `warn_days` (or expired): (credential, days)."""
     today = today or dt.date.today()
     out = []
-    for c in lab.credentials:
+    bots = [{"name": f"github/{login}", "expires": (acc or {}).get("expires"),
+             "scope": "GitHub bot token: renew it, then lab secret request "
+                      f"service:github-{login.lower()} github-token"}
+            for login, acc in lab.github_accounts.items()]
+    for c in list(lab.credentials) + bots:
         exp = c.get("expires")
         if isinstance(exp, dt.date):
             left = (exp - today).days

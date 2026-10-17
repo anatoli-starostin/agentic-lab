@@ -125,8 +125,9 @@ def _grant_line(g):
 class SdkRunner:
     def __init__(self, agent_id, workdir, settings_for: Callable[[list], dict],
                  approver: Approver = None, model=None, env=None, cli_path=None, usage=None,
-                 events=None):
-        """`settings_for(grants)` returns the agent's settings given its active Grants."""
+                 events=None, per_task=None):
+        """`settings_for(grants)` returns the agent's settings given its active Grants;
+        `per_task(task)` -> (environment, prompt text) for that task (e.g. GitHub)."""
         self.agent_id = agent_id
         self.workdir = workdir
         self.settings_for = settings_for
@@ -136,10 +137,14 @@ class SdkRunner:
         self.cli_path = cli_path
         self.usage = usage          # a UsageLog, or None
         self.events = events        # an EventLog, or None
+        self.per_task = per_task
 
     def _log(self, kind, text="", **meta):
         if self.events is not None:
             self.events.add(kind, text, **meta)
+
+    def _extra(self, task):
+        return self.per_task(task) if self.per_task else ({}, "")
 
     def _lab_server(self, task, store, outcome):
         @tool("report_progress", "Report progress on the current task to the humans "
@@ -173,6 +178,7 @@ class SdkRunner:
 
     def _options(self, task, store, outcome, session, grants):
         tool_grants = {g["value"] for g in grants if g["kind"] == "tool"}
+        extra_env, extra_prompt = self._extra(task)
 
         async def can_use_tool(tool_name, tool_input, context):
             if allowed_without_asking(tool_name, tool_input) or tool_name in tool_grants:
@@ -213,9 +219,9 @@ class SdkRunner:
             mcp_servers={"lab": self._lab_server(task, store, outcome)},
             allowed_tools=list(LAB_TOOLS),
             system_prompt={"type": "preset", "preset": "claude_code",
-                           "append": _system_prompt(self.agent_id, task)},
+                           "append": _system_prompt(self.agent_id, task) + extra_prompt},
             model=self.model,
-            env=self.env,
+            env={**self.env, **extra_env},
             cli_path=self.cli_path,
             resume=store.get(task.id).session_id,
         )
