@@ -39,8 +39,19 @@ echo "== managed settings"
 install -d /etc/claude-code
 settings=/etc/claude-code/managed-settings.json
 if [ -e "$settings" ]; then
-  echo "   $settings exists; add this by hand:"
-  echo '   {"sandbox": {"bwrapPath": "/usr/local/libexec/agentic-lab/bwrap-gpu"}}'
+  # keep whatever else is there; make sure the sandbox uses bwrap-gpu
+  python3 - "$settings" <<'PY'
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+want = "/usr/local/libexec/agentic-lab/bwrap-gpu"
+if d.get("sandbox", {}).get("bwrapPath") == want:
+    print("   already set")
+else:
+    d.setdefault("sandbox", {})["bwrapPath"] = want
+    json.dump(d, open(p, "w"), indent=2)
+    print("   added bwrapPath")
+PY
 else
   cat > "$settings" <<JSON
 {
