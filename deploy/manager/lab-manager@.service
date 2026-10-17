@@ -1,0 +1,25 @@
+# One manager agent as a system service: `systemctl enable --now lab-manager@<agent-id>`.
+# Runs as the agent's own Unix user (lab-<agent-id>, see create-agent-user.sh); no tmux,
+# no login session. The framework lives in /opt/agentic-lab (root-owned: the agent can't
+# change the code that runs it) and the lab's description in /etc/agentic-lab/lab.yaml.
+#
+
+[Unit]
+Description=Agentic Lab manager %i
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=lab-%i
+Group=lab-%i
+WorkingDirectory=~
+EnvironmentFile=/etc/agentic-lab/manager-%i.env
+ExecStart=/opt/agentic-lab/venv/bin/lab --lab /etc/agentic-lab/lab.yaml manager serve %i --host ${LAB_BIND} --port ${LAB_PORT}
+Restart=always
+RestartSec=5
+# A /tmp of its own: sockets other processes leave in the host's /tmp (tmux, forwarded SSH
+# agents, other agents) aren't even visible to this agent.
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

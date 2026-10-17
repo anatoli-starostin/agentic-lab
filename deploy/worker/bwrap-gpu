@@ -1,0 +1,42 @@
+#!/bin/sh
+# bwrap-gpu: Claude Code's sandbox calls this instead of bubblewrap (managed setting
+# `sandbox.bwrapPath`). It passes the GPU into the sandbox and otherwise changes nothing.
+#
+# Claude Code builds the sandbox's /dev with `--dev /dev` (a fresh, minimal /dev) and may
+# later `--remount-ro /dev`. The GPU device nodes must be bound right after `--dev /dev`:
+# earlier they'd be hidden by the fresh /dev, later /dev may already be read-only.
+#
+# Set AGENTIC_LAB_BWRAP_LOG=<file> to log each invocation's argv (for debugging).
+
+REAL_BWRAP=/usr/bin/bwrap
+
+if [ -n "$AGENTIC_LAB_BWRAP_LOG" ]; then
+  printf '%s\n' "$*" >> "$AGENTIC_LAB_BWRAP_LOG" 2>/dev/null || true
+fi
+
+# GPU device nodes present on this host
+gpu_devs=""
+for d in /dev/nvidiactl /dev/nvidia-uvm /dev/nvidia-uvm-tools /dev/nvidia-modeset /dev/nvidia[0-9]* /dev/nvidia-caps /dev/dri; do
+  [ -e "$d" ] && gpu_devs="$gpu_devs $d"
+done
+
+# Rebuild argv, inserting `--dev-bind D D` for each GPU node right after `--dev /dev`.
+n=$#
+i=0
+inserted=0
+prev=""
+while [ $i -lt $n ]; do
+  a=$1
+  shift
+  i=$((i + 1))
+  set -- "$@" "$a"
+  if [ $inserted -eq 0 ] && [ "$prev" = "--dev" ] && [ "$a" = "/dev" ]; then
+    for d in $gpu_devs; do
+      set -- "$@" --dev-bind "$d" "$d"
+    done
+    inserted=1
+  fi
+  prev=$a
+done
+
+exec "$REAL_BWRAP" "$@"

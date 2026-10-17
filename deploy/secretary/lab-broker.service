@@ -1,0 +1,21 @@
+# The approval broker (DESIGN.md §6.3): humans decide in Slack DM, this records it.
+# Runs as its own Unix user (lab-broker), never an agent. Address from
+# /etc/agentic-lab/broker.env:   LAB_BIND=<this host's tailnet IP>   LAB_PORT=8772
+
+[Unit]
+Description=Agentic Lab approval broker
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=lab-broker
+Group=lab-broker
+WorkingDirectory=~
+EnvironmentFile=/etc/agentic-lab/broker.env
+ExecStart=/opt/agentic-lab/venv/bin/lab --lab /etc/agentic-lab/lab.yaml broker serve --host ${LAB_BIND} --port ${LAB_PORT}
+Restart=always
+RestartSec=5
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

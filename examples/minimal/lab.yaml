@@ -1,0 +1,76 @@
+# A minimal lab: one human, a secretary on an on-prem box, one manager on the shared cloud
+# CPU VM for managers, two cloud GPU workers (one shared, one dedicated). Every agent is attached to a human
+# member in terms of tokens: `human:` is whose Claude seat it runs on.
+# Validate with:  lab check examples/minimal/lab.yaml
+
+lab: example-lab
+tailnet: example.ts.net      # sandboxed commands may reach *.example.ts.net
+trust_tailnet: true          # tailnet resources count as safe (the default)
+
+humans:
+  alice:
+    name: Alice
+    slack_user: U00000001
+    channels:
+      - {type: slack_dm, timeout_s: 120, on_timeout: deny}   # permissions: Slack DM only (v1)
+
+hosts:
+  nuc-01:
+    kind: onprem
+    power: always_on
+  mgr-vm-01:
+    kind: cloud
+    provider: nebius
+    instance: mgr-vm-01
+    preemptible: true
+    restart_by: secretary
+  gpu-a:
+    kind: cloud
+    provider: nebius
+    instance: gpu-a
+    power: on_demand
+    idle_stop_min: 30
+  gpu-b:
+    kind: cloud
+    provider: nebius
+    instance: gpu-b
+    power: on_demand
+    idle_stop_min: 30
+
+agents:
+  secretary:
+    role: secretary
+    human: alice
+    host: nuc-01
+    model: claude-haiku-5-5
+  mgr-alice:
+    role: manager
+    human: alice
+    host: mgr-vm-01
+    slack_app: A00000001
+    model: claude-sonnet-5-5
+    workdir: ~/scratch
+    grants:                  # standing grants: this manager may always read the web
+      - {tool: WebFetch}
+      - {tool: WebSearch}
+  worker-a:
+    role: worker
+    human: alice
+    host: gpu-a
+    access: shared
+    max_parallel_gpu_tasks: 1
+    workdir: ~/work
+    grants:
+      - {domain: pypi.org}
+      - {domain: files.pythonhosted.org}
+      - {write: ~/datasets, reason: shared dataset cache}
+  worker-b:
+    role: worker
+    human: alice
+    host: gpu-b
+    access: dedicated
+
+credentials:
+  - {name: slack/mgr-alice, host: mgr-vm-01, agent: mgr-alice, expires: null}
+  - {name: claude/alice-seat-token, host: gpu-a, expires: 2027-10-01}
+  - {name: github/bot-pat, host: gpu-a, expires: 2026-12-11, scope: repo}

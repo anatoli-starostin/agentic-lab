@@ -1,0 +1,32 @@
+[project]
+name = "agentic-lab"
+version = "0.0.1"
+description = "A framework for humans and AI agents running a scientific lab together"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.12"
+dependencies = [
+    "pyyaml>=6",
+    "claude-agent-sdk>=0.2.116",
+    "mcp>=2.3,<3",
+    "uvicorn>=0.31",
+    "slack_sdk>=3.33",
+    "aiohttp>=3.10",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+lab = "agentic_lab.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

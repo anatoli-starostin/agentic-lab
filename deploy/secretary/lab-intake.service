@@ -1,0 +1,22 @@
+# The secret intake (DESIGN.md §11a): where members' `lab-member.py` sends secrets.
+# Runs as the secretary's own Unix user (lab-secretary); stored secrets are readable by
+# that user only. Address from /etc/agentic-lab/intake.env:
+#   LAB_BIND=<this host's tailnet IP>   LAB_PORT=8771
+
+[Unit]
+Description=Agentic Lab secret intake
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+User=lab-secretary
+Group=lab-secretary
+WorkingDirectory=~
+EnvironmentFile=/etc/agentic-lab/intake.env
+ExecStart=/opt/agentic-lab/venv/bin/lab intake serve --host ${LAB_BIND} --port ${LAB_PORT} --client /opt/agentic-lab/client/lab-member.py
+Restart=always
+RestartSec=5
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
