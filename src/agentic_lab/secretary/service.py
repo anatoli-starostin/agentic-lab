@@ -213,15 +213,19 @@ class Secretary:
             if r is None:
                 continue
             ok, tail = r
-            if self.slack is not None:
-                await self.slack.post(item["channel"], item["thread_ts"],
-                                      (":white_check_mark: Deployed" if ok else ":x: Deploy FAILED")
-                                      + f" `{item['commit'][:10]}` (started by {item['by']}).\n"
-                                      f"```{tail[-1200:]}```")
-            if ok:
-                await self.announce(f":rocket: The lab now runs config `{item['commit'][:10]}` "
-                                    f"(deployed by {item['by']}).")
-            self._pending_applies(remove=item["log"])
+            self._pending_applies(remove=item["log"])      # report once, whatever happens next
+            try:
+                if self.slack is not None:
+                    await self.slack.post(
+                        item["channel"], item["thread_ts"],
+                        (":white_check_mark: Deployed" if ok else ":x: Deploy FAILED")
+                        + f" `{item['commit'][:10]}` (started by {item['by']}).\n"
+                        f"```{tail[-1200:]}```")
+                if ok:
+                    await self.announce(f":rocket: The lab now runs config "
+                                        f"`{item['commit'][:10]}` (deployed by {item['by']}).")
+            except Exception:
+                log.exception("reporting deployment %s failed", item["log"])
 
     async def slack_verify(self, owner, asked_by=None):
         refused = self._admin_only(asked_by, "check the lab's Slack apps")
