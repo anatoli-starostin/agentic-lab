@@ -437,8 +437,21 @@ prompt or dialog.
 - Sessions persist on disk and resume after restarts.
 - `lab console` (§4.2) gives humans an interactive view of a headless agent, and
   `--takeover` opens the full Claude Code UI on the same session when needed.
-- Each agent gets its own Unix user, working dir and memory dir. The policy and the broker
-  run as different users from the agent they govern.
+- **Each agent runs as a system service under its own dedicated Unix user**, for example
+  `lab-agent`, with no tmux and no login session anywhere:
+  - The user can't log in: no password, no SSH keys, a `nologin` shell. It has **lingering
+    off**, so it never has a per-user systemd manager, and it owns only its working folder.
+  - A system-level unit (e.g. `lab-worker.service`, `User=lab-agent`) starts it at boot
+    and restarts it if it dies.
+  - Humans SSH in as themselves. `lab console` reaches the agent through a socket the
+    service creates under `/run/agentic-lab/`, which the sandbox hides from the agent.
+  - Why: GPU agents must allow Unix sockets (CUDA needs one), so any socket server running
+    *as the agent's user* would be a way out of the sandbox, for example a tmux session
+    (`tmux send-keys`) or a forwarded SSH agent in `/tmp`. Nobody ever runs anything as
+    that user except the service.
+  - Later: the service and the agent can run as two separate users, so the agent can't read
+    the service's own secrets (its MCP tokens).
+- The broker runs as a different user from the agent it governs.
 
 ### Every agent is attached to a human, in terms of tokens
 
@@ -511,6 +524,7 @@ after M3–M4 as needed.
 | 2026-10-17 | **Guardrail changes through the manager**: human asks manager → manager initiates the change on the worker over MCP → the worker's attempt raises a permission request → through the broker back to the human → applied only on approval. |
 | 2026-10-17 | **All managers share one cloud CPU VM**, one Unix user each. |
 | 2026-10-17 | **Permissions only in Slack DM** in the first version; more channels maybe later. The **web UI is for monitoring only**. |
+| 2026-10-17 | **Agents run as system services under a dedicated Unix user** that nobody logs into (no tmux, no login sessions, lingering off). Humans attach with `lab console`. |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
 
 ## 14. Open questions
