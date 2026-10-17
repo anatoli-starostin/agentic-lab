@@ -76,7 +76,8 @@ deployment's own `lab.yaml` and secret files, which never enter this repo.
 ```
 
 - **Secretary**: always-on, on-prem, holds the cloud power keys. One per lab.
-- **Managers**: **one shared cloud CPU VM** for all managers, one Unix user per manager.
+- **Managers**: **one shared cloud CPU VM** for all managers, each manager under its own Unix
+  user (§10).
   It may be preemptible; the secretary restarts it.
 - **Workers**: cloud GPU VMs, powered on demand. One worker agent per VM.
 
@@ -437,10 +438,16 @@ prompt or dialog.
 - Sessions persist on disk and resume after restarts.
 - `lab console` (§4.2) gives humans an interactive view of a headless agent, and
   `--takeover` opens the full Claude Code UI on the same session when needed.
-- **Each agent runs as a system service under its own dedicated Unix user**, for example
-  `lab-agent`, with no tmux and no login session anywhere:
+- **Each agent runs as a system service under its own dedicated Unix user**, with no tmux
+  and no login session anywhere. **One user per agent, even when several agents share a
+  host** (like the managers on the shared manager VM). The user is named after the agent:
+  `lab-<agent-id>`, e.g. `lab-mgr-alice`, `lab-worker-a`.
   - The user can't log in: no password, no SSH keys, a `nologin` shell. It has **lingering
-    off**, so it never has a per-user systemd manager, and it owns only its working folder.
+    off**, so it never has a per-user systemd manager, and it owns only its working folder,
+    which is private to it.
+  - So agents on the same host are separated by ordinary Unix permissions. "Local reads are
+    free" (§6.1) means what *its own user* can read: one agent can't read another's working
+    folder, memory or tokens.
   - A system-level unit (e.g. `lab-worker.service`, `User=lab-agent`) starts it at boot
     and restarts it if it dies.
   - Humans SSH in as themselves. `lab console` reaches the agent through a socket the
@@ -524,7 +531,7 @@ after M3–M4 as needed.
 | 2026-10-17 | **Guardrail changes through the manager**: human asks manager → manager initiates the change on the worker over MCP → the worker's attempt raises a permission request → through the broker back to the human → applied only on approval. |
 | 2026-10-17 | **All managers share one cloud CPU VM**, one Unix user each. |
 | 2026-10-17 | **Permissions only in Slack DM** in the first version; more channels maybe later. The **web UI is for monitoring only**. |
-| 2026-10-17 | **Agents run as system services under a dedicated Unix user** that nobody logs into (no tmux, no login sessions, lingering off). Humans attach with `lab console`. |
+| 2026-10-17 | **Agents run as system services, each under its own dedicated Unix user** (`lab-<agent-id>`), even when several agents share a host. Nobody logs into these users (no tmux, no login sessions, lingering off). Humans attach with `lab console`. |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
 
 ## 14. Open questions
