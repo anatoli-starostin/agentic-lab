@@ -11,6 +11,8 @@
     lab manager ask <agent> --as <member> "message"
                                 one message to a manager, answered on the console
     lab doctor [--host H]       (sudo) check this host against lab.yaml, with fixes
+    lab plan [--host H]         what `lab apply` would do on each host; missing secrets
+    lab apply [--host H]        (sudo, on the secretary host) make the hosts match lab.yaml
     lab slack-manifest <agent>|approvals
                                 the Slack app manifest for an agent (paste into api.slack.com)
     lab debug <agent>           (sudo) stop the agent's service and open its session in the
@@ -165,6 +167,45 @@ def cmd_doctor(args):
     return 1 if failed else 0
 
 
+def cmd_plan(args):
+    from .apply import ApplyError, describe, plan_all
+    try:
+        _, _, plans = plan_all(args.lab, hosts=args.host or None)
+    except (ApplyError, PermissionError) as e:
+        sys.exit(f"lab plan: {e} (run it with sudo on the secretary host)")
+    print("\n\n".join(describe(p) for p in plans))
+    return 1 if any(p["missing"] for p in plans) else 0
+
+
+def cmd_apply(args):
+    import os
+
+    from .apply import ApplyError, describe, find_source, plan_all, run_bundle
+    from .doctor import this_host
+    if os.geteuid() != 0:
+        sys.exit("lab apply needs root (it reads the lab's secrets): sudo lab apply ...")
+    try:
+        source = args.source or find_source()
+        lab, tokens, plans = plan_all(args.lab, hosts=args.host or None)
+    except ApplyError as e:
+        sys.exit(f"lab apply: {e}")
+    here = this_host(lab)
+    admin = args.admin or os.environ.get("SUDO_USER") or "root"
+    tokens.save()                  # generated tokens are kept before anything uses them
+    failed = 0
+    for p in plans:
+        print(describe(p))
+        if p["missing"] and not args.allow_missing:
+            print("  skipped: secrets missing (or pass --allow-missing)\n")
+            failed += 1
+            continue
+        p["lab_path"], p["source"] = os.path.abspath(args.lab), source
+        rc = run_bundle(p, local=(p["host"] == here), admin=admin)
+        print(f"  -> {'done' if rc == 0 else f'FAILED (exit {rc})'}\n")
+        failed += rc != 0
+    return 1 if failed else 0
+
+
 def cmd_debug(args):
     from .debug import debug
     debug(args.lab, args.agent, session=args.session, new=args.new, ask=args.print)
@@ -243,6 +284,17 @@ def main(argv=None):
     mask.add_argument("--wait", type=int, default=900,
                       help="seconds to follow the tasks it submits (default 900)")
     mask.set_defaults(fn=cmd_manager_ask)
+
+    pl = sub.add_parser("plan", help="what lab apply would do; missing secrets")
+    pl.add_argument("--host", action="append", help="only this host (repeatable)")
+    pl.set_defaults(fn=cmd_plan)
+    ap_ = sub.add_parser("apply", help="make the hosts match lab.yaml (sudo, secretary host)")
+    ap_.add_argument("--host", action="append", help="only this host (repeatable)")
+    ap_.add_argument("--admin", help="SSH user for remote hosts (default: the sudo user)")
+    ap_.add_argument("--source", help="the framework's source tree (default: detect)")
+    ap_.add_argument("--allow-missing", action="store_true",
+                     help="apply hosts even if some of their secrets are missing")
+    ap_.set_defaults(fn=cmd_apply)
 
     dr = sub.add_parser("doctor", help="check this host against lab.yaml (run with sudo)")
     dr.add_argument("--host", help="which lab.yaml host this is (default: detect)")

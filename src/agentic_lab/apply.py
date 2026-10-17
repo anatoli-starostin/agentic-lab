@@ -1,0 +1,275 @@
+"""`lab plan` / `lab apply`: make the hosts match lab.yaml (DESIGN.md §11a).
+
+Run on the secretary host, as root (sudo): it reads the secrets members and admins handed
+over (the intake's store) and the lab's own generated tokens. For each host it builds a
+bundle: the framework's source, lab.yaml, that host's secrets, and a generated, idempotent
+shell script. The bundle is copied to the host (over SSH as the admin, or locally for this
+host), run with sudo, and deleted. Running it again is always safe.
+
+Secrets:
+  - humans' Claude tokens and Slack apps' tokens come from the intake (`lab secret request`);
+  - the tokens agents use to reach each other (manager -> worker, agent -> broker) are
+    generated here, kept root-only in PRIVATE, and never shown to anyone.
+`lab plan` lists the steps per host and any secret still missing, and changes nothing.
+"""
+import os
+import pwd
+import secrets as pysecrets
+import shlex
+import shutil
+import subprocess
+import tarfile
+import tempfile
+
+import yaml
+
+from .registry import load as load_lab
+
+PRIVATE = "/etc/agentic-lab/private"
+INTAKE = "/home/lab-secretary/.local/state/agentic-lab/secrets"
+PORTS = {"worker": 8770, "intake": 8771, "broker": 8772}
+SOURCE_COPY = "/opt/agentic-lab/src"
+
+
+class ApplyError(RuntimeError):
+    pass
+
+
+def find_source():
+    """The framework's source tree: the repo this package was installed from, or the copy
+    `lab apply` keeps in /opt/agentic-lab/src."""
+    d = os.path.dirname(os.path.abspath(__file__))
+    for _ in range(4):
+        d = os.path.dirname(d)
+        if os.path.exists(os.path.join(d, "pyproject.toml")) and os.path.isdir(
+                os.path.join(d, "deploy")):
+            return d
+    if os.path.exists(os.path.join(SOURCE_COPY, "pyproject.toml")):
+        return SOURCE_COPY
+    raise ApplyError("can't find the framework's source: pass --source <repo checkout>")
+
+
+# ── the lab's own tokens ─────────────────────────────────────────────────────
+
+class Tokens:
+    """Generated tokens, kept root-only. Keys: `mgr:<manager>:<worker>`, `broker:<agent>`."""
+
+    def __init__(self, root=PRIVATE):
+        self.path = os.path.join(root, "tokens.yaml")
+        try:
+            with open(self.path) as f:
+                self.data = yaml.safe_load(f) or {}
+        except FileNotFoundError:
+            self.data = {}
+        self.changed = False
+
+    def get(self, key):
+        if key not in self.data:
+            self.data[key] = pysecrets.token_hex(32)
+            self.changed = True
+        return self.data[key]
+
+    def save(self):
+        if not self.changed:
+            return
+        os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(self.path))
+        with os.fdopen(fd, "w") as f:
+            yaml.safe_dump(self.data, f)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, self.path)
+
+
+def intake_secret(owner, name, root=INTAKE):
+    sub = ("services", owner[8:]) if owner.startswith("service:") else ("humans", owner)
+    try:
+        with open(os.path.join(root, *sub, name)) as f:
+            return f.read().strip() + "\n"
+    except FileNotFoundError:
+        return None
+
+
+# ── what each host needs ─────────────────────────────────────────────────────
+
+def secretary_host(lab):
+    for aid, a in lab.agents.items():
+        if (a or {}).get("role") == "secretary":
+            return a.get("host"), aid
+    raise ApplyError("lab.yaml has no secretary")
+
+
+def host_name(lab, host):
+    h = lab.hosts.get(host) or {}
+    return h.get("tailnet_name") or f"{host}.{lab.data.get('tailnet')}"
+
+
+def host_plan(lab, host, tokens, intake=intake_secret):
+    """Everything host `host` needs: files to install (path -> (owner, mode, content)),
+    users, units, and the secrets that are missing (blocking)."""
+    sec_host, secretary = secretary_host(lab)
+    broker_url = f"http://{host_name(lab, sec_host)}:{PORTS['broker']}"
+    name = host_name(lab, host)
+    files, users, units, envs, missing = {}, [], [], {}, []
+
+    def secret(user, fname, content, what):
+        if content is None:
+            missing.append(f"{what} (for {user})")
+            return
+        files[f"/home/{user}/.config/agentic-lab/{fname}"] = (user, "600", content)
+
+    here = {aid: a for aid, a in lab.agents.items() if (a or {}).get("host") == host}
+    managers = {aid: a for aid, a in lab.agents.items() if (a or {}).get("role") == "manager"}
+    for aid, a in here.items():
+        user, role = lab.unix_user(aid), a.get("role")
+        users.append(user)
+        secret(user, "claude-oauth-token", intake(a["human"], "claude-token"),
+               f"{a['human']}'s Claude token (lab secret request {a['human']} claude-token)")
+        if role == "worker":
+            allowed = [m for m, ma in managers.items()
+                       if a.get("access", "dedicated") == "shared" or ma.get("human") == a.get("human")]
+            files[f"/home/{user}/.config/agentic-lab/manager-tokens.yaml"] = (user, "600", yaml.safe_dump(
+                {m: tokens.get(f"mgr:{m}:{aid}") for m in allowed}))
+            files[f"/home/{user}/.config/agentic-lab/broker.yaml"] = (user, "600", yaml.safe_dump(
+                {"url": broker_url, "token": tokens.get(f"broker:{aid}")}))
+            _, port = lab.address(aid)
+            envs[f"/etc/agentic-lab/worker-{aid}.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={port}\nLAB_NAME={name}\n"
+            units.append(("lab-worker@.service", f"lab-worker@{aid}"))
+        elif role == "manager":
+            workers = [w for w, wa in lab.agents.items() if wa.get("role") == "worker" and (
+                wa.get("access", "dedicated") == "shared" or wa.get("human") == a.get("human"))]
+            files[f"/home/{user}/.config/agentic-lab/workers.yaml"] = (user, "600", yaml.safe_dump(
+                {w: tokens.get(f"mgr:{aid}:{w}") for w in workers}))
+            files[f"/home/{user}/.config/agentic-lab/broker.yaml"] = (user, "600", yaml.safe_dump(
+                {"url": broker_url, "token": tokens.get(f"broker:{aid}")}))
+            secret(user, "slack.env", intake(f"service:{aid}", "slack-app"),
+                   f"{aid}'s Slack app tokens (lab secret request service:{aid} slack-app)")
+            units.append(("lab-manager@.service", f"lab-manager@{aid}"))
+
+    if host == sec_host:
+        users += ["lab-broker"]
+        agents = [aid for aid, a in lab.agents.items() if a.get("role") in ("worker", "manager")]
+        files["/home/lab-broker/.config/agentic-lab/agent-tokens.yaml"] = ("lab-broker", "600",
+            yaml.safe_dump({aid: tokens.get(f"broker:{aid}") for aid in agents}))
+        secret("lab-broker", "slack.env", intake("service:broker", "slack-app"),
+               "the Lab Approvals Slack app tokens (lab secret request service:broker slack-app)")
+        envs["/etc/agentic-lab/broker.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={PORTS['broker']}\n"
+        envs["/etc/agentic-lab/intake.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={PORTS['intake']}\n"
+        units += [("lab-broker.service", "lab-broker"), ("lab-intake.service", "lab-intake")]
+        if "lab-secretary" not in users:
+            users.append("lab-secretary")
+    return {"host": host, "name": name, "files": files, "users": users, "units": units,
+            "envs": envs, "missing": missing, "secretary_host": host == sec_host}
+
+
+# ── the script each host runs ────────────────────────────────────────────────
+
+SCRIPT_HEAD = r"""#!/bin/bash
+# Generated by `lab apply` for host {host}. Idempotent: safe to run again.
+set -euo pipefail
+B=$(cd "$(dirname "$0")" && pwd)
+say() {{ echo "== $*"; }}
+TIP=$(tailscale ip -4 2>/dev/null | head -1)
+[ -n "$TIP" ] || {{ echo "this host isn't on the tailnet"; exit 1; }}
+
+say "framework -> /opt/agentic-lab"
+command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh >/dev/null 2>&1
+mkdir -p /opt/agentic-lab /etc/agentic-lab
+rm -rf /opt/agentic-lab/src.new && mkdir /opt/agentic-lab/src.new
+tar xzf "$B/source.tgz" -C /opt/agentic-lab/src.new
+rm -rf /opt/agentic-lab/src && mv /opt/agentic-lab/src.new /opt/agentic-lab/src
+uv venv -q --allow-existing /opt/agentic-lab/venv -p 3.12
+uv pip install -q -p /opt/agentic-lab/venv --reinstall-package agentic-lab /opt/agentic-lab/src
+install -d /opt/agentic-lab/client
+install -m 644 /opt/agentic-lab/src/client/lab-member.py /opt/agentic-lab/client/
+install -m 644 "$B/lab.yaml" /etc/agentic-lab/lab.yaml
+
+say "sandbox prerequisites"
+/opt/agentic-lab/src/deploy/worker/setup-sandbox.sh
+"""
+
+
+def script(plan):
+    lines = [SCRIPT_HEAD.format(host=plan["host"])]
+    lines.append('say "users"')
+    for u in dict.fromkeys(plan["users"]):
+        lines.append(f"/opt/agentic-lab/src/deploy/worker/create-agent-user.sh {u} >/dev/null")
+    lines.append('say "secrets and config"')
+    for i, (path, (owner, mode, _)) in enumerate(sorted(plan["files"].items())):
+        d = os.path.dirname(path)
+        lines.append(f"install -d -m 700 -o {owner} -g {owner} {shlex.quote(os.path.dirname(d))} "
+                     f"{shlex.quote(d)}")
+        lines.append(f'install -m {mode} -o {owner} -g {owner} "$B/files/{i}" {shlex.quote(path)}')
+    for i, path in enumerate(sorted(plan["envs"])):
+        lines.append(f'sed "s/@TAILNET_IP@/$TIP/" "$B/envs/{i}" > {shlex.quote(path)}')
+    lines.append('say "services"')
+    for unit_file, _ in plan["units"]:
+        sub = "worker" if "worker" in unit_file else "manager" if "manager" in unit_file else "secretary"
+        lines.append(f"install -m 644 /opt/agentic-lab/src/deploy/{sub}/{unit_file} /etc/systemd/system/")
+    lines.append("systemctl daemon-reload")
+    for _, unit in plan["units"]:
+        lines.append(f"systemctl enable {unit} >/dev/null 2>&1; systemctl restart {unit}")
+    lines.append('sleep 3; say "status"')
+    for _, unit in plan["units"]:
+        lines.append(f'echo "  {unit}: $(systemctl is-active {unit})"')
+    return "\n".join(lines) + "\n"
+
+
+def bundle(plan, lab_path, source, out):
+    """Write the host's bundle into directory `out` (mode 700)."""
+    os.makedirs(os.path.join(out, "files"), mode=0o700)
+    os.makedirs(os.path.join(out, "envs"), mode=0o700)
+    with tarfile.open(os.path.join(out, "source.tgz"), "w:gz") as t:
+        t.add(source, arcname=".", filter=lambda ti: None if any(
+            p in ti.name.split("/") for p in (".git", ".venv", "__pycache__", ".pytest_cache"))
+            else ti)
+    shutil.copy(lab_path, os.path.join(out, "lab.yaml"))
+    for i, (path, (_, _, content)) in enumerate(sorted(plan["files"].items())):
+        p = os.path.join(out, "files", str(i))
+        with open(p, "w") as f:
+            f.write(content)
+        os.chmod(p, 0o600)
+    for i, path in enumerate(sorted(plan["envs"])):
+        with open(os.path.join(out, "envs", str(i)), "w") as f:
+            f.write(plan["envs"][path])
+    with open(os.path.join(out, "apply.sh"), "w") as f:
+        f.write(script(plan))
+    os.chmod(os.path.join(out, "apply.sh"), 0o700)
+
+
+def plan_all(lab_path, hosts=None, tokens=None, intake=intake_secret):
+    lab = load_lab(lab_path)
+    tokens = tokens or Tokens()
+    chosen = hosts or list(lab.hosts)
+    return lab, tokens, [host_plan(lab, h, tokens, intake) for h in chosen]
+
+
+def describe(plan):
+    out = [f"host {plan['host']} ({plan['name']})"]
+    out.append("  users:    " + ", ".join(plan["users"]))
+    out.append("  services: " + ", ".join(u for _, u in plan["units"]))
+    out.append(f"  files:    {len(plan['files'])} secret/config files, {len(plan['envs'])} env files")
+    for m in plan["missing"]:
+        out.append(f"  ✗ missing: {m}")
+    return "\n".join(out)
+
+
+def run_bundle(plan, local, admin):
+    """Run a host's bundle: locally (this host) or over SSH as the admin."""
+    with tempfile.TemporaryDirectory(prefix="lab-apply-") as tmp:
+        b = os.path.join(tmp, "bundle")
+        bundle(plan, plan["lab_path"], plan["source"], b)
+        if local:
+            return subprocess.run(["bash", os.path.join(b, "apply.sh")]).returncode
+        target = f"{admin}@{plan['name']}"
+        remote = f"/tmp/lab-apply-{pysecrets.token_hex(4)}"
+        as_admin = ["sudo", "-u", admin] if os.geteuid() == 0 and admin != "root" else []
+        if as_admin:        # hand the staging folder to the admin only (it stays mode 700)
+            pw = pwd.getpwnam(admin)
+            for root, dirs, fnames in os.walk(tmp):
+                for n in [root] + [os.path.join(root, x) for x in dirs + fnames]:
+                    os.chown(n, pw.pw_uid, pw.pw_gid)
+        r = subprocess.run(as_admin + ["scp", "-q", "-r", b, f"{target}:{remote}"])
+        if r.returncode:
+            return r.returncode
+        return subprocess.run(as_admin + ["ssh", target, f"sudo bash {remote}/apply.sh; "
+                                          f"rc=$?; rm -rf {remote}; exit $rc"]).returncode
