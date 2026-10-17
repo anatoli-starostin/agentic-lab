@@ -1,0 +1,29 @@
+Metadata-Version: 2.4
+Name: agentic-lab
+Version: 0.0.1
+Summary: A framework for humans and AI agents running a scientific lab together
+License-Expression: MIT
+Requires-Python: >=3.12
+Description-Content-Type: text/markdown
+License-File: LICENSE
+Requires-Dist: pyyaml>=6
+Provides-Extra: dev
+Requires-Dist: pytest>=8; extra == "dev"
+Dynamic: license-file
+
+# Agentic Lab
+
+A framework for running a scientific lab as a team of **humans and AI agents**:
+
+- **Workers** run experiments on cloud GPU VMs inside a sandbox, without prompts.
+- **Managers** are your team members in Slack. They turn requests into worker tasks and
+  relay every approval request to a human. They never approve anything themselves.
+- A light **secretary** keeps the infrastructure alive: VM power, agent health, token
+  expiry, and a status dashboard.
+
+Anything that crosses the sandbox boundary needs a real human's yes, and the code enforces
+that, not a prompt.
+
+Status: **design phase**. See [DESIGN.md](DESIGN.md).
+
+License: MIT.

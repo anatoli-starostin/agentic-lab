@@ -69,7 +69,7 @@ deployment's own `lab.yaml` and secret files, which never enter this repo.
             ▼              ▼                ▼     │     │ power,    │ health
      ┌────────────┐ ┌────────────┐  ┌────────────┐│     │ restart   │ probes
      │ WORKER VM  │ │ WORKER VM  │  │ WORKER VM  ││     ▼           ▼
-     │ GPU, cage  │ │ GPU, cage  │  │ GPU, cage  │└── approval requests
+     │ GPU, sbx   │ │ GPU, sbx   │  │ GPU, sbx   │└── approval requests
      │ worker svc │ │ worker svc │  │ worker svc │    (worker → broker)
      └────────────┘ └────────────┘  └────────────┘
                    all hosts on one tailnet · W&B · git
@@ -115,9 +115,8 @@ Cheap and always on. **Mostly deterministic code. The LLM only handles conversat
 Tied to one GPU VM. Uses tokens freely. Humans don't talk to it directly.
 
 - Runs as a **service** that exposes the **worker MCP server** (§5) on its tailnet address.
-- Executes tasks inside the **cage** (§6). In-cage work runs without prompts. A boundary
-  crossing becomes an **approval request to the approval broker** of the manager that owns
-  the task.
+- Executes tasks inside the **sandbox** (§6.1), without prompts. Anything outside it becomes
+  an **approval request to the approval broker** of the manager that owns the task.
 - Like every agent, it is **attached to one human for tokens** (it runs on their seat). This
   is separate from who may use it: access is either **dedicated** (only one human's manager
   may submit tasks) or **shared** (any manager may). Both are set in `lab.yaml`.
@@ -146,12 +145,12 @@ On a CPU VM. Has its own **Slack identity**. Uses a moderate number of tokens.
   or email). It can always say which one is active (§7).
 - **Relays worker approval requests** to the human and adds context (what the task is, why
   the worker asks). It **cannot answer them** (§6.3).
-- **Guardrails**: it may **read** anything in the org and on the internet without asking.
-  Every **write** (GitHub, Google Drive, …) goes through its own permission channel. It may
-  use a scratchpad dir on its VM freely.
-- **Can read and edit workers' guardrails** through MCP. Edits are versioned and announced
-  in the thread. **It cannot edit its own**, because its policy file isn't writable by it
-  (§6.2).
+- **Guardrails**: the same model as every agent (§6.1), plus standing grants for reading
+  the web (`WebFetch`, `WebSearch`). Every **write** (GitHub, Google Drive, …) is a
+  permission request to its human. Its working folder is a scratchpad on its VM.
+- **Can read workers' guardrails and grants** through MCP and explain them to humans. It
+  can **request** grants for a worker, which the broker turns into a question to the human.
+  It cannot change its own guardrails.
 - Slack design reuses the spiky "Slack façade" (two processes). The Slack-facing process
   cannot stall and cannot leak secrets. The capable process does the work, and its
   approvals go out-of-band to the human.
@@ -174,7 +173,8 @@ token listed in `lab.yaml`. A dedicated worker rejects managers other than its o
 | `cancel_task(task_id)` | Cooperative cancel, then kill after a grace period. |
 | `list_tasks(filter)` | Queue overview. |
 | `pending_approvals()` | Read-only view of what the worker is blocked on (for context only; see §6.3). |
-| `get_guardrails()` / `set_guardrails(patch, reason)` | Read and edit this worker's policy overlay (versioned, audited). |
+| `request_grant(grant, reason)` | Ask for a grant on this worker. It becomes a question to the human (§6.2); the manager can't grant it itself. |
+| `get_guardrails()` | This worker's sandbox config, standing grants and active grants with expiry. |
 | `health()` | Liveness, GPU state, disk, queue depth, agent session alive?, versions. |
 
 Progress and approvals flow back as **notifications** (MCP server→client), with polling via
@@ -190,34 +190,77 @@ silently corrupts benchmarks). `lab.yaml` may raise this per worker.
 
 ## 6. Guardrails and the trust model
 
-### 6.1 The cage (from spiky's `agent-cage`)
+### 6.1 One simple model for every agent
 
-- `sbox` (bubblewrap) makes the whole filesystem read-only except the work dirs, passes the
-  GPU through, cuts the network (or opts into tailnet-only), and masks `~/.ssh`.
-- `cage_policy` is a classifier that labels every tool call **ungated / green / gated**.
-  Green auto-runs, gated becomes an approval request. Parsing is strict about shell
-  operators, redirects, command substitution and git flags. **When something over-gates,
-  tune the classifier, don't widen the cage.**
+Every agent (secretary, manager, worker) lives by the same two zones.
 
-### 6.2 Policy as configuration
+| | **Inside the sandbox: auto-allowed** | **Outside the sandbox: only with permission** |
+|---|---|---|
+| Internet | none | allowed after a human says yes |
+| Tailnet (lab resources) | **allowed**: tailnet resources count as safe | — |
+| Local files | read and write the **working folder and tmp** | **reads are free**; writes need permission |
+| GPU | available | — |
 
-Today the classifier hard-codes its allowlists. It becomes an engine that reads layered
-policy:
+Enforcement uses **Claude Code's built-in sandbox**, not our own code:
 
-```
-policies/base.yaml          # shipped with the framework: the safe defaults
-policies/role/<role>.yaml   # worker / manager / secretary defaults
-<deploy>/agents/<name>.yaml # per-agent overlay (extra green commands, extra writable dirs,
-                            #  network mode, helpers green-listed by absolute path)
-```
+- **Every Bash command runs sandboxed automatically** (bubblewrap on Linux, plus a network
+  proxy with a domain allowlist). Sandboxed commands are auto-allowed. There is no command
+  parsing, so a cleverly written command can't slip past a parser.
+- The sandbox also blocks writes to `.git/hooks`, `.git/config`, `.bashrc` and Claude's own
+  settings, even inside the working folder. A sandboxed step can't plant code that later
+  runs outside it.
+- **Locked by managed settings** that the agent can't change: sandboxing on and required
+  (`failIfUnavailable`), and the network allowlist admin-only. A repository's own settings
+  can't widen it.
+- **Outside the sandbox**, the normal permission flow applies. Write/Edit outside the
+  working folder, `WebFetch`/`WebSearch`, and Bash commands the agent re-runs unsandboxed
+  are all **permission requests**. They go to the broker (§6.3), then to the human.
+- **Tailnet is trusted by design for now.** The sandbox allowlist includes the tailnet. This
+  may tighten (per-host lists) as the organisation grows.
 
-- A policy file and the engine that enforces it **live outside anything the governed agent
-  can write.** That is a separate Unix user, or a dir the cage mounts read-only. An agent
-  cannot widen its own guardrails without a human, by construction.
-- A manager edits a worker's overlay through `set_guardrails`. The worker service (not the
-  worker agent) applies it, keeps the history and announces it.
-- `lab policy explain <agent> '<command>'` prints the verdict and the rule that produced it,
-  for debugging and for the dashboard.
+**The usual flow:** the agent runs a command → the sandbox refuses it (say, a domain that
+isn't allowed) → the agent sees why and retries it outside the sandbox → that is a
+permission request → the human decides (§6.2).
+
+### 6.2 Grants: permissions customised on the fly
+
+When the human answers a request, they choose how far the answer reaches:
+
+- **Once**: this one action runs (an unsandboxed command runs once outside the sandbox).
+- **For a while**: "allow arxiv.org for 1 hour", or "for this session". This **widens the
+  sandbox**: the domain (or writable folder) is added to the agent's sandbox config with an
+  expiry. The unsandboxed retry is declined with *"arxiv.org is now allowed in the sandbox
+  for 1h, retry inside it"*, the agent retries, and the sandbox's own proxy enforces the
+  grant until it expires.
+- **Deny**, or **deny with a note** ("do it differently"), which goes back to the agent as
+  an instruction.
+
+A time-limited grant always widens the **sandbox**. It never means "trust unsandboxed
+commands for an hour", because an unsandboxed command can do anything, so its scope can't
+be enforced.
+
+- **Grants can also be given ahead of time**, by the human, in any channel ("give worker-a
+  arxiv for an hour"). The manager may relay the request, but the grant is created only by
+  the broker after the human confirms it (§6.3).
+- **Standing grants** (always on) sit in `lab.yaml` per agent, for example a manager that
+  may always read the web:
+  ```yaml
+  agents:
+    mgr-alice:
+      grants:
+        - {tool: WebFetch}
+        - {tool: WebSearch}
+    worker-a:
+      grants:
+        - {domain: pypi.org}
+        - {domain: files.pythonhosted.org}
+        - {write: ~/datasets}
+  ```
+- **Every grant is visible**: active grants, their expiry and who gave them are shown in the
+  web UI. Expired grants are removed automatically.
+- Implementation detail to verify in M1: whether a running session picks up a sandbox
+  config change. If not, the agent service restarts and resumes the session, which is
+  invisible to humans.
 
 ### 6.3 Approvals: the broker, not the manager, decides who answered
 
@@ -238,13 +281,13 @@ worker gate ◄─signed decision── broker   (HMAC with a per-worker key the
   the human ("this is the pip install from task 17, needed for the eval"). It has no tool
   that produces a decision.
 - **Timeouts deny.** An unanswered request auto-denies after `N` seconds (configurable per
-  human and channel). The denial reason tells the worker it was a timeout, not a "no", and
-  asks it to find an in-cage way first. (This is spiky's lesson: cheap paths in-cage keep
-  real approvals rare and meaningful.)
-- **"Always allow" belongs to the human, not the agent.** An "always" click adds a scoped
-  rule to that worker's policy overlay, through the same versioned path as `set_guardrails`.
+  human and channel). The denial reason tells the agent it was a timeout, not a "no", and
+  asks it to find a way inside the sandbox first. (This is spiky's lesson: cheap paths
+  inside the sandbox keep real approvals rare and meaningful.)
+- **Grants belong to the human, not the agent** (§6.2). Only the broker creates them, and
+  only after a verified human answer.
 - **Typed reply = redirect.** A human typing an answer instead of clicking means "no, do it
-  this way". The note goes back to the worker as an instruction.
+  this way". The note goes back to the agent as an instruction.
 
 The manager's *own* boundary crossings (GitHub and Drive writes) go through **the same
 broker** and the same channel. The manager agent is just another gated client.
@@ -255,8 +298,11 @@ broker** and the same channel. The manager agent is just another gated client.
   repo, `lab.yaml`, Slack or agent memory.
 - `lab.yaml` lists each credential's **name, owner host, scope and expiry date**, never its
   value. The secretary needs only that to warn about expiry.
-- The cage masks secret dirs from caged processes. A Slack-facing process holds only its own
-  Slack tokens and has no filesystem reach beyond its own workspace.
+- **Local reads are free** (§6.1), so an agent can read token files on its own host. This
+  is an accepted trade-off for small, transparent teams. Where a token matters more, move it
+  to another Unix user (for example the broker's), and the agent can't read it at all.
+- A Slack-facing process holds only its own Slack tokens and has no filesystem reach beyond
+  its own workspace.
 
 ---
 
@@ -323,7 +369,8 @@ agents:
     human: anatoly
     access: shared            # or: dedicated (only anatoly's manager may submit)
     max_parallel_gpu_tasks: 1
-    policy_overlay: agents/worker-h100-a.yaml
+    grants:                   # standing grants (§6.2)
+      - {domain: pypi.org}
 hosts:
   nuc-01:      {kind: onprem}
   mgr-vm-01:   {kind: cloud, provider: nebius, instance: ..., preemptible: true,  restart_by: secretary}
@@ -377,8 +424,10 @@ prompt or dialog.
   tasks in when idle and never while a human is attached. It is built only if the SDK
   disappoints. Nothing above the interface (MCP, broker, policy, web UI) changes.
 
-- The SDK gives an in-process permission callback. That callback *is* the gate
-  (`cage_policy` → broker), so "never prompts the wrong place" is enforceable.
+- The SDK runs Claude Code's built-in sandbox (`ClaudeAgentOptions(sandbox=...)`, with
+  `failIfUnavailable` set explicitly) and gives an in-process permission callback. That
+  callback *is* the gate: it checks active grants, then asks the broker. So "never prompts
+  the wrong place" is enforceable.
 - Sessions persist on disk and resume after restarts.
 - `lab console` (§4.2) gives humans an interactive view of a headless agent, and
   `--takeover` opens the full Claude Code UI on the same session when needed.
@@ -407,8 +456,7 @@ Sonnet-class for managers, the strongest available model for workers.
 ```
 agentic_lab/
   registry/      lab.yaml schema, loader, `lab check`
-  policy/        classifier engine (from cage_policy) + base/role policies + tests
-  cage/          sbox (bubblewrap) + host setup notes
+  policy/        sandbox settings generator (per agent) + grant store + tests
   broker/        approval broker + permission channels (slack_dm, console, telegram, email)
   worker/        worker service: MCP server, durable queue, agent runner, `lab console`
   manager/       manager service: Slack face (from slack-facade) + MCP client + agent runner
@@ -430,8 +478,8 @@ Each milestone ends with a demo that works on real infrastructure.
 
 | # | Milestone | Done when |
 |---|---|---|
-| M0 | **Skeleton**: repo, `lab.yaml` schema + `lab check`, policy engine ported with its full test battery | `pytest` green; spiky's `cage_policy` test cases pass against the new engine |
-| M1 | **Worker**: MCP server, durable queue, SDK agent runner, cage, `lab console` | A manager played by hand over MCP submits a task to a cloud GPU VM, watches progress and gets the result |
+| M0 | **Skeleton**: repo, `lab.yaml` schema + `lab check`, per-agent sandbox settings generated from `lab.yaml` | `pytest` green; `lab check` validates the example lab |
+| M1 | **Worker**: MCP server, durable queue, SDK agent runner, built-in sandbox, grants, `lab console` | A manager played by hand over MCP submits a task to a cloud GPU VM, watches progress and gets the result |
 | M2 | **Broker + channels**: signed decisions, Slack DM + console channels, timeout policy | A worker's `pip install` reaches the human's DM. Approve and deny both work, the timeout denies, and **the manager agent provably cannot approve** (test) |
 | M3 | **Manager**: Slack face + MCP client + its own guardrails | "@manager run exp X on a GPU worker" in Slack → task → approval in DM → result in thread |
 | M4 | **Secretary + web UI**: checks, cloud power, web UI (§9), chat | Web UI shows tasks, approvals, guardrails and spend live. A GPU VM idle 30 min is stopped. A preempted manager is restarted. A token expiring within 14 days is reported |
@@ -453,6 +501,7 @@ after M3–M4 as needed.
 | 2026-10-17 | **No fixed results contract**: tasks vary, so a result is whatever fits (report, commit, W&B run, files). |
 | 2026-10-17 | **Agent SDK runtime** behind an `AgentRunner` interface. `lab console` + `--takeover` (real `claude --resume`) for humans. A tmux runner is only a fallback. |
 | 2026-10-17 | **Every agent is attached to a human member in terms of tokens** (runs on their seat). Access is set separately. The secretary is attached to the lab owner. |
+| 2026-10-17 | **One simple sandbox model for all agents** (§6.1): inside = no internet, tailnet, working folder + tmp, auto-allowed; outside = internet and writes need permission, reads free. Enforced by Claude Code's built-in sandbox, with no command parsing. **Grants** (once / for a while / standing) customise it on the fly (§6.2). |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
 
 ## 14. Open questions
@@ -461,3 +510,6 @@ after M3–M4 as needed.
    manager? (Start shared; it's cheaper and the secretary restarts it.)
 2. **Web UI approvals**: should the web UI later become a permission channel too (answer
    approvals in the browser)?
+3. **Manager guardrail edits**: the original brief lets a manager change a worker's
+   guardrails. Under §6.2 a manager can only *request* grants, which a human confirms.
+   Is that the intended reading?
