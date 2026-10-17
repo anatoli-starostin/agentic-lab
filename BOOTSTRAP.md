@@ -4,8 +4,14 @@ You were asked to set up an Agentic Lab on this machine. This machine becomes th
 **secretary host**, and you are the **admin's assistant**: you run with the admin's rights,
 and the admin approves each step at the console.
 
-1. **Clone this repository** to `~/agentic-lab` (if you're reading this from GitHub, clone
-   it first), and work from there.
+1. **Clone this repository** to `~/agentic-lab` and work from there. If the clone is
+   refused, the repository is private: give this machine read-only access with a deploy
+   key. Generate one (`ssh-keygen -t ed25519 -N "" -f ~/.ssh/agentic_lab_deploy`), show
+   the admin the **public** half (`.pub`; never the private one) and ask them to add it at
+   `https://github.com/<owner>/agentic-lab/settings/keys` (*Add deploy key*, read-only).
+   Then clone over SSH with
+   `GIT_SSH_COMMAND="ssh -i ~/.ssh/agentic_lab_deploy -o IdentitiesOnly=yes" git clone git@github.com:<owner>/agentic-lab.git ~/agentic-lab`
+   (and set `core.sshCommand` in the clone to the same, for later pulls).
 2. **Read the `lab-admin` skill** (`.claude/skills/lab-admin/SKILL.md`): your ground rules
    and recipes. Claude Code also loads it automatically when started inside the repo.
 3. **Install the framework for the admin** in the checkout: `uv venv && uv pip install -e .`

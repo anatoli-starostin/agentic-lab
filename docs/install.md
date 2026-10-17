@@ -31,7 +31,8 @@ means `~/agentic-lab/.venv/bin/lab`. `sudo` commands need the full path:
 3. **Give Claude the first message** (Admin):
    > Set up an Agentic Lab on this machine: https://github.com/anatoli-starostin/agentic-lab
 
-   Claude clones the repo, reads `BOOTSTRAP.md`, and takes over.
+   Claude clones the repo, reads `BOOTSTRAP.md`, and takes over. (While the repository is
+   private, Claude first asks the admin to add a read-only deploy key for this machine.)
 
 ## Guided by Claude
 
@@ -40,8 +41,10 @@ means `~/agentic-lab/.venv/bin/lab`. `sudo` commands need the full path:
      (Slack: profile → ⋯ → Copy member ID), the admin's manager's id, and the first
      workers (`id@host`, e.g. `worker-a@gpu-a`), then runs:
      `lab init lab.yaml --name ... --admin ... --admin-name ... --slack-user ... --manager mgr-<admin> --worker worker-a@gpu-a`
-   - It also marks the admin `admin: true` with their `tailscale_login` (for the web UI's
-     logs) and, if wanted, an `announcements` channel. `lab check lab.yaml` must pass.
+   - `lab init` marks the admin `admin: true` and fills in their Tailscale login (for the
+     web UI's logs) from this machine's owner. A separate VM for managers:
+     `--manager-host mgr-vm`. Optionally add an `announcements` channel. `lab check
+     lab.yaml` must pass.
    - `lab.yaml` goes into git (it holds no secrets).
 
 5. **The secretary's own services** (Claude)

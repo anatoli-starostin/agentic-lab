@@ -315,6 +315,10 @@ def main(argv=None):
     i.add_argument("--secretary-host", help="this machine's host id (default: its tailnet name)")
     i.add_argument("--secretary-name", help="this machine's tailnet name (default: detected)")
     i.add_argument("--manager", help="also create the admin's manager with this id")
+    i.add_argument("--manager-host", help="the managers' VM: host[=tailnet-name] (default: "
+                   "this machine)")
+    i.add_argument("--tailscale-login", help="the admin's Tailscale login, for the web UI's "
+                   "logs (default: this machine's owner)")
     i.add_argument("--worker", action="append", help="a worker: id@host[=tailnet-name] "
                    "(repeatable)")
     i.add_argument("--force", action="store_true", help="overwrite an existing file")

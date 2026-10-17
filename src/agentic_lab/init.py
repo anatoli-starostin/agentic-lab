@@ -28,6 +28,18 @@ def tailscale_self():
         return None, None
 
 
+def tailscale_login():
+    """The login of whoever owns this machine on the tailnet (the admin, at install)."""
+    try:
+        r = subprocess.run(["tailscale", "status", "--json"], capture_output=True, text=True,
+                           timeout=10)
+        d = json.loads(r.stdout)
+        uid = str(d.get("Self", {}).get("UserID"))
+        return (d.get("User") or {}).get(uid, {}).get("LoginName")
+    except (OSError, ValueError, subprocess.SubprocessError, AttributeError):
+        return None
+
+
 def _ask(prompt, default=None, check=None):
     if not sys.stdin.isatty():
         if default is None:
@@ -50,7 +62,8 @@ def parse_worker(spec, tailnet):
 
 
 def build(lab_name, tailnet, admin_id, admin_name, slack_user, secretary_host,
-          secretary_name, manager=None, workers=(), provider="nebius"):
+          secretary_name, manager=None, workers=(), provider="nebius", admin_login=None,
+          manager_host=None):
     hosts = {secretary_host: {"kind": "onprem", "power": "always_on"}}
     if secretary_name:
         hosts[secretary_host]["tailnet_name"] = secretary_name
@@ -58,10 +71,18 @@ def build(lab_name, tailnet, admin_id, admin_name, slack_user, secretary_host,
         {"type": "slack_dm", "timeout_s": 120, "on_timeout": "deny"}]}
     if slack_user:
         human["slack_user"] = slack_user
+    human["admin"] = True                 # sees agents' logs in the web UI
+    if admin_login:
+        human["tailscale_login"] = admin_login
     agents = {"secretary": {"role": "secretary", "human": admin_id, "host": secretary_host,
                             "model": "claude-haiku-5-5"}}
     if manager:
-        agents[manager] = {"role": "manager", "human": admin_id, "host": secretary_host,
+        mhost, mname = manager_host or (secretary_host, None)
+        if mhost not in hosts:
+            hosts[mhost] = {"kind": "cloud", "provider": provider, "power": "always_on"}
+            if mname:
+                hosts[mhost]["tailnet_name"] = mname
+        agents[manager] = {"role": "manager", "human": admin_id, "host": mhost,
                            "access": "dedicated", "workdir": "~/scratch",
                            "grants": [{"tool": "WebFetch"}, {"tool": "WebSearch"}]}
     for wid, host, name in workers:
@@ -98,8 +119,13 @@ def run(path, args):
         _ask("This machine's host id", check=ID.match)
     sec_name = args.secretary_name or me
     workers = [parse_worker(w, tailnet) for w in args.worker or []]
+    mhost = None
+    if args.manager_host:
+        _, h, n = parse_worker(f"x@{args.manager_host}", tailnet)
+        mhost = (h, n)
     data = build(lab_name, tailnet, admin_id, admin_name, slack_user, sec_host, sec_name,
-                 manager=args.manager, workers=workers)
+                 manager=args.manager, workers=workers,
+                 admin_login=args.tailscale_login or tailscale_login(), manager_host=mhost)
     with open(path, "w") as f:
         f.write(HEADER)
         yaml.safe_dump(data, f, sort_keys=False)

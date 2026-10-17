@@ -11,8 +11,11 @@ A framework for running a scientific lab as a team of **humans and AI agents**:
 Anything that crosses the sandbox boundary needs a real human's yes, and the code enforces
 that, not a prompt.
 
-Status: **M0** (skeleton, `lab.yaml` registry, per-agent sandbox settings). See [DESIGN.md](DESIGN.md) for the
-design and [docs/security-notes.md](docs/security-notes.md) for known gaps.
+Status: **v0, working end to end** on a GPU VM with a real Slack workspace: workers
+running experiments in Claude Code's built-in sandbox, approvals and grants in Slack DMs,
+managers and a secretary in Slack, VM power, a web UI, and a guided setup. See
+[DESIGN.md](DESIGN.md), [docs/install.md](docs/install.md) and
+[docs/security-notes.md](docs/security-notes.md).
 
 ## Install
 
@@ -36,11 +39,18 @@ uv venv && uv pip install -e ".[dev]"
 
 ```
 src/agentic_lab/
+  registry/   lab.yaml: loading, `lab check`
   policy/     the sandbox model (Claude Code settings per agent) and grants
-  registry/   lab.yaml: loading and `lab check`
-  cli.py      the `lab` command
-examples/minimal/   an example lab.yaml with standing grants
-tests/
+  worker/     the worker service: task queue, MCP API, Agent SDK runner, usage
+  broker/     approvals: requests, decisions, grants, the Lab Approvals Slack app
+  manager/    the manager: Slack conversations, delegation to workers, memory, follow-ups
+  secretary/  lab state, web UI, VM power, its Slack chat
+  secrets/    the intake: one-time codes and forms (secrets never pass through chat)
+  slackio.py  what an agent sees in Slack, and how it answers
+  apply.py    `lab plan` / `lab apply`;  doctor.py, init.py, debug.py, nebius_connect.py
+client/       lab-member.py: the one file a member ever runs
+deploy/       host setup (sandbox, GPU, AppArmor), systemd units
+examples/     lab.yaml examples (minimal, single VM)
 ```
 
 License: MIT.
