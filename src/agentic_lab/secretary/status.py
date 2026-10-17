@@ -47,14 +47,19 @@ async def manager_status(lab, manager, token, hours=0):
         return r.json()
 
 
-async def collect(lab, workers: Workers, broker=None, local_units=None, managers=None):
-    """One snapshot of the lab. `managers`: {manager-id: the secretary's token there}."""
+async def collect(lab, workers: Workers, broker=None, local_units=None, managers=None,
+                  own=None):
+    """One snapshot of the lab. `managers`: {manager-id: the secretary's token there};
+    `own`: (secretary id, its UsageLog), since the secretary counts too."""
     """One snapshot of the lab (a dict, ready for JSON and the web page)."""
     agents = {}
     for aid, a in lab.agents.items():
         agents[aid] = {"id": aid, "name": lab.display_name(aid), "role": a.get("role"),
                        "human": a.get("human"), "host": a.get("host"),
                        "access": a.get("access")}
+    if own is not None:
+        sec_id, own_usage = own
+        agents[sec_id].update(up=True, usage=own_usage.load())
     for m, token in (managers or {}).items():
         try:
             st = await manager_status(lab, m, token)

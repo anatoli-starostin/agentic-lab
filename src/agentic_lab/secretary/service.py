@@ -28,6 +28,7 @@ from ..secrets.intake import Intake, message
 from ..slackio import SILENT, SlackIO
 from .brain import SecretaryBrain, expiry_notices
 from ..eventlog import EventLog
+from ..worker.usage import UsageLog
 from .status import collect, manager_status
 from .web import app
 import datetime as dt
@@ -123,6 +124,8 @@ async def serve(lab_path, host, port):
     broker = (bcfg["url"], bcfg["token"]) if bcfg.get("url") and bcfg.get("token") else None
     events = EventLog(os.path.expanduser(f"{STATE}/events"))
     events.prune()
+    usage = UsageLog(os.path.expanduser(f"{STATE}/usage.json"))
+    sec_id = next(a for a, x in lab.agents.items() if x.get("role") == "secretary")
     admins = {(h or {}).get("tailscale_login") for h in lab.humans.values()
               if (h or {}).get("admin") and (h or {}).get("tailscale_login")}
 
@@ -186,7 +189,8 @@ async def serve(lab_path, host, port):
     async def collector():
         while not stop.is_set():
             try:
-                latest["state"] = await collect(lab, workers, broker, units, managers)
+                latest["state"] = await collect(lab, workers, broker, units, managers,
+                                                own=(sec_id, usage))
                 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(snapshot_path))
                 with os.fdopen(fd, "w") as f:
                     json.dump(latest["state"], f)
@@ -208,7 +212,7 @@ async def serve(lab_path, host, port):
     os.makedirs(workdir, exist_ok=True)
     brain = SecretaryBrain(lab.display_name(sec_id), lab.name, workdir,
                            lab.agent_settings(sec_id), model=sa.get("model"), env=env,
-                           events=events)
+                           events=events, usage=usage)
     sec = Secretary(lab, latest, workers, brain,
                     ManagerState(os.path.expanduser(f"{STATE}/chat")))
     slack_env = _env_file(_read_secret(f"{CONFIG}/slack.env"))
@@ -264,7 +268,8 @@ async def ask(lab_path, human, text):
     workdir = os.path.expanduser(sa.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
     brain = SecretaryBrain(lab.display_name(sec_id), lab.name, workdir,
-                           lab.agent_settings(sec_id), model=sa.get("model"), env=env)
+                           lab.agent_settings(sec_id), model=sa.get("model"), env=env,
+                           usage=UsageLog(os.path.expanduser(f"{STATE}/usage.json")))
     sec = Secretary(lab, latest, workers, brain,
                     ManagerState(os.path.expanduser(f"{STATE}/chat-cli")))
     print(await sec.on_message(Incoming("cli", None, "0", None, human, text, True, True)))

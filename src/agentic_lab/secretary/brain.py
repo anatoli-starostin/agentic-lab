@@ -10,9 +10,9 @@ import json
 import warnings
 
 from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient,
-                              PermissionResultAllow, PermissionResultDeny, ResultMessage,
-                              SystemMessage, TextBlock, ToolUseBlock, create_sdk_mcp_server,
-                              tool)
+                              PermissionResultAllow, PermissionResultDeny, RateLimitEvent,
+                              ResultMessage, SystemMessage, TextBlock, ToolUseBlock,
+                              create_sdk_mcp_server, tool)
 
 from ..eventlog import tool_summary
 
@@ -93,10 +93,12 @@ def build_tools(ctx):
 
 
 class SecretaryBrain:
-    def __init__(self, name, lab_name, workdir, settings, model=None, env=None, events=None):
+    def __init__(self, name, lab_name, workdir, settings, model=None, env=None, events=None,
+                 usage=None):
         self.name, self.lab_name, self.workdir = name, lab_name, workdir
         self.settings, self.model, self.env = settings, model, env or {}
         self.events = events
+        self.usage = usage          # a UsageLog: the secretary's own tokens and limit readings
 
     async def turn(self, ctx, conv, prompt):
         log = (lambda kind, text="", **m: self.events.add(kind, text, conv=conv.key, **m)
@@ -128,8 +130,12 @@ class SecretaryBrain:
                             last = b.text
                         elif isinstance(b, ToolUseBlock):
                             log("tool", tool_summary(b.name, b.input))
+                elif isinstance(msg, RateLimitEvent) and self.usage:
+                    self.usage.rate_limit(msg.rate_limit_info)
                 elif isinstance(msg, ResultMessage):
                     reply = msg.result
+                    if self.usage:
+                        self.usage.run(f"conv:{conv.key}", msg.model_usage)
         log("reply", reply or last or "")
         return reply or last or ""
 
