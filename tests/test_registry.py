@@ -57,6 +57,9 @@ def test_example_agent_settings():
     m = lab.agent_settings("mgr-alice")
     assert {"WebFetch", "WebSearch"} <= set(m["permissions"]["allow"])
     assert m["sandbox"]["network"]["allowedDomains"] == ["*.example.ts.net"]
+    assert m["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] == "17"     # managers compact early
+    assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" not in w["env"]       # workers: Claude's default
+    assert lab.display_name("worker-a") == "worker-a"
     b = lab.agent_settings("worker-b")             # no grants: the bare model
     assert b["sandbox"]["network"]["allowedDomains"] == ["*.example.ts.net"]
     # workers run CUDA by default; managers don't
@@ -124,6 +127,8 @@ def test_every_agent_needs_a_human(lab_dir):
         {"domain": "arxiv.org", "expires": dt.datetime(2026, 10, 18)}), "don't expire"),
     (lambda d: d.update(trust_tailnet="yes"), "expected bool"),
     (lambda d: d["agents"]["worker-a"].update(gpu="yes"), "expected bool"),
+    (lambda d: d["agents"]["mgr-alice"].update(compact_percent=0), "between 1 and 100"),
+    (lambda d: d["agents"]["mgr-alice"].update(display_name=7), "expected str"),
     (lambda d: d.update(extra=1), "unknown key 'extra'"),
 ])
 def test_check_errors(lab_dir, mutate, expect):

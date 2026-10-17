@@ -55,8 +55,10 @@ class Request:
     expires: str
     state: str = PENDING
     decision: dict | None = None
-    context: str | None = None      # a manager's note for the human (M3)
+    context: str | None = None      # a manager's note for the human
     channel_ref: dict = field(default_factory=dict)   # e.g. the Slack message, to update it
+    manager: str | None = None      # the manager whose task (or own action) this is
+    requester_confirmed: bool = False   # the human came from a manager's task registration
 
     def view(self):
         return asdict(self)
@@ -113,14 +115,17 @@ def describe(tool, tool_input):
 
 class Broker:
     """Requests and grants as files under `root`. `humans` maps a human id to
-    {"slack_user": ..., "timeout_s": ...} (from lab.yaml)."""
+    {"slack_user": ..., "timeout_s": ...}; `agents` maps an agent id to its lab.yaml entry
+    (role, human, access). Both come from lab.yaml."""
 
-    def __init__(self, root, humans):
+    def __init__(self, root, humans, agents=None):
         self.root = root
         self.humans = humans
+        self.agents = agents or {}
         self.req_dir = os.path.join(root, "requests")
         self.grant_dir = os.path.join(root, "grants")
-        for d in (self.req_dir, self.grant_dir):
+        self.task_dir = os.path.join(root, "tasks")
+        for d in (self.req_dir, self.grant_dir, self.task_dir):
             os.makedirs(d, mode=0o700, exist_ok=True)
         self._lock = threading.RLock()
         self.listeners = []         # callables(request) told about new/decided requests
@@ -160,8 +165,58 @@ class Broker:
         for fn in self.listeners:
             fn(req)
 
+    # tasks managers registered: who really asked for them
+    def _task_path(self, task_id):
+        if not task_id.startswith("t-") or not task_id[2:].isalnum():
+            raise BrokerError(f"bad task id {task_id!r}")
+        return os.path.join(self.task_dir, task_id + ".json")
+
+    def register_task(self, manager, worker, task_id, requester):
+        """A manager records who asked for a task it submitted. A worker's later requests
+        for that task then go to this human, whatever the worker claims."""
+        if requester not in self.humans:
+            raise BrokerError(f"unknown human {requester!r}")
+        self.check_access(manager, requester)
+        with self._lock:
+            path = self._task_path(task_id)
+            if os.path.exists(path):
+                raise BrokerError(f"task {task_id} is already registered")
+            self._write(path, {"manager": manager, "worker": worker, "requester": requester})
+
+    def registered_task(self, task_id):
+        try:
+            with open(self._task_path(task_id)) as f:
+                return json.load(f)
+        except (FileNotFoundError, BrokerError):
+            return None
+
+    def check_access(self, agent, human):
+        """May `human` use `agent`? A dedicated agent serves only its own human."""
+        a = self.agents.get(agent)
+        if a is None:
+            raise BrokerError(f"unknown agent {agent!r}")
+        if a.get("access", "dedicated") == "dedicated" and a.get("human") != human:
+            raise BrokerError(f"{agent} is dedicated to {a.get('human')}, not {human}")
+
     # requests
-    def submit(self, agent, human, tool, tool_input, task_id=None, violations=()) -> Request:
+    def submit(self, agent, human, tool, tool_input, task_id=None, violations=(),
+               role="worker") -> Request:
+        """File a request. For a worker's task registered by a manager, the registered
+        requester is asked (the worker's claim only counts for unregistered tasks). A
+        manager's own request goes to the member it names, if they may use that manager."""
+        manager, confirmed = None, False
+        if role == "manager":
+            manager = agent
+            if human not in self.humans:
+                raise BrokerError(f"unknown human {human!r}")
+            self.check_access(agent, human)
+            confirmed = True
+        elif task_id:
+            reg = self.registered_task(task_id)
+            if reg is not None:
+                if reg["worker"] != agent:
+                    raise BrokerError(f"task {task_id} isn't {agent}'s")
+                human, manager, confirmed = reg["requester"], reg["manager"], True
         if human not in self.humans:
             raise BrokerError(f"unknown human {human!r}")
         timeout = int(self.humans[human].get("timeout_s") or DEFAULT_TIMEOUT_S)
@@ -171,7 +226,8 @@ class Broker:
             task_id=task_id, human=human, tool=tool, detail=describe(tool, tool_input),
             violations=list(violations or [])[-5:],
             options=grant_options(tool, tool_input, violations),
-            created=_iso(t), expires=_iso(t + dt.timedelta(seconds=timeout)))
+            created=_iso(t), expires=_iso(t + dt.timedelta(seconds=timeout)),
+            manager=manager, requester_confirmed=confirmed)
         with self._lock:
             self._save(req)
         self._notify(req)
@@ -220,10 +276,18 @@ class Broker:
             self._notify(req)
         return out
 
-    def add_context(self, rid, text):
+    def for_manager(self, manager):
+        """Pending requests a manager may see: those of its tasks and its own."""
+        return [r for r in self.pending() if r.manager == manager or r.agent == manager]
+
+    def add_context(self, rid, text, manager=None):
         """A manager's note shown to the human with the request (it can't decide)."""
         with self._lock:
             req = self.get(rid)
+            if manager is not None and req.manager != manager:
+                raise BrokerError(f"no request {rid!r}")
+            if req.state != PENDING:
+                raise BrokerError("already decided")
             req.context = text[:1000]
             self._save(req)
         self._notify(req)

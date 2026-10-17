@@ -18,7 +18,10 @@ def test_base_model():
     assert sb["network"]["allowedDomains"] == ["*.example.ts.net"]   # no internet, tailnet only
     assert sb["network"]["strictAllowlist"] is True                   # refuse, don't prompt
     assert sb["filesystem"]["allowWrite"] == [f"{HOME}/work", "/tmp"]
-    assert sb["filesystem"]["denyRead"] == ["/run", "/var/run"]    # host sockets hidden
+    secrets = f"{HOME}/.config/agentic-lab"
+    assert sb["filesystem"]["denyRead"] == ["/run", "/var/run", secrets]   # sockets, secrets
+    assert s["permissions"]["deny"] == [f"Read(/{secrets}/**)", f"Edit(/{secrets}/**)"]
+    assert sb["credentials"]["envVars"] == [{"name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny"}]
     assert sb["filesystem"]["allowRead"] == []
     assert sb["network"]["allowAllUnixSockets"] is False           # seccomp socket block on
     assert s["permissions"]["defaultMode"] == "default"
@@ -99,5 +102,5 @@ def test_gpu_agent():
     sb = sandbox.settings("~/work", gpu=True)["sandbox"]
     # CUDA needs Unix sockets; /run stays hidden except nvidia-persistenced's socket dir
     assert sb["network"]["allowAllUnixSockets"] is True
-    assert sb["filesystem"]["denyRead"] == ["/run", "/var/run"]
+    assert sb["filesystem"]["denyRead"][:2] == ["/run", "/var/run"]
     assert sb["filesystem"]["allowRead"] == ["/run/nvidia-persistenced"]

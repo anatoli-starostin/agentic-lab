@@ -91,7 +91,8 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
         return {"settings": lab.agent_settings(agent_id),
                 "standing_grants": a.get("grants") or [], "active_grants": active}
 
-    mcp = build_mcp(agent_id, store, access, guardrails=guardrails, usage=usage)
+    mcp = build_mcp(agent_id, store, access, guardrails=guardrails, usage=usage,
+                    workdir=workdir)
     # the names managers may use to reach us: the bind address, and e.g. the tailnet name
     allowed = [f"{h}:{port}" for h in (host, *names)]
     app, _ = http_app(mcp, access, allowed_hosts=allowed)

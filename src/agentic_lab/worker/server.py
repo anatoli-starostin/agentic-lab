@@ -7,6 +7,7 @@ One process, run as the agent's own Unix user by a system service. It:
   - runs queued tasks one at a time, first come, first served, through an AgentRunner.
 """
 import asyncio
+import base64
 import hmac
 import logging
 import os
@@ -23,6 +24,7 @@ from . import tasks as T
 
 log = logging.getLogger("agentic_lab.worker")
 IDLE_POLL_S = 1.0
+MAX_FILE_BYTES = 20 * 1024 * 1024       # read_file: enough for plots, reports, logs
 
 
 @dataclass(frozen=True)
@@ -56,8 +58,26 @@ class Access:
         raise AccessError("unknown token")
 
 
+def read_workdir_file(workdir, path):
+    """A file from the worker's working folder (never outside it), as base64."""
+    root = os.path.realpath(workdir)
+    full = os.path.realpath(path if os.path.isabs(path) else os.path.join(root, path))
+    if full != root and not full.startswith(root + os.sep):
+        raise ToolError("only files in the worker's working folder can be read")
+    if not os.path.isfile(full):
+        raise ToolError(f"no such file: {path}")
+    size = os.path.getsize(full)
+    if size > MAX_FILE_BYTES:
+        raise ToolError(f"{path} is {size // 1_000_000} MB; the limit is "
+                        f"{MAX_FILE_BYTES // 1_000_000} MB")
+    with open(full, "rb") as f:
+        data = f.read()
+    return {"path": full, "name": os.path.basename(full), "size": size,
+            "base64": base64.b64encode(data).decode()}
+
+
 def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=None,
-              usage=None):
+              usage=None, workdir=None):
     """The worker's MCP server. `guardrails()` returns its current settings and grants."""
     mcp = MCPServer(name=f"agentic-lab worker {agent_id}",
                     instructions="Submit tasks to this worker and follow them.")
@@ -115,6 +135,14 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         who(ctx)
         g = guardrails()
         return await g if asyncio.iscoroutine(g) else g
+
+    @mcp.tool(description="A file from this worker's working folder (e.g. a task's artifact: "
+              "a plot, a report), as base64. Up to 20 MB.")
+    def read_file(path: str, ctx: Context) -> dict:
+        who(ctx)
+        if workdir is None:
+            raise ToolError("this worker doesn't serve files")
+        return read_workdir_file(workdir, path)
 
     @mcp.tool(description="Liveness and state of this worker: queue, GPU, disk, versions.")
     def health_check(ctx: Context) -> dict:

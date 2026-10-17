@@ -3,7 +3,7 @@
 Runs on the secretary host as its own Unix user (lab-broker), never as an agent. Reads:
 
     /etc/agentic-lab/lab.yaml                    humans (Slack ids, timeouts), workers
-    ~/.config/agentic-lab/worker-tokens.yaml     {worker-id: token} the workers use
+    ~/.config/agentic-lab/agent-tokens.yaml      {agent-id: token} for workers and managers
     ~/.config/agentic-lab/slack.env              SLACK_BOT_TOKEN=xoxb-..., SLACK_APP_TOKEN=xapp-...
                                                  (the "Lab Approvals" Slack app)
 State (requests, grants) lives in ~/.local/state/agentic-lab/broker.
@@ -39,14 +39,14 @@ def humans_from_lab(lab):
 
 
 def tokens_from(lab, text):
-    by_worker = yaml.safe_load(text or "") or {}
+    by_agent = yaml.safe_load(text or "") or {}
     tokens = {}
-    for worker, token in by_worker.items():
-        if lab.agents.get(worker, {}).get("role") != "worker":
-            raise SystemExit(f"worker-tokens.yaml: {worker!r} is not a worker in lab.yaml")
+    for agent, token in by_agent.items():
+        if lab.agents.get(agent, {}).get("role") not in ("worker", "manager"):
+            raise SystemExit(f"agent-tokens.yaml: {agent!r} is not a worker or manager")
         if not isinstance(token, str) or len(token) < 32:
-            raise SystemExit(f"worker-tokens.yaml: token for {worker} must be 32+ characters")
-        tokens[token] = worker
+            raise SystemExit(f"agent-tokens.yaml: token for {agent} must be 32+ characters")
+        tokens[token] = agent
     return tokens
 
 
@@ -61,8 +61,9 @@ def _env_file(text):
 
 async def serve(lab_path, host, port):
     lab = load_lab(lab_path)
-    broker = Broker(os.path.expanduser(STATE), humans_from_lab(lab))
-    tokens = tokens_from(lab, _read_secret(f"{CONFIG}/worker-tokens.yaml"))
+    broker = Broker(os.path.expanduser(STATE), humans_from_lab(lab), lab.agents)
+    tokens = tokens_from(lab, _read_secret(f"{CONFIG}/agent-tokens.yaml")
+                         or _read_secret(f"{CONFIG}/worker-tokens.yaml"))
     slack_env = _env_file(_read_secret(f"{CONFIG}/slack.env"))
 
     channel = None

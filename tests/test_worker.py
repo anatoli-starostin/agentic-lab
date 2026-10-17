@@ -259,3 +259,21 @@ def test_usage_log(tmp_path):
     assert d["tasks"]["t-1"]["claude-haiku-5-5"]["inputTokens"] == 11
     assert "costUSD" not in d["tasks"]["t-1"]["claude-haiku-5-5"]     # tokens, not dollars
     assert d["updated_at"]
+
+
+def test_read_file_stays_in_workdir(tmp_path):
+    import base64
+    from agentic_lab.worker.server import read_workdir_file
+    from mcp.server.mcpserver.exceptions import ToolError
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "plot.png").write_bytes(b"PNG...")
+    (tmp_path / "secret").write_text("x")
+    got = read_workdir_file(work, "plot.png")
+    assert base64.b64decode(got["base64"]) == b"PNG..." and got["name"] == "plot.png"
+    for bad in ("../secret", str(tmp_path / "secret"), "missing.txt"):
+        with pytest.raises(ToolError):
+            read_workdir_file(work, bad)
+    (work / "link").symlink_to(tmp_path / "secret")
+    with pytest.raises(ToolError, match="working folder"):
+        read_workdir_file(work, "link")

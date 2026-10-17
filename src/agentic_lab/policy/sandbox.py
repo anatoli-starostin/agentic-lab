@@ -25,6 +25,13 @@ TMP = "/tmp"
 # it. The only socket an agent needs there is nvidia-persistenced's, which CUDA opens in
 # cuInit.
 HIDDEN = ["/run", "/var/run"]
+
+# The agent's lab secrets (seat token, Slack and lab tokens) belong to the service that runs
+# it, never to the agent: neither its Read tool nor its sandboxed commands may read them, and
+# the seat token, which reaches Claude Code as an environment variable, is stripped from
+# sandboxed commands. A Slack-facing agent then can't be talked into reciting a token.
+SECRETS = "~/.config/agentic-lab"
+SECRET_ENV = ["CLAUDE_CODE_OAUTH_TOKEN"]
 GPU_VISIBLE = ["/run/nvidia-persistenced"]
 
 
@@ -37,7 +44,8 @@ def _rule_path(path):
     return "/" + _abs(path)
 
 
-def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None, gpu=False):
+def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None, gpu=False,
+             compact_percent=None):
     """Render the Claude Code settings for one agent.
 
     workdir:       the agent's working folder (writable inside the sandbox)
@@ -45,6 +53,8 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
     trust_tailnet: tailnet resources count as safe -> reachable from inside the sandbox
     grant_list:    standing and timed Grants; expired ones are dropped (needs `now`)
     gpu:           the agent runs CUDA inside the sandbox (GPU workers)
+    compact_percent: auto-compact once the context reaches this % of the model's window
+                   (Claude Code's CLAUDE_AUTOCOMPACT_PCT_OVERRIDE); None keeps Claude's default
 
     CUDA opens a Unix socket in cuInit, and Claude Code's seccomp filter can only block
     Unix sockets wholesale. So a GPU agent allows Unix sockets, and the sandbox hides /run
@@ -63,6 +73,7 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
     # ~/.cache isn't writable in the sandbox, so point it into the working folder: caches
     # then persist between tasks without widening the sandbox.
     cache = os.path.join(_abs(workdir), ".cache")
+    secrets = _abs(SECRETS)
 
     return {
         "sandbox": {
@@ -79,14 +90,18 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
             },
             "filesystem": {
                 "allowWrite": _dedup(writable),
-                "denyRead": list(HIDDEN),
+                "denyRead": list(HIDDEN) + [secrets],
                 "allowRead": list(GPU_VISIBLE) if gpu else [],
             },
+            "credentials": {"envVars": [{"name": n, "mode": "deny"} for n in SECRET_ENV]},
         },
-        "env": {"XDG_CACHE_HOME": cache},
+        "env": {"XDG_CACHE_HOME": cache,
+                **({"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": str(compact_percent)}
+                   if compact_percent else {})},
         "permissions": {
             "defaultMode": "default",           # anything not allowed -> permission request
             "allow": _dedup(tools + [f"Edit({_rule_path(w)}/**)" for w in writable]),
+            "deny": [f"Read({_rule_path(secrets)}/**)", f"Edit({_rule_path(secrets)}/**)"],
         },
     }
 

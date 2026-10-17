@@ -18,6 +18,9 @@ from ..policy import sandbox
 
 ROLES = ("worker", "manager", "secretary")
 DEFAULT_WORKDIR = "~/work"
+# Auto-compaction: managers hold long, chatty Slack conversations, so they compact about 5x
+# earlier than Claude's default (which fires just below the full window); others keep it.
+DEFAULT_COMPACT_PERCENT = {"manager": 17}
 USER_PREFIX = "lab-"
 # an agent id becomes part of its Unix user name: lab-<agent-id>, at most 32 characters
 _AGENT_ID = re.compile(r"^[a-z][a-z0-9-]*$")
@@ -35,7 +38,8 @@ _HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, F
 _CHANNEL = {"type": (str, True), "timeout_s": (int, False), "on_timeout": (str, False)}
 _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "model": (str, False), "access": (str, False), "workdir": (str, False),
-          "gpu": (bool, False),
+          "gpu": (bool, False), "port": (int, False),
+          "display_name": (str, False), "compact_percent": (int, False),
           "grants": (list, False),
           "slack_app": (str, False), "max_parallel_gpu_tasks": (int, False)}
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
@@ -81,6 +85,19 @@ class Lab:
     def credentials(self):
         return self.data.get("credentials") or []
 
+    def address(self, agent_id):
+        """Where the agent's service is reached on the tailnet: its host's tailnet name
+        (`tailnet_name`, or `<host>.<tailnet>`) and its port."""
+        a = self.agents[agent_id]
+        host = self.hosts.get(a.get("host")) or {}
+        name = host.get("tailnet_name") or f"{a.get('host')}.{self.data.get('tailnet')}"
+        default = {"worker": 8770, "secretary": 8771}.get(a.get("role"), 8773)
+        return name, a.get("port", default)
+
+    def worker_url(self, agent_id):
+        name, port = self.address(agent_id)
+        return f"http://{name}:{port}/mcp"
+
     def unix_user(self, agent_id):
         """The dedicated Unix user the agent runs as (DESIGN.md §10)."""
         return USER_PREFIX + agent_id
@@ -98,7 +115,13 @@ class Lab:
             trust_tailnet=self.data.get("trust_tailnet", True),
             grant_list=self.standing_grants(agent_id) + list(extra_grants),
             now=now,
-            gpu=a.get("gpu", a.get("role") == "worker"))
+            gpu=a.get("gpu", a.get("role") == "worker"),
+            compact_percent=a.get("compact_percent",
+                                  DEFAULT_COMPACT_PERCENT.get(a.get("role"))))
+
+    def display_name(self, agent_id):
+        """How humans see the agent (Slack, web UI, how it introduces itself)."""
+        return self.agents[agent_id].get("display_name") or agent_id
 
 
 def _fields(obj, spec, where, issues):
@@ -200,6 +223,9 @@ def check(lab: Lab, today: dt.date | None = None):
             host = lab.hosts.get(a.get("host")) or {}
             if host.get("kind") == "cloud":
                 W(where, "the secretary is meant to run on an always-on on-prem host")
+        cp = a.get("compact_percent")
+        if isinstance(cp, int) and not isinstance(cp, bool) and not 1 <= cp <= 100:
+            E(where, "compact_percent must be between 1 and 100")
         workdir = a.get("workdir", DEFAULT_WORKDIR)
         if isinstance(workdir, str) and not workdir.startswith(("/", "~/")):
             E(where, f"workdir must be an absolute or ~/ path, got {workdir!r}")
