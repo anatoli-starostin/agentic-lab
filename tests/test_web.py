@@ -35,6 +35,8 @@ def test_render():
     assert "var(--c1)" in page and "12k new" in page
     assert "aria-valuenow='62'" in page
     assert web.render(None).startswith("<!doctype html>")
+    assert "/logs/" not in page                     # log links only for admins
+    assert "href='/logs/worker-a'" in web.render(STATE, admin=True)
 
 
 def test_ago():

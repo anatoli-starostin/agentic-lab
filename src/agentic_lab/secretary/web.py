@@ -51,6 +51,8 @@ border-radius:5px}.mfoot{font-size:13px}.mstatus{margin:6px 0 2px}.mstatus.good{
 .lname{min-width:120px}
 a{color:inherit}.pill{display:inline-block;padding:1px 8px;border-radius:999px;border:1px solid var(--line);
 font-size:12px}code{font-size:12px;word-break:break-all}
+.loglink{font-weight:400;color:var(--meter);text-decoration:none;margin-left:6px}
+.loglink:hover{text-decoration:underline}
 .ahead{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .ahead h3{margin-bottom:0}.check{margin:14px 0 0}.check button{font:12px system-ui,sans-serif;
 padding:3px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card);
@@ -200,7 +202,7 @@ def _accounts(state):
     return "<section><h2>Claude usage, by account</h2>" + "".join(cards) + "</section>"
 
 
-def _workers(state):
+def _workers(state, admin=False):
     out = []
     for aid, a in state["agents"].items():
         if a.get("role") != "worker":
@@ -220,7 +222,7 @@ def _workers(state):
             f"<td>{e(t.get('requester'))}<div class='muted small'>via {e(t.get('manager'))}</div></td>"
             f"<td class='muted small'>{e(ago(t.get('finished') or t.get('created')))}</td></tr>"
             for t in a.get("recent") or [])
-        out.append(f"<h2>{e(a['name'])} {status}</h2>"
+        out.append(f"<h2>{e(a['name'])} {status}{_log_link(aid) if admin else ''}</h2>"
                    f"<div class='small'>GPU: {e(a.get('gpu'))} · disk free "
                    f"{e(a.get('disk_free_gb'))} GB</div>"
                    f"<table><tr><th>Task</th><th>State</th><th>For</th><th>When</th></tr>"
@@ -263,27 +265,34 @@ def _hosts(state):
             "<th>Checked</th></tr>" + rows + "</table></section>")
 
 
-def _agents(state):
+def _log_link(aid):
+    return f" <a class='loglink small' href='/logs/{e(aid)}'>log →</a>"
+
+
+def _agents(state, admin=False):
     rows = "".join(
-        f"<tr><td><b><a href='/logs/{e(aid)}'>{e(a['name'])}</a></b>"
-        f"<div class='muted small'>{e(aid)}</div></td>"
+        f"<tr><td><b>{e(a['name'])}</b><div class='muted small'>{e(aid)}</div></td>"
         f"<td>{e(a.get('role'))}</td><td>{e(a.get('human'))}</td><td>{e(a.get('host'))}</td>"
         f"<td class='{'ok' if a.get('service') == 'active' or a.get('up') else 'muted'}'>"
-        f"{e(a.get('service') or ('up' if a.get('up') else '—'))}</td></tr>"
+        f"{e(a.get('service') or ('up' if a.get('up') else '—'))}</td>"
+        + (f"<td>{_log_link(aid)}</td>" if admin else "") + "</tr>"
         for aid, a in state["agents"].items())
     return ("<section><h2>Agents</h2><table><tr><th>Agent</th><th>Role</th><th>Seat</th>"
-            "<th>Host</th><th>Status</th></tr>" + rows + "</table></section>")
+            "<th>Host</th><th>Status</th>" + ("<th>Log</th>" if admin else "") + "</tr>"
+            + rows + "</table>"
+            + ("<p class='muted small'>Each agent's log: what it was asked, what it did and "
+               "said, approvals. Admins only.</p>" if admin else "") + "</section>")
 
 
-def render(state):
+def render(state, admin=False):
     if state is None:
         body = "<main><section><p>Collecting the lab's state…</p></section></main>"
         title, when = "Agentic Lab", ""
     else:
         title = f"{state['lab']} · Agentic Lab"
         when = f"updated {ago(state['at'])}"
-        body = ("<main>" + _accounts(state) + _workers(state) + _approvals(state) +
-                _hosts(state) + _agents(state) + "</main>")
+        body = ("<main>" + _accounts(state) + _workers(state, admin) + _approvals(state) +
+                _hosts(state) + _agents(state, admin) + "</main>")
     return (f"<!doctype html><html><head><meta charset='utf-8'><title>{e(title)}</title>"
             f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
             f"<meta http-equiv='refresh' content='{REFRESH_S}'><style>{CSS}</style></head>"
@@ -330,7 +339,8 @@ def app(get_state, get_events=None, is_admin=None, check_usage=None):
         return RedirectResponse("/", status_code=303)
 
     async def page(request):
-        return HTMLResponse(render(get_state()), headers=HEADERS)
+        admin = is_admin is not None and await is_admin(request.client.host)
+        return HTMLResponse(render(get_state(), admin=admin), headers=HEADERS)
 
     async def state_json(request):
         return JSONResponse(get_state() or {})
