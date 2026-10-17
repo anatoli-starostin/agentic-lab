@@ -617,6 +617,10 @@ after M3–M4 as needed.
 | 2026-10-17 | **Setup and maintenance are guided by Claude**: a `lab-admin` skill in the repo, run by the admin's own Claude Code on the secretary host, over declarative, idempotent `lab` commands. Secrets never pass through the chat. |
 | 2026-10-17 | **No `lab console`.** The web UI shows each agent's recent transcript; `lab debug <agent>` stops its service and opens the same session in the classic Claude Code console. |
 | 2026-10-17 | **Approvals go to the human the action is for** (task requester, or the member whose message started a manager's work), not to the agent's seat owner. Managers, like workers, can be `dedicated` or `shared`. |
+| 2026-10-17 | **The secretary is in Slack like a manager**: tagged in channels (it joins the thread) and in DMs; lab-wide notices nobody asked for go to an optional `announcements` channel in `lab.yaml`, personal ones by DM. |
+| 2026-10-17 | **Names**: an agent's id (lab.yaml key, also its Unix user `lab-<id>`) plus an optional `display_name` humans see (Slack, web UI, how it introduces itself). |
+| 2026-10-17 | **Auto-compaction per agent** (`compact_percent`, Claude Code's `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`): managers compact ~5x earlier (17%); the secretary and workers keep Claude's default. |
+| 2026-10-17 | **Agents can't read their lab secrets**: the service holds them; the agent's Read tool is denied `~/.config/agentic-lab`, its sandbox hides it, and the seat token is stripped from sandboxed commands. |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
 
 ## 14. Open questions
