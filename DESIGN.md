@@ -76,8 +76,8 @@ deployment's own `lab.yaml` and secret files, which never enter this repo.
 ```
 
 - **Secretary**: always-on, on-prem, holds the cloud power keys. One per lab.
-- **Managers**: cloud CPU VMs, possibly preemptible. These can be one shared VM or one small
-  VM per manager. The secretary restarts preempted ones.
+- **Managers**: **one shared cloud CPU VM** for all managers, one Unix user per manager.
+  It may be preemptible; the secretary restarts it.
 - **Workers**: cloud GPU VMs, powered on demand. One worker agent per VM.
 
 ---
@@ -129,8 +129,8 @@ Tied to one GPU VM. Uses tokens freely. Humans don't talk to it directly.
     commands, rewind, plan mode, …). On exit, the service resumes the session. (SDK and
     CLI share session storage. SDK sessions don't appear in the picker or in `--continue`,
     but `--resume <id>` finds them when the config dir is the same.)
-  - Either way, approvals for console-typed work go to that human's own permission channel,
-    so the console never bypasses the gate.
+  - Either way, approvals for console-typed work go to that human's Slack DM, so the console
+    never bypasses the gate.
 - Reports progress (and W&B links) back through MCP. **There is no fixed results contract**:
   tasks vary, so a result may be a text report, a git commit, a W&B run, files, or any mix of
   these. The worker follows the project's conventions.
@@ -141,16 +141,19 @@ On a CPU VM. Has its own **Slack identity**. Uses a moderate number of tokens.
 
 - **Converses** in Slack and turns human requests into worker tasks. It picks the worker,
   writes the task, follows progress and reports results.
-- **Always has an active permission channel** with its human (Slack DM, console, Telegram
-  or email). It can always say which one is active (§7).
+- **Always has an active permission channel** with its human: their **Slack DM** in the
+  first version (§7).
 - **Relays worker approval requests** to the human and adds context (what the task is, why
   the worker asks). It **cannot answer them** (§6.3).
 - **Guardrails**: the same model as every agent (§6.1), plus standing grants for reading
   the web (`WebFetch`, `WebSearch`). Every **write** (GitHub, Google Drive, …) is a
   permission request to its human. Its working folder is a scratchpad on its VM.
-- **Can read workers' guardrails and grants** through MCP and explain them to humans. It
-  can **request** grants for a worker, which the broker turns into a question to the human.
-  It cannot change its own guardrails.
+- **Can read workers' guardrails and grants** through MCP and explain them to humans.
+- **Initiates guardrail changes on a worker when its human asks** ("give worker-a arxiv for
+  an hour"). It calls `change_guardrails` on the worker. The worker tries to apply the change,
+  which needs permission. That request comes back through the broker to the human, showing
+  the exact change, and is applied only after the human approves (§6.2). It cannot change its
+  own guardrails.
 - Slack design reuses the spiky "Slack façade" (two processes). The Slack-facing process
   cannot stall and cannot leak secrets. The capable process does the work, and its
   approvals go out-of-band to the human.
@@ -173,7 +176,7 @@ token listed in `lab.yaml`. A dedicated worker rejects managers other than its o
 | `cancel_task(task_id)` | Cooperative cancel, then kill after a grace period. |
 | `list_tasks(filter)` | Queue overview. |
 | `pending_approvals()` | Read-only view of what the worker is blocked on (for context only; see §6.3). |
-| `request_grant(grant, reason)` | Ask for a grant on this worker. It becomes a question to the human (§6.2); the manager can't grant it itself. |
+| `change_guardrails(change, reason)` | Initiate a guardrail change on this worker (a grant, a standing grant, a removal). The worker service tries to apply it, which raises a permission request to the human (§6.2). Applied only if approved. |
 | `get_guardrails()` | This worker's sandbox config, standing grants and active grants with expiry. |
 | `health()` | Liveness, GPU state, disk, queue depth, agent session alive?, versions. |
 
@@ -239,9 +242,16 @@ A time-limited grant always widens the **sandbox**. It never means "trust unsand
 commands for an hour", because an unsandboxed command can do anything, so its scope can't
 be enforced.
 
-- **Grants can also be given ahead of time**, by the human, in any channel ("give worker-a
-  arxiv for an hour"). The manager may relay the request, but the grant is created only by
-  the broker after the human confirms it (§6.3).
+- **Changes can also be made ahead of time**, through the manager:
+  1. the human asks their manager ("give worker-a arxiv for an hour");
+  2. the manager initiates the change on the worker (`change_guardrails` over MCP, §5);
+  3. the worker service tries to apply it, and applying it needs permission;
+  4. that permission request goes through the broker back to the human, showing the exact
+     change ("worker-a: allow arxiv.org until 15:00");
+  5. on approval the change applies; on deny or timeout nothing changes.
+
+  The human confirms once more even though they just asked. That is deliberate: the manager
+  may have misunderstood, and the human sees exactly what will change.
 - **Standing grants** (always on) sit in `lab.yaml` per agent, for example a manager that
   may always read the web:
   ```yaml
@@ -270,8 +280,8 @@ confused or prompt-injected. So **approval is a code path that bypasses the LLM*
 ```
 worker gate ──req──► APPROVAL BROKER (manager VM, separate Unix user, no LLM)
                           │  ├─► notifies manager agent: "approval pending" (read-only, for context)
-                          │  └─► human's permission channel (Slack DM buttons / console / tg / email)
-                          ◄── human decision (verified: Slack-signed interaction, console tty, …)
+                          │  └─► human's permission channel (Slack DM with buttons)
+                          ◄── human decision (verified: Slack-signed interaction)
 worker gate ◄─signed decision── broker   (HMAC with a per-worker key the manager agent can't read)
 ```
 
@@ -308,16 +318,13 @@ broker** and the same channel. The manager agent is just another gated client.
 
 ## 7. Permission channels
 
-One interface, several transports:
+**First version: Slack DM only.** Every permission request reaches its human as a direct
+message from their manager's Slack app, with buttons:
 
-```python
-class PermissionChannel:
-    name: str                                   # "slack_dm" | "console" | "telegram" | "email"
-    async def ask(self, req: ApprovalRequest) -> Decision   # approve / deny / always / redirect(note) / timeout
-    def describe(self) -> str                   # "Slack DM with @anatoly, auto-deny after 120s"
-```
+- **Once** · **For 1 hour** · **For this session** · **Deny** (§6.2)
+- or a typed reply, meaning "no, do it this way" (the note goes back to the agent).
 
-**Per-human channel policy** in `lab.yaml`:
+**Per-human settings** in `lab.yaml`:
 
 ```yaml
 humans:
@@ -325,15 +332,14 @@ humans:
     slack_user: U0123ABC
     channels:
       - {type: slack_dm, timeout_s: 120, on_timeout: deny}
-      - {type: console,  when: "attached"}     # console wins while the human is at it
-      - {type: telegram, timeout_s: 300, on_timeout: deny, quiet_hours: "23:00-08:00"}
 ```
 
-- **The active channel follows the request's origin**: Slack-delegated work asks in Slack,
-  console-typed work asks at the console. Spiky calls this switch "the cord". Restarts reset
-  to the safest default.
-- Every manager can always say which channel is active and why ("your approvals go to your
-  Slack DM; the console is detached").
+- **Timeouts deny** (§6.3). The timeout is per human.
+- The broker verifies each answer: it accepts only signed Slack interactions from that
+  human's own Slack user.
+- The code keeps a small channel interface (`ask(request) -> decision`), so more channels
+  (console, Telegram, email, …) can be added later without touching the broker's trust
+  rules.
 - Possible later options: escalation to a second channel if the first times out, batching
   several requests into one message, and per-category defaults ("always deny pushes to
   `main`").
@@ -403,8 +409,8 @@ with no public exposure.
 - **Credentials**: expiry dates and warnings (never values).
 - **Audit log**: one time-ordered feed of everything above.
 
-It starts **read-only**. Answering approvals from the web UI could come later as one more
-permission channel (§7), with the same verified-human rule.
+It is **for monitoring only**. Permissions are answered in Slack DM (§7), never in the web
+UI.
 
 Implementation: a small web app on the secretary. It reads the secretary's state store plus
 the `health()` and `list_tasks()` of every worker over MCP, and refreshes live. No external
@@ -457,7 +463,7 @@ Sonnet-class for managers, the strongest available model for workers.
 agentic_lab/
   registry/      lab.yaml schema, loader, `lab check`
   policy/        sandbox settings generator (per agent) + grant store + tests
-  broker/        approval broker + permission channels (slack_dm, console, telegram, email)
+  broker/        approval broker + permission channel (Slack DM; an interface for more later)
   worker/        worker service: MCP server, durable queue, agent runner, `lab console`
   manager/       manager service: Slack face (from slack-facade) + MCP client + agent runner
   secretary/     scheduler, checks, web UI, chat
@@ -480,13 +486,13 @@ Each milestone ends with a demo that works on real infrastructure.
 |---|---|---|
 | M0 | **Skeleton**: repo, `lab.yaml` schema + `lab check`, per-agent sandbox settings generated from `lab.yaml` | `pytest` green; `lab check` validates the example lab |
 | M1 | **Worker**: MCP server, durable queue, SDK agent runner, built-in sandbox, grants, `lab console` | A manager played by hand over MCP submits a task to a cloud GPU VM, watches progress and gets the result |
-| M2 | **Broker + channels**: signed decisions, Slack DM + console channels, timeout policy | A worker's `pip install` reaches the human's DM. Approve and deny both work, the timeout denies, and **the manager agent provably cannot approve** (test) |
+| M2 | **Broker + Slack DM channel**: signed decisions, grants buttons, timeout policy | A worker's `pip install` reaches the human's DM. Approve and deny both work, the timeout denies, and **the manager agent provably cannot approve** (test) |
 | M3 | **Manager**: Slack face + MCP client + its own guardrails | "@manager run exp X on a GPU worker" in Slack → task → approval in DM → result in thread |
 | M4 | **Secretary + web UI**: checks, cloud power, web UI (§9), chat | Web UI shows tasks, approvals, guardrails and spend live. A GPU VM idle 30 min is stopped. A preempted manager is restarted. A token expiring within 14 days is reported |
 | M5 | **Spiky pilot**: real spiky experiments run through the lab for a week | Spiky's existing ad-hoc tooling retired in favour of the lab |
 | M6 | **DeepSpike rollout**: separate deployment, its own `lab.yaml`, Slack workspace and tailnet | Team members use their own managers |
 
-Telegram and email channels, multiple workers per manager, and preemptible-VM tuning come
+More permission channels (console, Telegram, email), multiple workers per manager, and preemptible-VM tuning come
 after M3–M4 as needed.
 
 ---
@@ -502,14 +508,11 @@ after M3–M4 as needed.
 | 2026-10-17 | **Agent SDK runtime** behind an `AgentRunner` interface. `lab console` + `--takeover` (real `claude --resume`) for humans. A tmux runner is only a fallback. |
 | 2026-10-17 | **Every agent is attached to a human member in terms of tokens** (runs on their seat). Access is set separately. The secretary is attached to the lab owner. |
 | 2026-10-17 | **One simple sandbox model for all agents** (§6.1): inside = no internet, tailnet, working folder + tmp, auto-allowed; outside = internet and writes need permission, reads free. Enforced by Claude Code's built-in sandbox, with no command parsing. **Grants** (once / for a while / standing) customise it on the fly (§6.2). |
+| 2026-10-17 | **Guardrail changes through the manager**: human asks manager → manager initiates the change on the worker over MCP → the worker's attempt raises a permission request → through the broker back to the human → applied only on approval. |
+| 2026-10-17 | **All managers share one cloud CPU VM**, one Unix user each. |
+| 2026-10-17 | **Permissions only in Slack DM** in the first version; more channels maybe later. The **web UI is for monitoring only**. |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
 
 ## 14. Open questions
 
-1. **Manager VM layout**: one shared VM with one Unix user per manager, or one small VM per
-   manager? (Start shared; it's cheaper and the secretary restarts it.)
-2. **Web UI approvals**: should the web UI later become a permission channel too (answer
-   approvals in the browser)?
-3. **Manager guardrail edits**: the original brief lets a manager change a worker's
-   guardrails. Under §6.2 a manager can only *request* grants, which a human confirms.
-   Is that the intended reading?
+None right now.
