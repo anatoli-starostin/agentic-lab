@@ -40,6 +40,15 @@ def test_example_is_clean():
     assert [i.where for i in issues if i.level == "warning"] == []
 
 
+def test_single_vm_example():
+    lab = registry.load(EXAMPLE.parent / "single-vm" / "lab.yaml")
+    issues = registry.check(lab, TODAY)
+    assert errors(issues) == []
+    # the only warning: the secretary isn't on an on-prem host
+    assert [i.where for i in issues if i.level == "warning"] == ["agents.secretary"]
+    assert {lab.agents[a]["host"] for a in lab.agents} == {"dev-vm"}
+
+
 def test_example_agent_settings():
     lab = registry.load(EXAMPLE / "lab.yaml")
     w = lab.agent_settings("worker-a")

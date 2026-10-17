@@ -1,0 +1,53 @@
+# The whole lab on one GPU VM: a development and integration setup (DESIGN.md §12).
+# Every agent still runs as its own system service under its own Unix user (lab-<agent-id>),
+# with the same sandbox, MCP, broker and Slack DM approvals as a real deployment. Agents
+# reach each other by the VM's tailnet name.
+#
+# Differences from production: the secretary can't power off the VM it runs on (power
+# actions are logged only), and there is a single worker, since workers on one GPU would
+# compete for it.
+
+lab: dev-lab
+tailnet: example.ts.net
+
+humans:
+  alice:
+    name: Alice
+    slack_user: U00000001
+    channels:
+      - {type: slack_dm, timeout_s: 120, on_timeout: deny}
+
+hosts:
+  dev-vm:
+    kind: cloud
+    provider: nebius
+    instance: dev-vm
+    power: always_on
+
+agents:
+  secretary:
+    role: secretary
+    human: alice
+    host: dev-vm
+    model: claude-haiku-5-5
+  mgr-alice:
+    role: manager
+    human: alice
+    host: dev-vm
+    slack_app: A00000001
+    workdir: ~/scratch
+    grants:
+      - {tool: WebFetch}
+      - {tool: WebSearch}
+  worker-a:
+    role: worker
+    human: alice
+    host: dev-vm
+    access: shared
+    grants:
+      - {domain: pypi.org}
+      - {domain: files.pythonhosted.org}
+
+credentials:
+  - {name: claude/alice-seat-token, host: dev-vm, expires: 2027-10-17}
+  - {name: slack/mgr-alice, host: dev-vm, agent: mgr-alice, expires: null}
