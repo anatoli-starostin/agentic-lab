@@ -20,6 +20,9 @@ deployment's own `lab.yaml` and secret files, which never enter this repo.
 - Three agent roles (**secretary**, **manager**, **worker**) with clear jobs, budgets and guardrails.
 - **Frictionless inside, approval outside.** A worker does nearly all its work in a sandbox
   with no prompts. Anything that crosses the sandbox boundary needs a real human's yes.
+- **Everything is visible.** The lab is built for small teams where everyone sees what's
+  going on. A shared **web UI** (§9) shows every agent, task, approval, guardrail change and
+  dollar spent. Transparency replaces spend limits and quotas.
 - **Humans are never bypassed.** Agents relay approval requests; they never answer them.
   **Code enforces this, not prompts.**
 - **One description of the lab.** A single registry (`lab.yaml`) lists the humans, agents,
@@ -86,22 +89,21 @@ Cheap and always on. **Mostly deterministic code. The LLM only handles conversat
 | Does | Doesn't |
 |---|---|
 | Power VMs on and off; report what's running and what it costs | Run research or design experiments |
+| Host the lab **web UI** (§9) | Enforce spend limits (there are none; spend is visible to all) |
 | Check that agent services came back after a VM restart, and restart them if not | Approve anything for anyone |
 | Check each credential's **expiry date** in `lab.yaml` and warn ahead of time | Read secret *values* (it only needs expiry dates, plus its own cloud key) |
 | Restart preempted manager VMs | |
-| Serve the lab **dashboard** (a static HTML page, tailnet only) | |
 | Answer simple analytical questions: "did exp042 finish?", "compare A vs B in W&B" | |
 | Politely redirect research tasks to a manager | |
 
 - **Scheduler and checks** run as a systemd service and use no LLM tokens. Each check is a
   small plugin (`vm_state`, `agent_health`, `token_expiry`, `cost_burn`, `disk`) that writes
   into one `state.json`.
-- **Dashboard**: `state.json` → a static `index.html`, regenerated every minute and served
-  over the tailnet. It shows hosts, agents, tasks in flight, pending approvals (count and age
-  only), credentials with time to expiry, and cloud spend.
+- **Web UI**: the secretary hosts it (§9).
 - **Chat**: a small model (Haiku-class) with **read-only** tools over `state.json`, `lab.yaml`
-  and W&B, plus the power tools. Powering a GPU VM *on* costs money, so that action goes
-  through the requester's permission channel, the same as any other boundary crossing.
+  and W&B, plus the power tools. Any team member (or their manager) may power VMs on or off
+  without an approval. There are no spend limits. Every power action is logged and shown in
+  the web UI with who asked for it.
 - **Who watches the secretary?** Every manager probes the secretary's health endpoint and
   tells its human if the secretary stops answering. The secretary runs under systemd with
   automatic restart.
@@ -116,12 +118,19 @@ Tied to one GPU VM. Uses tokens freely. Humans don't talk to it directly.
   the task.
 - Can be **dedicated** to one human (only that human's manager may submit tasks) or
   **shared** (any manager may). This is set in `lab.yaml`.
-- **Debug console**: a human may `ssh` in and run `lab console`. It attaches to the live
-  agent session, streams its transcript and lets the human type into it. Approvals for
-  console-typed work go to that human's own permission channel, so the console never
-  bypasses the gate.
-- Reports progress (and W&B links) back through MCP. Results are committed to git per the
-  project's conventions.
+- **Debug console**, at two levels:
+  - `lab console` (everyday): a human `ssh`es in and attaches to the live headless session.
+    It streams the transcript and lets the human type messages, which are queued in order
+    with incoming tasks, and interrupt. The worker keeps serving tasks meanwhile.
+  - `lab console --takeover` (deep debugging): pauses the worker service and opens the real
+    `claude --resume <session-id>` on the same session, with the full Claude Code UI (slash
+    commands, rewind, plan mode, …). On exit, the service resumes the session.
+    (Verify early in M1 that SDK sessions are CLI-resumable.)
+  - Either way, approvals for console-typed work go to that human's own permission channel,
+    so the console never bypasses the gate.
+- Reports progress (and W&B links) back through MCP. **There is no fixed results contract**:
+  tasks vary, so a result may be a text report, a git commit, a W&B run, files, or any mix of
+  these. The worker follows the project's conventions.
 
 ### 4.3 Manager — "the team member humans talk to"
 
@@ -155,7 +164,7 @@ token listed in `lab.yaml`. A dedicated worker rejects managers other than its o
 
 | Tool | Purpose |
 |---|---|
-| `submit_task(spec) -> task_id` | Queue a task. `spec` = instruction, project, priority, requester (human), optional budget/deadline. |
+| `submit_task(spec) -> task_id` | Queue a task (FIFO). `spec` = instruction, project, requester (human), optional deadline. |
 | `task_status(task_id)` | `queued \| running \| awaiting_approval \| done \| failed \| cancelled`, plus last progress line and W&B links. |
 | `task_result(task_id)` | Final report (text and artifact pointers: git commit, W&B run, files). |
 | `cancel_task(task_id)` | Cooperative cancel, then kill after a grace period. |
@@ -168,8 +177,10 @@ Progress and approvals flow back as **notifications** (MCP server→client), wit
 `task_status` as a fallback, so a manager that was offline loses nothing. The queue is
 durable on disk, so tasks survive restarts of both the worker service and the agent.
 
-Ordering: **one GPU task at a time per worker by default** (GPU contention silently
-corrupts benchmarks). `lab.yaml` may raise this per worker.
+Ordering: **first come, first served** across all managers allowed on a worker. There are
+no quotas or priorities; the queue is visible to everyone in the web UI, and people sort out
+contention among themselves. **One GPU task at a time per worker by default** (GPU contention
+silently corrupts benchmarks). `lab.yaml` may raise this per worker.
 
 ---
 
@@ -321,7 +332,32 @@ A small CLI validates it (`lab check`) and renders it into the dashboard.
 
 ---
 
-## 9. Agent runtime
+## 9. Web UI — the lab's shared window
+
+The web UI is the main place where transparency happens. Everyone on the team sees the same
+picture. The secretary hosts it on the tailnet, so it is reachable only from lab devices,
+with no public exposure.
+
+- **Live overview**: hosts (up/down, GPU use, cost per hour), agents (alive, model, current
+  task), each worker's queue.
+- **Tasks**: who asked, which manager and worker, status, live progress, results (report,
+  commits, W&B links).
+- **Approvals**: pending requests (who is being asked, on which channel, time left) and the
+  full history (who approved or denied what, and when).
+- **Guardrails**: each agent's effective policy and the history of changes (who, why, diff).
+- **Spend**: cloud cost per host, per human and per task, today, this week and in total. No
+  limits, just visibility.
+- **Credentials**: expiry dates and warnings (never values).
+- **Audit log**: one time-ordered feed of everything above.
+
+It starts **read-only**. Answering approvals from the web UI could come later as one more
+permission channel (§7), with the same verified-human rule.
+
+Implementation: a small web app on the secretary. It reads the secretary's state store plus
+the `health()` and `list_tasks()` of every worker over MCP, and refreshes live. No external
+dependencies at runtime.
+
+## 10. Agent runtime
 
 **Recommendation: every agent runs on the Claude Agent SDK as a systemd service.** A
 terminal session that pairs itself with helper processes is fragile; spiky's approach has
@@ -330,8 +366,8 @@ hit a 30-minute monitor limit and needs re-arming.
 - The SDK gives an in-process permission callback. That callback *is* the gate
   (`cage_policy` → broker), so "never prompts the wrong place" is enforceable.
 - Sessions persist on disk and resume after restarts.
-- `lab console` (§4.2) gives humans an interactive view of a headless agent, replacing
-  "attach to a tmux pane".
+- `lab console` (§4.2) gives humans an interactive view of a headless agent, and
+  `--takeover` opens the full Claude Code UI on the same session when needed.
 - Each agent gets its own Unix user, working dir and memory dir. The policy and the broker
   run as different users from the agent they govern.
 
@@ -340,7 +376,7 @@ Sonnet-class for managers, the strongest available model for workers.
 
 ---
 
-## 10. Repo layout (proposed)
+## 11. Repo layout (proposed)
 
 ```
 agentic_lab/
@@ -350,7 +386,7 @@ agentic_lab/
   broker/        approval broker + permission channels (slack_dm, console, telegram, email)
   worker/        worker service: MCP server, durable queue, agent runner, `lab console`
   manager/       manager service: Slack face (from slack-facade) + MCP client + agent runner
-  secretary/     scheduler, checks, providers (nebius), dashboard renderer, chat
+  secretary/     scheduler, checks, web UI, chat
   providers/     cloud provider interface + nebius implementation
 deploy/          systemd units, bootstrap scripts (`lab install <role>`), example lab.yaml
 docs/            this design, runbooks, threat model
@@ -362,7 +398,7 @@ slack_sdk, PyYAML).
 
 ---
 
-## 11. Milestones
+## 12. Milestones
 
 Each milestone ends with a demo that works on real infrastructure.
 
@@ -372,7 +408,7 @@ Each milestone ends with a demo that works on real infrastructure.
 | M1 | **Worker**: MCP server, durable queue, SDK agent runner, cage, `lab console` | A manager played by hand over MCP submits a task to a cloud GPU VM, watches progress and gets the result |
 | M2 | **Broker + channels**: signed decisions, Slack DM + console channels, timeout policy | A worker's `pip install` reaches the human's DM. Approve and deny both work, the timeout denies, and **the manager agent provably cannot approve** (test) |
 | M3 | **Manager**: Slack face + MCP client + its own guardrails | "@manager run exp X on a GPU worker" in Slack → task → approval in DM → result in thread |
-| M4 | **Secretary**: checks, cloud power, dashboard, chat | Dashboard live. A GPU VM idle 30 min is stopped. A preempted manager is restarted. A token expiring within 14 days is reported |
+| M4 | **Secretary + web UI**: checks, cloud power, web UI (§9), chat | Web UI shows tasks, approvals, guardrails and spend live. A GPU VM idle 30 min is stopped. A preempted manager is restarted. A token expiring within 14 days is reported |
 | M5 | **Spiky pilot**: real spiky experiments run through the lab for a week | Spiky's existing ad-hoc tooling retired in favour of the lab |
 | M6 | **DeepSpike rollout**: separate deployment, its own `lab.yaml`, Slack workspace and tailnet | Team members use their own managers |
 
@@ -381,14 +417,21 @@ after M3–M4 as needed.
 
 ---
 
-## 12. Open questions
+## 13. Decisions log
 
-1. **Worker runtime**: is Agent SDK + `lab console` acceptable instead of an attachable
-   Claude Code terminal? (Recommended: yes.)
-2. **Who can submit to a shared worker** when two managers compete: FIFO, per-human quota or
-   priority?
-3. **Results contract**: must every task end in a git commit and/or a W&B run, or is a text
-   report enough for small tasks?
-4. **Cost guardrails**: should GPU power-on above a daily spend threshold need an extra approval?
-5. **Manager VM layout**: one shared VM with one Unix user per manager, or one small VM per
+| Date | Decision |
+|---|---|
+| 2026-10-17 | Secretary runs on an on-prem always-on box. Every other host is a cloud VM, as close to real use as possible. |
+| 2026-10-17 | Repo is private now and public later, so it stays generic. MIT license. |
+| 2026-10-17 | Shared workers: **first come, first served**. No quotas or priorities. |
+| 2026-10-17 | **No fixed results contract**: tasks vary, so a result is whatever fits (report, commit, W&B run, files). |
+| 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
+
+## 14. Open questions
+
+1. **Worker runtime**: Agent SDK + `lab console` / `--takeover` (§4.2) instead of an
+   always-attached Claude Code terminal? (Recommended: yes.)
+2. **Manager VM layout**: one shared VM with one Unix user per manager, or one small VM per
    manager? (Start shared; it's cheaper and the secretary restarts it.)
+3. **Web UI approvals**: should the web UI later become a permission channel too (answer
+   approvals in the browser)?
