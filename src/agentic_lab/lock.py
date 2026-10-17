@@ -7,8 +7,8 @@ framework.lock, which pins the framework to one commit:
       repo: https://github.com/anatoli-starostin/agentic-lab
       commit: 0ba63b2...
 
-`lab apply` ships only that commit. Upgrading the lab is a deliberate, reviewable change:
-move the pin (`lab apply --update-framework`), commit framework.lock.
+`lab apply` ships only that commit (as on the config repo's main). Upgrading is a reviewed change:
+move the pin (`lab apply --update-framework`), then a PR with framework.lock.
 """
 import os
 import subprocess
@@ -81,5 +81,5 @@ def check(lab_path, source, update=False):
             f"the framework checkout is at {commit[:10]}, but this lab is pinned to "
             f"{pinned.get('commit', '?')[:10]} ({NAME}). Check out the pinned commit "
             f"(git -C {source} checkout {pinned.get('commit')}), or upgrade on purpose: "
-            "lab apply --update-framework")
+            "lab apply --update-framework, then a PR with the new framework.lock")
     return f"framework {commit[:10]} (as pinned)"
