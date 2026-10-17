@@ -1,13 +1,9 @@
-"""lab slack-verify: tokens checked against Slack (faked), App ID recorded in lab.yaml."""
-import shutil
-from pathlib import Path
+"""lab slack-verify: tokens checked against Slack (faked)."""
 
 import pytest
 
-from agentic_lab import registry
-from agentic_lab.slack_verify import VerifyError, verify, write_app_id
+from agentic_lab.slack_verify import VerifyError, verify
 
-SINGLE = Path(__file__).parent.parent / "examples" / "single-vm" / "lab.yaml"
 ENV = "SLACK_BOT_TOKEN=xoxb-1\nSLACK_APP_TOKEN=xapp-1\n"
 
 
@@ -30,11 +26,3 @@ def test_verify():
     with pytest.raises(VerifyError, match="no Slack app tokens"):
         verify("service:x", lambda o, n: None, fake_slack())
 
-
-def test_write_app_id(tmp_path):
-    p = tmp_path / "lab.yaml"
-    shutil.copy(SINGLE, p)
-    write_app_id(p, "mgr-alice", "A0NEW")
-    assert registry.load(p).agents["mgr-alice"]["slack_app"] == "A0NEW"
-    assert p.read_text().count("slack_app:") == 1
-    assert registry.check(registry.load(p)) is not None

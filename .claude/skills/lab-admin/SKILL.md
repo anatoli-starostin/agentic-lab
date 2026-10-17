@@ -17,8 +17,12 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 ## Ground rules
 
 - **`lab.yaml` is the source of truth**, in the lab's private config repo (`~/lab-config`,
-  next to `framework.lock`). Every change starts as an edit to it, then `lab check`, and
-  ends with a commit and push there. Never edit the framework checkout (`~/agentic-lab`):
+  next to `framework.lock`). `lab apply` deploys them **as they are on `main`**, never the
+  working copy. Every change: a branch → edit → `lab check` → `sudo lab plan
+  --working-tree` → commit, push → `lab pr-link` → tell the admin "here is the PR, review
+  and merge it" (never merge it yourself) → after the merge, `sudo lab apply`. Only the
+  very first commit goes straight to `main`. `--unreviewed` is break glass: only when the
+  admin asks for it explicitly. Never edit the framework checkout (`~/agentic-lab`):
   `lab apply` refuses a dirty one, or one not at the pinned commit.
 - **Ask, don't assume; derive before asking.** Names of agents (what people see in Slack)
   are the admin's choice: ask, never invent; derive ids from them. But don't ask for what
@@ -47,12 +51,15 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 | Write the first `lab.yaml` | `lab init ~/lab-config/lab.yaml --name ... --admin ... --admin-name ... --slack-user ... [--manager ...] [--worker id@host ...] --display AGENT=NAME ...` (also writes `framework.lock`) |
 | Validate `lab.yaml` | `lab check lab.yaml` |
 | What would change; missing secrets | `sudo lab --lab lab.yaml plan` |
-| Make the hosts match `lab.yaml` | `sudo lab --lab lab.yaml apply [--host H]` (run from the repo checkout so it ships the current code; remote hosts over SSH as the admin, who needs passwordless sudo there) |
+| Make the hosts match `lab.yaml` on `main` | `sudo lab --lab ~/lab-config/lab.yaml apply [--host H]` (from the framework checkout at the pinned commit; remote hosts over SSH as the admin, who needs passwordless sudo there) |
 | Is this host healthy? | `sudo lab doctor` (on any host; every failure says how to fix it) |
 | A member's Claude token | `sudo -u lab-secretary lab secret request <member> claude-token --url http://<secretary>:8771` → give them the message |
 | A Slack app's tokens / a Nebius service account | `sudo -u lab-secretary lab secret request service:<broker\|secretary\|manager-id> slack-app --url ...` (or `service:secretary nebius-sa`) → a one-time link to paste in a browser |
-| Check a Slack app's tokens, record its App ID | `sudo lab --lab ~/lab-config/lab.yaml slack-verify <broker\|secretary\|manager-id> --write` |
-| Upgrade the framework | `git -C ~/agentic-lab pull` → `sudo lab apply --update-framework` → commit `framework.lock` |
+| Check a Slack app's tokens (and get its App ID) | `sudo lab --lab ~/lab-config/lab.yaml slack-verify <broker\|secretary\|manager-id>` |
+| Open a PR for the current config branch | `lab --lab ~/lab-config/lab.yaml pr-link` (after `git push -u origin <branch>`) |
+| Preview a branch's changes | `sudo lab --lab ~/lab-config/lab.yaml plan --working-tree` |
+| What a host runs | `sudo lab doctor` (config + framework commits, reviewed or not) |
+| Upgrade the framework | `git -C ~/agentic-lab pull` → `lab apply --update-framework` (rewrites `framework.lock` only) → PR |
 | A Slack app manifest | `lab --lab lab.yaml slack-manifest <manager or secretary>` / `slack-manifest approvals` |
 | VM power | after the admin's one Nebius browser login: `sudo lab --lab lab.yaml nebius connect --project <id> [--forget-admin]` |
 | Talk to an agent without Slack | `sudo -u lab-<id> lab manager ask <id> --as <member> "..."` (or `secretary ask --as <member> "..."`) |

@@ -227,6 +227,7 @@ uv pip install -q -p /opt/agentic-lab/venv --reinstall-package agentic-lab /opt/
 install -d /opt/agentic-lab/client
 install -m 644 /opt/agentic-lab/src/client/lab-member.py /opt/agentic-lab/client/
 install -m 644 "$B/lab.yaml" /etc/agentic-lab/lab.yaml
+install -m 644 "$B/applied.yaml" /etc/agentic-lab/applied.yaml   # which commits run here
 ln -sf /opt/agentic-lab/venv/bin/lab /usr/local/bin/lab     # `lab` for every user here
 
 say "sandbox prerequisites"
@@ -281,6 +282,8 @@ def bundle(plan, lab_path, source, out):
             p in ti.name.split("/") for p in (".git", ".venv", "__pycache__", ".pytest_cache"))
             else ti)
     shutil.copy(lab_path, os.path.join(out, "lab.yaml"))
+    with open(os.path.join(out, "applied.yaml"), "w") as f:
+        yaml.safe_dump(plan.get("applied") or {}, f, sort_keys=False)
     for i, (path, (_, _, content)) in enumerate(sorted(plan["files"].items())):
         p = os.path.join(out, "files", str(i))
         with open(p, "w") as f:

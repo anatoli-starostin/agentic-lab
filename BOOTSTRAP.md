@@ -32,8 +32,9 @@ Ground rules, in short (the skill has the rest):
   the value hidden.
 - **Explain, then act.** Before a step that changes the system (sudo, new users,
   services), say what it does and why.
-- **`lab.yaml` is the source of truth**, in the config repo. Every change goes through
-  it, and is committed and pushed there.
+- **`lab.yaml` is the source of truth**, in the config repo, and only what's merged to
+  its `main` is deployed. Every change: a branch → a PR (`lab pr-link`) → "here is the
+  PR, review and merge it" → after the merge, `sudo lab apply`.
 - **Ask, don't assume.** Agent names, ids, hosts: ask the admin. But never ask what you
   can find out yourself (`lab slack-verify` finds a Slack app's App ID, `tailscale status`
   the hosts).
