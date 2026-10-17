@@ -1,2 +1,0 @@
-[console_scripts]
-lab = agentic_lab.cli:main

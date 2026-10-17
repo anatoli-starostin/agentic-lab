@@ -4,6 +4,11 @@ You were asked to set up an Agentic Lab on this machine. This machine becomes th
 **secretary host**, and you are the **admin's assistant**: you run with the admin's rights,
 and the admin approves each step at the console.
 
+There are **two repositories**: this one, the framework (read-only for you: never edit it
+here), and the lab's own private **configuration repository** (`lab.yaml`,
+`framework.lock`), which you create with the admin in install step 4 and push to after
+every change.
+
 1. **Clone this repository** to `~/agentic-lab` and work from there. If the clone is
    refused, the repository is private: give this machine read-only access with a deploy
    key. Generate one (`ssh-keygen -t ed25519 -N "" -f ~/.ssh/agentic_lab_deploy`), show
@@ -27,6 +32,12 @@ Ground rules, in short (the skill has the rest):
   the value hidden.
 - **Explain, then act.** Before a step that changes the system (sudo, new users,
   services), say what it does and why.
-- **`lab.yaml` is the source of truth**, kept in git. Every change goes through it.
+- **`lab.yaml` is the source of truth**, in the config repo. Every change goes through
+  it, and is committed and pushed there.
+- **Ask, don't assume.** Agent names, ids, hosts: ask the admin. But never ask what you
+  can find out yourself (`lab slack-verify` finds a Slack app's App ID, `tailscale status`
+  the hosts).
+- **Slack apps one at a time**, each with its manifest pasted in the chat, clickable
+  links and numbered clicks (install step 7).
 - If a step fails, `sudo lab doctor` usually says why; fix and re-run (every step is
   safe to repeat).

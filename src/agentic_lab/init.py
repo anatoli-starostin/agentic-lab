@@ -126,6 +126,12 @@ def run(path, args):
     data = build(lab_name, tailnet, admin_id, admin_name, slack_user, sec_host, sec_name,
                  manager=args.manager, workers=workers,
                  admin_login=args.tailscale_login or tailscale_login(), manager_host=mhost)
+    for spec in args.display or []:          # the names humans see: asked, never assumed
+        aid, sep, name = spec.partition("=")
+        if not sep or aid not in data["agents"] or not name.strip():
+            raise SystemExit(f"lab init: --display takes AGENT=NAME for an agent in the lab, "
+                             f"got {spec!r}")
+        data["agents"][aid] = {"display_name": name.strip(), **data["agents"][aid]}
     with open(path, "w") as f:
         f.write(HEADER)
         yaml.safe_dump(data, f, sort_keys=False)

@@ -14,14 +14,35 @@ member. Other members join afterwards, one at a time ("Add a member" below).
 
 **Accounts the admin needs:** a Tailscale tailnet; a Nebius account with GPU quota; a
 Slack workspace where they can create apps; a Claude seat (Team or Max) for each member
-whose agents will run; optionally W&B.
+whose agents will run; a GitHub account (or organisation) for the lab's private
+configuration repository; optionally W&B.
 
-Until the first `lab apply`, `lab` means the repo checkout's own (`~/agentic-lab`, set up
-with `uv venv && uv pip install -e .`): `~/agentic-lab/.venv/bin/lab`, also under sudo.
+**Two repositories:**
+- **The framework** (this repository): code, read-only for the lab. Never edited on the
+  secretary host.
+- **The lab's configuration** (private, one per lab, e.g. `<org>/lab-config`): `lab.yaml`
+  and `framework.lock`, which pins the framework to one commit. Every change to the lab is
+  a commit here, so the lab's history is reviewable and a lost secretary host is rebuilt
+  from it. It holds no secrets (those stay on the hosts).
+
+On the secretary host the framework is checked out in `~/agentic-lab` (set up with
+`uv venv && uv pip install -e .`) and the configuration in `~/lab-config`. Until the first
+`lab apply`, `lab` means the checkout's own, `~/agentic-lab/.venv/bin/lab`, also under sudo.
 `lab apply` then puts `lab` on every lab host's PATH (`/usr/local/bin/lab`), where it reads
 `/etc/agentic-lab/lab.yaml` by default; that's what commands run as the lab's users use.
-**Always run `lab plan` / `lab apply` from the checkout**, so they ship its code:
-`cd ~/agentic-lab && sudo .venv/bin/lab plan`.
+**Always run `lab plan` / `lab apply` from the checkout, on the config repo's lab.yaml**,
+so they ship the pinned code:
+`cd ~/agentic-lab && sudo .venv/bin/lab --lab ~/lab-config/lab.yaml plan`.
+Below, `lab` is short for that.
+
+**Framework pinning.** `lab apply` ships the framework checkout only if it is clean and
+at the commit in `framework.lock` (the first apply writes the pin). To upgrade the lab:
+`git -C ~/agentic-lab pull`, then `sudo lab apply --update-framework`, then commit
+`framework.lock`. After every change to `lab.yaml` or `framework.lock`, Claude commits
+and pushes the config repo.
+
+**Claude Code's auto mode** may refuse `sudo lab apply` (it changes the system) until the
+admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected.
 
 ---
 
@@ -38,18 +59,32 @@ with `uv venv && uv pip install -e .`): `~/agentic-lab/.venv/bin/lab`, also unde
 
 ## Guided by Claude
 
-4. **The lab's description** (Claude asks, Admin answers)
-   - Claude asks for the lab's name, the admin's member id and name, and Slack member id
-     (Slack: profile → ⋯ → Copy member ID), the admin's manager's id, and the first
-     workers (`id@host`, e.g. `worker-a@gpu-a`), then runs:
-     `lab init lab.yaml --name ... --admin ... --admin-name ... --slack-user ... --manager mgr-<admin> --worker worker-a@gpu-a`
-   - `lab init` marks the admin `admin: true` and fills in their Tailscale login (for the
-     web UI's logs) from this machine's owner. A separate VM for managers:
-     `--manager-host mgr-vm`. Optionally add an `announcements` channel. `lab check
-     lab.yaml` must pass.
-   - `lab.yaml` goes into git (it holds no secrets).
+4. **The lab's configuration repository** (Admin creates it, Claude explains and connects)
+   - Claude explains the two repositories (above), then asks the admin to create an
+     **empty private** repository, e.g. `https://github.com/organizations/<org>/repositories/new`
+     (or `https://github.com/new`), named `lab-config`.
+   - Claude generates a deploy key for it on this machine
+     (`ssh-keygen -t ed25519 -N "" -f ~/.ssh/lab_config_deploy`), shows the **public**
+     half, and asks the admin to add it at
+     `https://github.com/<org>/lab-config/settings/keys` with **Allow write access**
+     ticked. Claude clones it to `~/lab-config` with that key (`core.sshCommand` set).
 
-5. **The secretary's own services** (Claude)
+5. **The lab's description** (Claude asks, Admin answers)
+   - **Names first.** Claude asks how each agent should be called: the secretary, the
+     admin's manager, each worker. That name is what people see in Slack and in the web
+     UI. Claude never invents names, and derives the ids from them (`Flash` →
+     `mgr-flash`); the admin may also pick ids. Avoid naming an agent "Admin" (people
+     confuse it with the human admin) or after a Slack built-in ("Slackbot").
+   - Then: the lab's name, the admin's member id and name, their Slack member id (Slack:
+     profile → ⋯ → Copy member ID), and the first workers' hosts. Claude runs:
+     `lab init ~/lab-config/lab.yaml --name ... --admin ... --admin-name ... --slack-user ... --manager mgr-flash --worker worker-a@gpu-a --display secretary=Iris --display mgr-flash=Flash --display worker-a=Bolt`
+   - `lab init` marks the admin `admin: true`, fills in their Tailscale login (for the
+     web UI's logs) from this machine's owner, and writes `framework.lock`. A separate VM
+     for managers: `--manager-host mgr-vm`. Optionally add an `announcements` channel.
+     `lab check` must pass.
+   - Claude commits and pushes both files to the config repo.
+
+6. **The secretary's own services** (Claude)
    - `sudo lab apply --host <secretary host> --allow-missing`: installs the framework in
      `/opt/agentic-lab`, creates the users `lab-secretary` and `lab-broker`, starts the
      secret intake and the secretary (state + web UI on `http://<secretary host>:8774/`).
@@ -57,21 +92,43 @@ with `uv venv && uv pip install -e .`): `~/agentic-lab/.venv/bin/lab`, also unde
      tokens) are installed but held back, and listed; the next steps provide them, and the
      final `lab apply` starts them.
 
-6. **Slack apps** (Admin creates them, Claude guides; ~2 minutes each)
+7. **Slack apps** (Admin creates them, Claude guides; ~3 minutes each)
    - Three apps: **Lab Approvals** (the broker's), **the secretary**, and **the admin's
-     manager**. For each, Claude prints the manifest
-     (`lab slack-manifest approvals | secretary | mgr-<admin>`) and a one-time link:
-     `sudo -u lab-secretary lab secret request service:<broker|secretary|mgr-...> slack-app --url http://<secretary host>:8771`
-   - Admin: api.slack.com/apps → Create New App → From a manifest → paste → Install →
-     copy the Bot token (`xoxb-`); Basic Information → App-Level Tokens → Generate with
-     `connections:write` (`xapp-`); paste both in the link. Nothing passes through chat.
+     manager**. **One at a time**: finish, verify, then the next. For each app Claude
+     puts in the chat, in this order:
+     1. the manifest itself, pasted in full in a code block (`lab slack-manifest
+        approvals | secretary | <manager id>`; a manifest holds no secrets);
+     2. the link to create it: https://api.slack.com/apps?new_app=1
+     3. the one-time link for its tokens, from
+        `sudo -u lab-secretary lab secret request service:<broker|secretary|manager id> slack-app --url http://<secretary host>:8771`
+     4. the clicks below, as a numbered list.
+   - Admin, in the browser:
+     1. *Create New App* → **From a manifest** → pick the workspace → *Next*.
+     2. Select the **YAML** tab, delete what's there, paste the manifest → *Next* →
+        *Create*.
+     3. Left menu **Install App** → *Install to <workspace>* → *Allow*. Copy the **Bot
+        User OAuth Token** (`xoxb-…`).
+     4. Left menu **Basic Information** → *App-Level Tokens* → *Generate Token and
+        Scopes* → any name (`socket`) → *Add Scope* → `connections:write` → *Generate*.
+        Copy the token (`xapp-…`).
+     5. Open the one-time link, paste both tokens, *Send*. Then tell Claude "done".
+        **Never paste a token into the chat.**
+   - Claude checks it at once: `sudo lab slack-verify <broker|secretary|manager id>
+     --write` asks Slack whether both tokens work, prints the app's name, workspace and
+     App ID, and for a manager records the App ID in `lab.yaml` (Claude commits it). If
+     a check fails, it says which token and how to fix it; a new one-time link replaces
+     the tokens.
 
-7. **The admin's Claude token** (Admin, once a year)
+8. **The admin's Claude token** (Admin, once a year)
    - `sudo -u lab-secretary lab secret request <admin> claude-token --url http://<secretary host>:8771`
      prints a one-time command. The admin runs it on their own computer: it runs
-     `claude setup-token` and sends the token straight to the lab.
+     `claude setup-token` and sends the token straight to the lab, which checks it
+     with Anthropic before storing it.
+   - The token is a password. **Never paste it, or the terminal's output, into a chat**
+     (including Claude's). If the script shows a token that doesn't look right (cut short,
+     extra characters), answer `n` and paste it into the hidden prompt instead.
 
-8. **VM power** (Admin logs in once, Claude does the rest)
+9. **VM power** (Admin logs in once, Claude does the rest)
    - Install the Nebius CLI for the admin, then one browser login:
      `nebius profile create lab-admin --endpoint api.nebius.cloud --federation-endpoint auth.nebius.com --no-browser --parent-id <project-id>`
      (open the printed link; on a remote host, forward its local port with `ssh -L`).
@@ -83,12 +140,12 @@ with `uv venv && uv pip install -e .`): `~/agentic-lab/.venv/bin/lab`, also unde
    - Fallback, an existing service account: `... secret request service:secretary nebius-sa`
      (a form with the service account id, key id and private key PEM).
 
-9. **GPU hosts** (Admin + Claude, per host)
+10. **GPU hosts** (Admin + Claude, per host)
    - Create the VM (Nebius console, Ubuntu 24.04 with NVIDIA drivers), join it to the
      tailnet, and let the admin SSH in with passwordless sudo. If the image's login user
      isn't the admin's name, add `ssh_user: <user>` to the host in `lab.yaml`.
 
-10. **Everything else** (Claude)
+11. **Everything else** (Claude)
     - A GPU host that's stopped can't be set up: ask the secretary to power it on first
       ("power on gpu-a"), or start it in the Nebius console.
     - `sudo lab plan` (nothing missing?), then `sudo lab apply`: every host gets the
@@ -97,7 +154,7 @@ with `uv venv && uv pip install -e .`): `~/agentic-lab/.venv/bin/lab`, also unde
       never shown.
     - `sudo lab doctor` on each host: every check passes, or says how to fix it.
 
-11. **First task** (Admin)
+12. **First task** (Admin)
     - DM the manager: *"Run a quick GPU smoke test on worker-a and show me a loss
       curve."* Progress, the plot and a summary come back in Slack; any approval comes as a
       DM from Lab Approvals. The web UI shows it all.
@@ -106,12 +163,13 @@ with `uv venv && uv pip install -e .`): `~/agentic-lab/.venv/bin/lab`, also unde
 
 - **The secretary** keeps the lab running: machine states and idle stops, token-expiry
   notices, usage per account, answers about the lab in Slack.
-- **The admin's Claude** makes every change the same way: edit `lab.yaml` →
-  `lab check` → `sudo lab plan` → `sudo lab apply`.
+- **The admin's Claude** makes every change the same way: edit `~/lab-config/lab.yaml` →
+  `lab check` → `sudo lab plan` → `sudo lab apply` → commit and push the config repo.
+  New agents' names are asked, never invented (step 5).
   - **Add a member:** add them to `lab.yaml` (name, Slack id). At that moment, send them
-    their Claude-token command (step 7, for them). Then add their manager (and workers):
-    its Slack app (step 6), `sudo lab apply`.
-  - **Add a worker:** create the VM and join the tailnet (step 9), add it to `lab.yaml`,
+    their Claude-token command (step 8, for them). Then add their manager (and workers):
+    its Slack app (step 7), `sudo lab apply`.
+  - **Add a worker:** create the VM and join the tailnet (step 10), add it to `lab.yaml`,
     `sudo lab apply`.
   - **Remove an agent:** remove it from `lab.yaml`, `sudo lab apply`; on its host,
     `sudo systemctl disable --now lab-<role>@<id>` and, after the admin confirms,

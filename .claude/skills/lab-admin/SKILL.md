@@ -16,13 +16,25 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 
 ## Ground rules
 
-- **`lab.yaml` is the source of truth.** Every change starts as an edit to it, then
-  `lab check`. Keep it in git so every change is a reviewable diff.
+- **`lab.yaml` is the source of truth**, in the lab's private config repo (`~/lab-config`,
+  next to `framework.lock`). Every change starts as an edit to it, then `lab check`, and
+  ends with a commit and push there. Never edit the framework checkout (`~/agentic-lab`):
+  `lab apply` refuses a dirty one, or one not at the pinned commit.
+- **Ask, don't assume; derive before asking.** Names of agents (what people see in Slack)
+  are the admin's choice: ask, never invent; derive ids from them. But don't ask for what
+  a command can tell you (a Slack App ID: `lab slack-verify`; tailnet names: `tailscale
+  status`; VM ids: `lab nebius connect`).
+- **Guide clicks precisely.** For anything done in a browser, give a clickable link and
+  numbered clicks, and paste what they must paste (manifests) in a code block. One thing
+  at a time; wait for "done", verify, then the next.
 - **Explain before acting.** Say what a step does and why, then run it. Steps that touch a
   host (sudo, users, services) are shown to the admin first.
 - **Secrets never pass through the chat.** Never ask the admin to paste a token, key or
   password into the conversation. Tell them which command to run in their own terminal
-  (`lab secret set <name>`, coming in M3a; until then, the manual step in each recipe).
+  (`lab secret request ...` gives a one-time link or command). If they paste one anyway,
+  tell them to revoke and regenerate it.
+- **Auto mode may block `sudo lab apply`.** Explain what it will do and ask the admin to
+  say "yes, run it" explicitly.
 - **One Unix user per agent** (`lab-<agent-id>`), even on a shared host. Nobody logs in as
   an agent user; never run tmux, Jupyter or anything else as one (DESIGN.md §10).
 - **Re-running is safe.** The setup scripts are idempotent; when unsure of a host's state,
@@ -32,13 +44,15 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 
 | Step | How |
 |---|---|
-| Write the first `lab.yaml` | `lab init lab.yaml --name ... --admin ... --admin-name ... --slack-user ... [--manager ...] [--worker id@host ...]` |
+| Write the first `lab.yaml` | `lab init ~/lab-config/lab.yaml --name ... --admin ... --admin-name ... --slack-user ... [--manager ...] [--worker id@host ...] --display AGENT=NAME ...` (also writes `framework.lock`) |
 | Validate `lab.yaml` | `lab check lab.yaml` |
 | What would change; missing secrets | `sudo lab --lab lab.yaml plan` |
 | Make the hosts match `lab.yaml` | `sudo lab --lab lab.yaml apply [--host H]` (run from the repo checkout so it ships the current code; remote hosts over SSH as the admin, who needs passwordless sudo there) |
 | Is this host healthy? | `sudo lab doctor` (on any host; every failure says how to fix it) |
 | A member's Claude token | `sudo -u lab-secretary lab secret request <member> claude-token --url http://<secretary>:8771` → give them the message |
 | A Slack app's tokens / a Nebius service account | `sudo -u lab-secretary lab secret request service:<broker\|secretary\|manager-id> slack-app --url ...` (or `service:secretary nebius-sa`) → a one-time link to paste in a browser |
+| Check a Slack app's tokens, record its App ID | `sudo lab --lab ~/lab-config/lab.yaml slack-verify <broker\|secretary\|manager-id> --write` |
+| Upgrade the framework | `git -C ~/agentic-lab pull` → `sudo lab apply --update-framework` → commit `framework.lock` |
 | A Slack app manifest | `lab --lab lab.yaml slack-manifest <manager or secretary>` / `slack-manifest approvals` |
 | VM power | after the admin's one Nebius browser login: `sudo lab --lab lab.yaml nebius connect --project <id> [--forget-admin]` |
 | Talk to an agent without Slack | `sudo -u lab-<id> lab manager ask <id> --as <member> "..."` (or `secretary ask --as <member> "..."`) |
@@ -48,7 +62,7 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 
 ## First-time setup
 
-The full sequence is `docs/install.md`: steps 1–3 by hand, 4–11 guided by you. Follow it
+The full sequence is `docs/install.md`: steps 1–3 by hand, 4–12 guided by you. Follow it
 in order; tell the admin before each step what they will need to do themselves.
 
 ## Maintenance recipes

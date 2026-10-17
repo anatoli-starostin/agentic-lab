@@ -52,10 +52,17 @@ def _n(k, word):
 
 
 def cmd_init(args):
+    from . import lock
+    from .apply import find_source
     from .init import run
     path = args.path or args.lab
     run(path, args)
     print(f"wrote {path}")
+    try:
+        commit = lock.write(path, find_source())
+        print(f"wrote {lock.path_for(path)} (framework pinned to {commit[:10]})")
+    except Exception as e:      # noqa: BLE001 - the lab.yaml is what matters here
+        print(f"couldn't pin the framework ({e}); `lab apply` will pin it")
     args.lab = path
     return cmd_check(args)
 
@@ -198,14 +205,16 @@ def cmd_plan(args):
 def cmd_apply(args):
     import os
 
+    from . import lock
     from .apply import ApplyError, describe, find_source, has_work, plan_all, run_bundle
     from .doctor import this_host
     if os.geteuid() != 0:
         sys.exit("lab apply needs root (it reads the lab's secrets): sudo lab apply ...")
     try:
         source = args.source or find_source()
+        print(lock.check(args.lab, source, update=args.update_framework) + "\n")
         lab, tokens, plans = plan_all(args.lab, hosts=args.host or None)
-    except ApplyError as e:
+    except (ApplyError, lock.LockError) as e:
         sys.exit(f"lab apply: {e}")
     here = this_host(lab)
     admin = args.admin or os.environ.get("SUDO_USER") or "root"
@@ -289,6 +298,26 @@ def cmd_nebius_connect(args):
     return 0
 
 
+def cmd_slack_verify(args):
+    from .slack_verify import VerifyError, verify, write_app_id
+    owner = args.owner if args.owner.startswith("service:") else f"service:{args.owner}"
+    try:
+        r = verify(owner)
+    except (VerifyError, OSError) as e:
+        sys.exit(f"lab slack verify: {e}")
+    print(f"✓ bot token works: app {r['name']!r} in workspace {r['team']!r}, "
+          f"App ID {r['app_id'] or 'unknown (the app lacks users:read; only managers need it)'}")
+    print("✓ app-level token opens Socket Mode" if r["socket_ok"] else
+          f"✗ app-level token: {r['socket_error']} (Basic Information → App-Level Tokens, "
+          "scope connections:write; Socket Mode on)")
+    agent = owner[8:]
+    lab = _load_lab(args.lab)
+    if args.write and lab.agents.get(agent, {}).get("role") == "manager" and r["app_id"]:
+        write_app_id(args.lab, agent, r["app_id"])
+        print(f"  recorded slack_app: {r['app_id']} for {agent} in {args.lab}")
+    return 0 if r["socket_ok"] else 1
+
+
 def cmd_debug(args):
     from .debug import debug
     debug(args.lab, args.agent, session=args.session, new=args.new, ask=args.print)
@@ -326,6 +355,8 @@ def main(argv=None):
                    "logs (default: this machine's owner)")
     i.add_argument("--worker", action="append", help="a worker: id@host[=tailnet-name] "
                    "(repeatable)")
+    i.add_argument("--display", action="append", metavar="AGENT=NAME",
+                   help="the name humans see for an agent (repeatable), e.g. mgr-ana=Flash")
     i.add_argument("--force", action="store_true", help="overwrite an existing file")
     i.set_defaults(fn=cmd_init)
 
@@ -413,6 +444,8 @@ def main(argv=None):
     ap_.add_argument("--source", help="the framework's source tree (default: detect)")
     ap_.add_argument("--allow-missing", action="store_true",
                      help="apply hosts even if some of their secrets are missing")
+    ap_.add_argument("--update-framework", action="store_true",
+                     help="move the lab's framework pin (framework.lock) to this checkout")
     ap_.set_defaults(fn=cmd_apply)
 
     lg = sub.add_parser("logs", help="an agent's event log (sudo, on its host)")
@@ -431,6 +464,13 @@ def main(argv=None):
     nc.add_argument("--forget-admin", action="store_true",
                     help="remove the admin's own Nebius login afterwards")
     nc.set_defaults(fn=cmd_nebius_connect)
+
+    sv = sub.add_parser("slack-verify", help="check a Slack app's tokens right after they arrive "
+                        "(sudo, secretary host)")
+    sv.add_argument("owner", help="broker, secretary or a manager's id")
+    sv.add_argument("--write", action="store_true",
+                    help="record a manager's App ID in lab.yaml")
+    sv.set_defaults(fn=cmd_slack_verify)
 
     sm = sub.add_parser("slack-manifest", help="print a Slack app manifest")
     sm.add_argument("agent", help="a manager or the secretary, or 'approvals'")

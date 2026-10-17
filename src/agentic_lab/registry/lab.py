@@ -225,8 +225,7 @@ def check(lab: Lab, today: dt.date | None = None):
             E(where, "'max_parallel_gpu_tasks' applies to workers only")
         if role != "manager" and "slack_app" in a:
             E(where, "'slack_app' applies to managers only")
-        if role == "manager" and not a.get("slack_app"):
-            W(where, "manager has no slack_app yet (it can't talk in Slack)")
+        # (slack_app is informational: `lab slack-verify <manager> --write` fills it in)
         if role == "secretary":
             host = lab.hosts.get(a.get("host")) or {}
             if host.get("kind") == "cloud":

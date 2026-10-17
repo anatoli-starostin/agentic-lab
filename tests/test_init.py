@@ -12,13 +12,17 @@ def test_init_with_flags(tmp_path, monkeypatch, capsys):
     path = tmp_path / "lab.yaml"
     rc = main(["init", str(path), "--name", "deepspike", "--admin", "anatoly",
                "--admin-name", "Anatoly", "--slack-user", "U0123", "--manager", "mgr-anatoly",
-               "--worker", "worker-a@gpu-a", "--worker", "worker-b@gpu-b=gpu-b.other.ts.net"])
+               "--worker", "worker-a@gpu-a", "--worker", "worker-b@gpu-b=gpu-b.other.ts.net",
+               "--display", "mgr-anatoly=Flash", "--display", "worker-a=Nebius-the-Great"])
     assert rc == 0 and "0 errors" in capsys.readouterr().out
     lab = registry.load(path)
     assert lab.hosts["sec"]["tailnet_name"] == "sec.example.ts.net"
     assert lab.hosts["gpu-a"]["tailnet_name"] == "gpu-a.example.ts.net"
     assert lab.hosts["gpu-b"]["tailnet_name"] == "gpu-b.other.ts.net"
     assert {a["role"] for a in lab.agents.values()} == {"secretary", "manager", "worker"}
+    assert lab.display_name("mgr-anatoly") == "Flash"
+    assert lab.display_name("worker-a") == "Nebius-the-Great"
+    assert lab.display_name("secretary") == "secretary"
     assert lab.humans["anatoly"]["admin"] and lab.humans["anatoly"]["tailscale_login"] == "admin@example.com"
     assert path.read_text().startswith("# The lab's description")
     with pytest.raises(SystemExit, match="exists"):
