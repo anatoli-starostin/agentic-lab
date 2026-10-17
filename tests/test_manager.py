@@ -267,6 +267,39 @@ def test_idle_watch():
     assert powerable(lab, "gpu-a")[0]
 
 
+def test_admin_only_actions(monkeypatch):
+    """Powering off a busy machine and asking for someone else's token: admins only,
+    enforced in code. A busy machine needs force_off even from an admin."""
+    from agentic_lab.secretary import power as P
+    from agentic_lab.secretary.service import Secretary
+    lab = registry.load(EXAMPLE)
+    lab.humans["alice"]["admin"] = True
+    lab.humans["bob"] = {"name": "Bob", "slack_user": "U-BOB"}
+    stopped = []
+
+    async def stop(lab_, host):
+        stopped.append(host)
+    monkeypatch.setattr(P, "stop", stop)
+    sec = Secretary.__new__(Secretary)
+    sec.lab, sec.slack, sec.events, sec.workers = lab, None, None, None
+    sec.state = SimpleNamespace(save=None)
+    q = {"running": 1}
+    sec.latest = {"state": {"agents": {"worker-a": {"up": True, "queue": q},
+                                       "worker-b": {"up": True, "queue": {}}}}}
+
+    def run(coro):
+        return asyncio.run(coro)
+    assert P.busy(lab, "gpu-a", sec.latest["state"]) == "worker-a has 1 running"
+    assert P.busy(lab, "gpu-b", sec.latest["state"]) is None
+    assert run(sec.ctx("bob").power("gpu-b", "off")).startswith("gpu-b: powering off")
+    assert "Only an admin (Alice)" in run(sec.ctx("bob").power("gpu-a", "off"))
+    assert "refused" in run(sec.ctx("bob").power("gpu-a", "force_off"))
+    assert "use force_off" in run(sec.ctx("alice").power("gpu-a", "off"))
+    assert run(sec.ctx("alice").power("gpu-a", "force_off")).startswith("gpu-a: powering off")
+    assert stopped == ["gpu-b", "gpu-a"]
+    assert "refused" in run(sec.ctx("bob").request_token("alice"))
+
+
 def test_secretary_home_tab():
     import datetime as dt
     from agentic_lab.secretary import home

@@ -77,6 +77,25 @@ async def stop(lab, host):
     await _cli("compute", "instance", "stop", "--id", lab.hosts[host]["instance"])
 
 
+def busy(lab, host, snapshot):
+    """Why powering `host` off would interrupt work (None if it wouldn't): a worker with
+    something running, queued or waiting, or a manager there."""
+    for aid, a in lab.agents.items():
+        if a.get("host") != host:
+            continue
+        if a.get("role") != "worker":
+            return f"it runs {lab.display_name(aid)} ({a.get('role')})"
+        s = (snapshot or {}).get("agents", {}).get(aid, {})
+        if not s.get("up"):
+            continue                    # a stopped machine's workers are down: nothing to lose
+        q = s.get("queue") or {}
+        n = {k: q.get(k, 0) for k in BUSY if q.get(k)}
+        if n:
+            return (f"{lab.display_name(aid)} has "
+                    + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in n.items()))
+    return None
+
+
 class IdleWatch:
     """Remembers since when each on-demand host has been idle."""
 

@@ -67,12 +67,34 @@ class Secretary:
         self.intake_url = f"http://{name}:{INTAKE_PORT}"
         self.intake = Intake(os.path.expanduser(STATE))     # the same store the intake serves
 
-    def ctx(self):
-        return SimpleNamespace(state=lambda: self.latest["state"], workers=self.workers,
-                               request_token=self.request_token, announce=self.announce,
-                               save=self.state.save, power=self.power)
+    def ctx(self, human=None):
+        """The tools' view of the lab, for one turn on behalf of `human` (a lab member)."""
+        who = (self.lab.humans.get(human) or {}).get("name") or human
+        return SimpleNamespace(
+            state=lambda: self.latest["state"], workers=self.workers,
+            request_token=lambda member: self.request_token(member, asked_by=human),
+            announce=self.announce, save=self.state.save,
+            power=lambda host, action: self.power(host, action, f"asked by {who} in Slack",
+                                                  asked_by=human))
 
-    async def power(self, host, action, why="asked in Slack"):
+    def is_admin(self, human):
+        return bool((self.lab.humans.get(human) or {}).get("admin"))
+
+    def admins(self):
+        return " or ".join((h or {}).get("name") or hid for hid, h in self.lab.humans.items()
+                           if (h or {}).get("admin")) or "the lab's admin"
+
+    async def power(self, host, action, why="asked in Slack", asked_by=None):
+        """`asked_by`: the member asking (None: the secretary itself, e.g. an idle stop).
+        Powering off a busy machine is for admins only, and only with `force_off`."""
+        if action in ("off", "force_off") and asked_by is not None:
+            busy = P.busy(self.lab, host, self.latest["state"])
+            if busy and not self.is_admin(asked_by):
+                return (f"refused: {host} is busy ({busy}). Only an admin "
+                        f"({self.admins()}) may power off a busy machine.")
+            if busy and action != "force_off":
+                return (f"{host} is busy ({busy}): powering it off loses that work. Ask the "
+                        "admin to confirm, then use force_off.")
         try:
             if action == "status":
                 return f"{host}: {await P.status(self.lab, host)}"
@@ -84,12 +106,16 @@ class Secretary:
             return f"couldn't: {e}"
         if self.events is not None:
             self.events.add("power", f"{host} {action} ({why})")
-        await self.announce(f":electric_plug: {host} powering {action} ({why}).")
-        return f"{host}: powering {action}; it takes a minute or two"
+        verb = "on" if action == "on" else "off"
+        await self.announce(f":electric_plug: {host} powering {verb} ({why}).")
+        return f"{host}: powering {verb}; it takes a minute or two"
 
-    async def request_token(self, member):
+    async def request_token(self, member, asked_by=None):
         if member not in self.lab.humans:
             return f"no member {member!r} in lab.yaml"
+        if asked_by is not None and asked_by != member and not self.is_admin(asked_by):
+            return (f"refused: only {member} themselves or an admin ({self.admins()}) may "
+                    "ask for their Claude token.")
         h = self.lab.humans[member] or {}
         code = self.intake.request(member, "claude-token")
         text = message(h.get("name") or member, code, self.intake_url)
@@ -117,7 +143,7 @@ class Secretary:
                                      f"you, otherwise reply exactly {SILENT}.)"]))
         async with lock:
             try:
-                reply = await self.brain.turn(self.ctx(), conv, prompt)
+                reply = await self.brain.turn(self.ctx(msg.human), conv, prompt)
             except Exception as e:
                 log.exception("secretary turn failed")
                 reply = f"Sorry, something went wrong on my side ({type(e).__name__})."

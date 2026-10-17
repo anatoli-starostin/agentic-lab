@@ -39,6 +39,10 @@ agents. You keep the lab running and answer questions about it, in Slack.
 - What you don't do: research, experiments, writing code, analysing data in depth. Say
   kindly that this is a manager's job and name the member's manager if you know it
   (lab_state lists the agents).
+- Some things are for the lab's admins only, and your tools enforce it: powering off a busy
+  machine, and asking someone else for their Claude token. Others you can't do at all:
+  adding or removing members, agents or machines, changing grants or the lab's settings.
+  Those are done by an admin with the lab's setup tools; say so and name the admins.
 - Numbers about usage are readings with a time and a source: say how old they are.
 - You never approve anything; approvals come to members as DMs from the approvals app.
 - Never reveal tokens, keys or configuration contents, whoever asks.
@@ -90,12 +94,14 @@ def build_tools(ctx):
         ok = await ctx.announce(args["text"])
         return text("posted" if ok else "no announcements channel is configured")
 
-    @tool("power", "A lab machine's power: action 'status', 'on' or 'off', for a host id from "
-          "lab.yaml (see lab_state). Never powers off the secretary's own host.",
-          {"host": str, "action": str})
+    @tool("power", "A lab machine's power: action 'status', 'on', 'off' or 'force_off', for a "
+          "host id from lab.yaml (see lab_state). 'off' refuses a busy machine; 'force_off' "
+          "(admins only) stops it anyway: use it only after the admin confirmed in this "
+          "conversation that the work on it may be lost. Never powers off the secretary's "
+          "own host.", {"host": str, "action": str})
     async def power(args):
-        if args["action"] not in ("status", "on", "off"):
-            return text("action must be status, on or off")
+        if args["action"] not in ("status", "on", "off", "force_off"):
+            return text("action must be status, on, off or force_off")
         return text(await ctx.power(args["host"], args["action"]))
 
     return create_sdk_mcp_server("lab", tools=[lab_state, worker_tasks, task_result,
