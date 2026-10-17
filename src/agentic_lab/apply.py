@@ -255,6 +255,8 @@ def script(plan):
         lines.append(f'install -m {mode} -o {owner} -g {owner} "$B/files/{i}" {shlex.quote(path)}')
     for i, path in enumerate(sorted(plan["envs"])):
         lines.append(f'sed "s/@TAILNET_IP@/$TIP/" "$B/envs/{i}" > {shlex.quote(path)}')
+    if plan.get("self_admin"):
+        lines += self_admin_script(plan["self_admin"])
     lines.append('say "services"')
     for unit_file, _ in plan["units"]:
         sub = "worker" if "worker" in unit_file else "manager" if "manager" in unit_file else "secretary"
@@ -273,6 +275,38 @@ def script(plan):
     return "\n".join(lines) + "\n"
 
 
+def self_admin_script(sa):
+    """The secretary host: what lets the secretary deploy main when an admin asks in Slack
+    (selfadmin.py): its one sudo rule, its deploy key, its clone of the config repo."""
+    u = sa["config_owner"]
+    q = shlex.quote
+    ssh = ("ssh -i ~/.config/agentic-lab/config-repo-key -o IdentitiesOnly=yes "
+           "-o StrictHostKeyChecking=accept-new")
+    return [
+        'say "self-administration (deploying main from Slack)"',
+        'install -m 644 "$B/apply-main.yaml" /etc/agentic-lab/apply-main.yaml',
+        f"echo '{u} ALL=(root) NOPASSWD: /usr/local/bin/lab apply-main' "
+        "> /etc/sudoers.d/agentic-lab.new",
+        "chmod 440 /etc/sudoers.d/agentic-lab.new",
+        "visudo -cqf /etc/sudoers.d/agentic-lab.new && mv /etc/sudoers.d/agentic-lab.new "
+        "/etc/sudoers.d/agentic-lab || { rm -f /etc/sudoers.d/agentic-lab.new; "
+        "echo '  sudo rule refused by visudo'; }",
+        f"sudo -u {u} -H bash -c 'umask 077; mkdir -p ~/.config/agentic-lab "
+        "~/.local/state/agentic-lab; test -f ~/.config/agentic-lab/config-repo-key || "
+        f"ssh-keygen -q -t ed25519 -N \"\" -C {u}@agentic-lab "
+        "-f ~/.config/agentic-lab/config-repo-key'",
+        f"sudo -u {u} -H bash -c {q('test -d ~/.local/state/agentic-lab/config-repo/.git || '
+                                    f'GIT_SSH_COMMAND={q(ssh)} git clone -q '
+                                    f'{q(sa["config_url"])} ~/.local/state/agentic-lab/config-repo'
+                                    ' 2>/dev/null')} "
+        f"&& sudo -u {u} -H git -C ~{u}/.local/state/agentic-lab/config-repo config "
+        f"core.sshCommand {q(ssh)} && echo '  config repo: cloned for the secretary' || {{ "
+        "echo '  the secretary cannot reach the config repo yet. Add this deploy key to it, "
+        "WITH write access (it pushes branches, never merges), then sudo lab apply again:'; "
+        f"sed 's/^/    /' ~{u}/.config/agentic-lab/config-repo-key.pub; }}",
+    ]
+
+
 def bundle(plan, lab_path, source, out):
     """Write the host's bundle into directory `out` (mode 700)."""
     os.makedirs(os.path.join(out, "files"), mode=0o700)
@@ -284,6 +318,9 @@ def bundle(plan, lab_path, source, out):
     shutil.copy(lab_path, os.path.join(out, "lab.yaml"))
     with open(os.path.join(out, "applied.yaml"), "w") as f:
         yaml.safe_dump(plan.get("applied") or {}, f, sort_keys=False)
+    if plan.get("self_admin"):
+        with open(os.path.join(out, "apply-main.yaml"), "w") as f:
+            yaml.safe_dump(plan["self_admin"], f, sort_keys=False)
     for i, (path, (_, _, content)) in enumerate(sorted(plan["files"].items())):
         p = os.path.join(out, "files", str(i))
         with open(p, "w") as f:

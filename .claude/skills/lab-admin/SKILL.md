@@ -67,6 +67,15 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 | Talk to an agent in the classic console | `sudo lab debug <agent>` (`--print "q"` for one question) |
 | The lab's web UI | `http://<secretary host>:8774/` on the tailnet |
 
+## After the install: Slack first
+
+Once the lab runs, day-to-day changes (members, managers, workers, grants, framework
+upgrades) are made by the admin in a Slack DM with the secretary: it proposes PRs and
+deploys main on an admin's click (docs/install.md, "Afterwards"). This console is for the
+install, for creating Slack apps' first tokens if the secretary can't, for removing an
+agent's Unix user, and for emergencies (`--unreviewed`). If the admin asks you for a
+change the secretary can do, do it here anyway (same PR flow), and mention the Slack way.
+
 ## First-time setup
 
 The full sequence is `docs/install.md`: steps 1–3 by hand, 4–12 guided by you. Follow it

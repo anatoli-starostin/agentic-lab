@@ -27,7 +27,12 @@ def path_for(lab_path):
 
 
 def git(source, *args):
-    r = subprocess.run(["git", "-C", source, *args], capture_output=True, text=True, timeout=30)
+    """git in the framework checkout, as the checkout's owner when we're root (git refuses
+    other users' repositories, and root mustn't leave root-owned files in it)."""
+    owner = os.stat(source).st_uid
+    as_owner = (["sudo", "-u", f"#{owner}", "-H"] if os.geteuid() == 0 and owner != 0 else [])
+    r = subprocess.run([*as_owner, "git", "-C", source, *args], capture_output=True, text=True,
+                       timeout=30)
     if r.returncode:
         raise LockError(f"git {' '.join(args)}: {r.stderr.strip()[:200]}")
     return r.stdout.strip()

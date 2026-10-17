@@ -47,7 +47,7 @@ class Incoming:
 
 class SlackIO:
     def __init__(self, bot_token, app_token, members, may_use, on_message, inbox,
-                 engaged=None, on_home=None):
+                 engaged=None, on_home=None, on_action=None):
         """`members`: {slack user id: human id}; `may_use(human) -> (ok, reason)`;
         `on_message(Incoming)` is awaited per message (the caller serializes per
         conversation); `inbox`: folder for attachments; `engaged`: a set of thread keys
@@ -59,6 +59,9 @@ class SlackIO:
         self.inbox = inbox
         self.engaged = engaged if engaged is not None else set()
         self.on_home = on_home          # awaited with (slack user id) when the Home tab opens
+        # awaited with (slack user, lab member or None, action_id, value, {channel, ts,
+        # thread_ts}) when someone clicks one of the agent's buttons
+        self.on_action = on_action
         self.me = None
 
     # ── sending ──────────────────────────────────────────────────────────────
@@ -124,8 +127,28 @@ class SlackIO:
             lines.append(f"{who}: {m.get('text', '')}")
         return lines
 
+    async def post_blocks(self, channel, thread_ts, text, blocks):
+        r = await self.web.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text,
+                                            blocks=blocks, unfurl_links=False)
+        return r.get("ts")
+
     async def _on_socket(self, client: SocketModeClient, req: SocketModeRequest):
         await client.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))
+        if req.type == "interactive":
+            p = req.payload or {}
+            if p.get("type") != "block_actions" or self.on_action is None:
+                return
+            user = (p.get("user") or {}).get("id")
+            msg = p.get("message") or {}
+            where = {"channel": (p.get("channel") or {}).get("id"), "ts": msg.get("ts"),
+                     "thread_ts": msg.get("thread_ts")}
+            for a in p.get("actions") or []:
+                try:            # the clicker is who Slack says it is: checked by the handler
+                    await self.on_action(user, self.members.get(user), a.get("action_id"),
+                                         a.get("value"), where)
+                except Exception:
+                    log.exception("handling a button failed")
+            return
         if req.type != "events_api":
             return
         ev = (req.payload or {}).get("event") or {}
