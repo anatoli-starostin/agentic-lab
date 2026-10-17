@@ -61,7 +61,7 @@ def _grant(g):
 
 class Brain:
     def __init__(self, agent_id, lab_name, workdir, settings_for, approver=None, model=None,
-                 env=None, usage=None, cli_path=None, events=None):
+                 env=None, usage=None, cli_path=None, events=None, prompt_extra=""):
         self.agent_id = agent_id
         self.lab_name = lab_name
         self.workdir = workdir
@@ -72,6 +72,7 @@ class Brain:
         self.usage = usage
         self.cli_path = cli_path
         self.events = events
+        self.prompt_extra = prompt_extra    # e.g. its GitHub identity
 
     async def turn(self, ctx, prompt):
         """Run one turn in `ctx.conv`'s session; returns the reply text."""
@@ -111,7 +112,8 @@ class Brain:
             mcp_servers={"lab": lab_tools.build(ctx)},
             allowed_tools=list(lab_tools.LAB_TOOLS),
             system_prompt={"type": "preset", "preset": "claude_code",
-                           "append": system_prompt(self.agent_id, self.lab_name)},
+                           "append": system_prompt(self.agent_id, self.lab_name)
+                           + self.prompt_extra},
             model=self.model, env=self.env, cli_path=self.cli_path,
             resume=ctx.conv.session_id)
 

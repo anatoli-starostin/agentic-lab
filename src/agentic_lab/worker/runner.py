@@ -112,7 +112,7 @@ How you work here:
 - Report progress with the report_progress tool at meaningful steps (a few per task, not
   every command).
 - When the task is done (or can't be done), call finish_task exactly once: a summary for
-  the human, and the artifacts (file paths, commit ids, W&B run URLs) worth keeping.
+  the human, and the artifacts (file paths, commit ids, URLs) worth keeping.
 """
 
 
@@ -125,8 +125,9 @@ def _grant_line(g):
 class SdkRunner:
     def __init__(self, agent_id, workdir, settings_for: Callable[[list], dict],
                  approver: Approver = None, model=None, env=None, cli_path=None, usage=None,
-                 events=None):
-        """`settings_for(grants)` returns the agent's settings given its active Grants."""
+                 events=None, prompt_extra=""):
+        """`settings_for(grants)` returns the agent's settings given its active Grants;
+        `prompt_extra` is added to its system prompt (e.g. its GitHub identity)."""
         self.agent_id = agent_id
         self.workdir = workdir
         self.settings_for = settings_for
@@ -136,6 +137,7 @@ class SdkRunner:
         self.cli_path = cli_path
         self.usage = usage          # a UsageLog, or None
         self.events = events        # an EventLog, or None
+        self.prompt_extra = prompt_extra
 
     def _log(self, kind, text="", **meta):
         if self.events is not None:
@@ -213,7 +215,7 @@ class SdkRunner:
             mcp_servers={"lab": self._lab_server(task, store, outcome)},
             allowed_tools=list(LAB_TOOLS),
             system_prompt={"type": "preset", "preset": "claude_code",
-                           "append": _system_prompt(self.agent_id, task)},
+                           "append": _system_prompt(self.agent_id, task) + self.prompt_extra},
             model=self.model,
             env=self.env,
             cli_path=self.cli_path,

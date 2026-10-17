@@ -75,8 +75,8 @@ def test_memory_dedicated_shared_and_threads(tmp_path):
     assert "no memory in channel threads" in shared.recall("alice", False)
     assert "not remembered" in shared.remember("alice", False, "x")
     dedicated = Memory(tmp_path / "d", shared=False)
-    dedicated.remember("alice", True, "prefers W&B links")
-    assert "W&B" in dedicated.recall("alice", True)
+    dedicated.remember("alice", True, "prefers short summaries")
+    assert "short summaries" in dedicated.recall("alice", True)
 
 
 def test_task_visibility(tmp_path):

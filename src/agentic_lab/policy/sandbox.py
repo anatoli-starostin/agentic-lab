@@ -48,7 +48,7 @@ def _rule_path(path):
 
 
 def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None, gpu=False,
-             compact_percent=None):
+             compact_percent=None, git_identity=None, domains=()):
     """Render the Claude Code settings for one agent.
 
     workdir:       the agent's working folder (writable inside the sandbox)
@@ -58,6 +58,8 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
     gpu:           the agent runs CUDA inside the sandbox (GPU workers)
     compact_percent: auto-compact once the context reaches this % of the model's window
                    (Claude Code's CLAUDE_AUTOCOMPACT_PCT_OVERRIDE); None keeps Claude's default
+    git_identity:  (name, email) its commits carry: its default GitHub bot account
+    domains:       more hosts it may always reach (e.g. GitHub, for an agent with a bot)
 
     CUDA opens a Unix socket in cuInit, and Claude Code's seccomp filter can only block
     Unix sockets wholesale. So a GPU agent allows Unix sockets, and the sandbox hides /run
@@ -66,7 +68,7 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
     """
     live = G.active(grant_list, now) if now is not None else \
         [g for g in grant_list if g.expires is None]
-    domains, writes, tools = [], [], []
+    domains, writes, tools = list(domains), [], []
     if trust_tailnet and tailnet:
         domains.append(f"*.{tailnet}")
     for g in live:
@@ -100,6 +102,9 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
             "credentials": {"envVars": [{"name": n, "mode": "deny"} for n in SECRET_ENV]},
         },
         "env": {"XDG_CACHE_HOME": cache,
+                **({f"GIT_{who}_{what}": v for who in ("AUTHOR", "COMMITTER")
+                    for what, v in zip(("NAME", "EMAIL"), git_identity)}
+                   if git_identity else {}),
                 **({"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": str(compact_percent)}
                    if compact_percent else {})},
         "permissions": {

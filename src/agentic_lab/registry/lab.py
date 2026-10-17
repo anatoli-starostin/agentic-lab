@@ -15,6 +15,7 @@ import yaml
 
 from ..policy import grants as G
 from ..policy import sandbox
+from .. import github
 
 ROLES = ("worker", "manager", "secretary")
 DEFAULT_WORKDIR = "~/work"
@@ -34,7 +35,8 @@ EXPIRY_WARN_DAYS = 14
 _TOP = {"lab": (str, True), "tailnet": (str, False), "trust_tailnet": (bool, False),
         "announcements": (str, False),     # Slack channel (id or #name) for lab-wide notices
         "humans": (dict, True),
-        "agents": (dict, True), "hosts": (dict, True), "credentials": (list, False)}
+        "agents": (dict, True), "hosts": (dict, True), "credentials": (list, False),
+        "github": (dict, False)}            # the agents' GitHub bot accounts
 _HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, False),
           "admin": (bool, False),           # may see agents' logs in the web UI
           "tailscale_login": (str, False)}  # how the web UI recognises them (tailscale whois)
@@ -44,11 +46,17 @@ _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "gpu": (bool, False), "port": (int, False),
           "display_name": (str, False), "compact_percent": (int, False),
           "grants": (list, False),
-          "slack_app": (str, False), "max_parallel_gpu_tasks": (int, False)}
+          "slack_app": (str, False), "max_parallel_gpu_tasks": (int, False),
+          "github": (str, False)}           # its GitHub identity: a bot in github.accounts
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
          "preemptible": (bool, False), "power": (str, False), "idle_stop_min": (int, False),
          "restart_by": (str, False), "tailnet_name": (str, False),
          "ssh_user": (str, False)}      # who `lab apply` logs in as (default: the admin)
+_GITHUB = {"accounts": (dict, True)}
+# a bot account (a GitHub machine user) an agent acts as
+_GH_ACCOUNT = {"email": (str, False),                       # default: its noreply address
+               "expires": ((dt.date, type(None)), False)}   # its token's expiry date
+_GH_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 _CRED = {"name": (str, True), "host": (str, True), "expires": ((dt.date, type(None)), True),
          "scope": (str, False), "agent": (str, False)}
 
@@ -125,7 +133,19 @@ class Lab:
             now=now,
             gpu=a.get("gpu", a.get("role") == "worker"),
             compact_percent=a.get("compact_percent",
-                                  DEFAULT_COMPACT_PERCENT.get(a.get("role"))))
+                                  DEFAULT_COMPACT_PERCENT.get(a.get("role"))),
+            git_identity=((a["github"], self.github_email(a["github"]))
+                          if a.get("github") else None),
+            domains=github.DOMAINS if a.get("github") else ())
+
+    @property
+    def github_accounts(self):
+        return (self.data.get("github") or {}).get("accounts") or {}
+
+    def github_email(self, account):
+        """The commit email of a bot account (its noreply address unless lab.yaml says)."""
+        a = self.github_accounts.get(account) or {}
+        return a.get("email") or f"{account}@users.noreply.github.com"
 
     def display_name(self, agent_id):
         """How humans see the agent (Slack, web UI, how it introduces itself)."""
@@ -245,6 +265,31 @@ def check(lab: Lab, today: dt.date | None = None):
             if g.expires is not None:
                 E(f"{where}.grants[{j}]", "standing grants in lab.yaml don't expire; "
                                           "timed grants are given by a human through the broker")
+
+    gh = lab.data.get("github")
+    if gh is not None and _fields(gh, _GITHUB, "github", issues):
+        for login, acc in (gh.get("accounts") or {}).items():
+            where = f"github.accounts.{login}"
+            if not _GH_LOGIN.match(str(login)):
+                E(where, "must be the bot's GitHub login (letters, digits, '-')")
+            if not _fields(acc or {}, _GH_ACCOUNT, where, issues):
+                continue
+            exp = (acc or {}).get("expires")
+            if isinstance(exp, dt.date):
+                left = (exp - today).days
+                if left < 0:
+                    E(where, f"its token expired {-left} days ago ({exp})")
+                elif left <= EXPIRY_WARN_DAYS:
+                    W(where, f"its token expires in {left} days ({exp})")
+    for aid, a in lab.agents.items():
+        acc_name = (a or {}).get("github")
+        if acc_name is None:
+            continue
+        where = f"agents.{aid}"
+        if (a or {}).get("role") not in ("manager", "worker"):
+            E(where, "'github' applies to managers and workers only")
+        elif acc_name not in lab.github_accounts:
+            E(where, f"github account {acc_name!r} is not in github.accounts")
 
     for hid, h in lab.humans.items():
         if (h or {}).get("admin") and not (h or {}).get("tailscale_login"):

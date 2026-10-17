@@ -85,7 +85,9 @@ class Secretary:
                                                                 redeploy=redeploy),
             request_slack_app=lambda agent: self.request_slack_app(agent, asked_by=human,
                                                                    conv=conv),
-            slack_verify=lambda owner: self.slack_verify(owner, asked_by=human))
+            slack_verify=lambda owner: self.slack_verify(owner, asked_by=human),
+            request_github_token=lambda account: self.request_github_token(
+                account, asked_by=human, conv=conv))
 
     # ── administering the lab from Slack (selfadmin.py) ──────────────────────
 
@@ -161,6 +163,35 @@ class Secretary:
                               f"```{M.render(manifest)}```")
         return (f"posted the steps, the manifest and the one-time link for {name}'s app. "
                 "When the admin says done: check_slack_app, then offer_deploy with redeploy.")
+
+    async def request_github_token(self, account, asked_by=None, conv=None):
+        """A one-time link for a GitHub bot account's token, with how to make one."""
+        refused = self._admin_only(asked_by, "set up GitHub bot accounts")
+        if refused:
+            return refused
+        if account not in self.lab.github_accounts:
+            return (f"{account!r} isn't in github.accounts of the deployed lab.yaml: propose "
+                    "it, have it merged, deploy, then ask again")
+        if self.slack is None or conv is None:
+            return ("this needs Slack; from the console: lab secret request "
+                    f"service:github-{account.lower()} github-token")
+        code = self.intake.request(f"service:github-{account.lower()}", "github-token")
+        await self.slack.post(conv.channel, conv.thread_ts, (
+            f"*GitHub token for the bot {account}* (one-time link valid 24 h)\n"
+            f"1. Log in to GitHub *as {account}* (a private window helps).\n"
+            "2. https://github.com/settings/personal-access-tokens/new (fine-grained token).\n"
+            "3. Resource owner: the organisation; Repository access: only the repos the "
+            "lab's agents work on.\n"
+            "4. Permissions: *Contents* read and write, *Pull requests* read and write, "
+            "*Issues* read and write (Metadata read comes with them). Nothing else.\n"
+            "5. Expiration: up to a year; tell me the date, I'll add it to lab.yaml so I can "
+            "remind you before it runs out.\n"
+            f"6. Paste the token here (never in Slack): {form_url(code, self.intake_url)}\n"
+            "Then: offer a redeploy, so the agents that use this bot get it.\n"
+            "On GitHub, protect each repo's main: require a pull request with a review from "
+            "code owners (people only), and don't let bots bypass it."))
+        return (f"posted how to make {account}'s token and the one-time link. Then: the "
+                "expiry date into lab.yaml (a PR), and offer_deploy with redeploy.")
 
     async def offer_apply(self, asked_by=None, conv=None, redeploy=False):
         """Post a 'Deploy' button for main's current commit. Nothing is deployed until an
