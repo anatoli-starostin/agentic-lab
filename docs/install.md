@@ -10,6 +10,10 @@ host does the guiding (the `lab-admin` skill, DESIGN.md §11a). Each step says w
 
 Status marks: ✅ exists · 🚧 partly (manual scripts) · ⏳ planned.
 
+**The install has one human: the admin.** The lab starts with the admin as its only
+member (on Slack and in `lab.yaml`). Other members join afterwards, one at a time, with
+"Add a member" below.
+
 **Accounts the admin needs:** a Tailscale tailnet, a cloud account (Nebius) with GPU
 quota, a Slack workspace where they can create apps, a Claude seat (Team or Max) for each
 member whose agents will run, and optionally W&B.
@@ -42,13 +46,13 @@ member whose agents will run, and optionally W&B.
    - The admin creates one **reusable, tagged Tailscale auth key** and enters it hidden.
      Every later host then joins the tailnet without a human login.
 6. **Describe the lab** (Claude, Admin) ⏳ `lab init`
-   - Claude and the admin write `lab.yaml` together: lab name, tailnet, members, and which
-     managers and workers to run. The secretary looks up members' Slack ids by name or
-     email. `lab check` ✅ validates it.
-7. **Members' Claude tokens** (Secretary, each Member) ✅
-   - The secretary DMs each member a one-time command (`client/lab-member.py`). The member
-     runs it on their own computer: it runs `claude setup-token` and sends the token
-     straight to the lab, never through chat. Once a year per member.
+   - Claude and the admin write `lab.yaml` together: lab name, tailnet, the admin as the
+     only member, and the admin's first manager and workers. `lab check` ✅ validates it.
+7. **The admin's Claude token** (Secretary, Admin) ✅
+   - The admin is added the same way every member is (see "Add a member"): the secretary
+     DMs them a one-time command (`client/lab-member.py`). They run it on their own
+     computer (or right here): it runs `claude setup-token` and sends the token straight
+     to the lab, never through chat. The admin's agents run on this token.
 8. **Cloud access** (Admin) ⏳
    - The admin enters the cloud API key hidden. Only the secretary holds it.
 9. **Hosts** (Secretary, Claude) 🚧
@@ -77,6 +81,11 @@ member whose agents will run, and optionally W&B.
   DMs members when their token is due).
 - **The admin's Claude** makes changes, always the same way: edit `lab.yaml` →
   `lab check` → `lab plan` → `lab apply`.
-  - **Add an agent / a member / a host:** add it to `lab.yaml`, `lab apply`.
+  - **Add a member:** add them to `lab.yaml` (the secretary finds their Slack id by name
+    or email). **At that moment** the secretary DMs them the one-time `lab-member.py`
+    command for their Claude token; they run it once. When the token has arrived, their
+    agents (a manager, maybe workers) can be added. Their token renews once a year: the
+    secretary DMs them again before it expires.
+  - **Add an agent / a host:** add it to `lab.yaml`, `lab apply`.
   - **Remove an agent:** remove it from `lab.yaml`; `lab apply` stops its service and,
     after the admin confirms, deletes its user (offering to archive its work folder).
