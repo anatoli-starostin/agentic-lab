@@ -1,5 +1,6 @@
 """`lab`: the command-line entry point.
 
+    lab init [lab.yaml] ...     write a lab's first lab.yaml (flags, or questions)
     lab check [lab.yaml]        validate the lab registry
     lab settings <agent>        the agent's generated Claude Code settings (sandbox + grants)
     lab worker serve <agent>    run a worker's service (as its own Unix user, from systemd)
@@ -43,6 +44,15 @@ def _n(k, word):
     if k == 1:
         return f"{k} {word}"
     return f"{k} {word[:-1]}ies" if word.endswith("y") else f"{k} {word}s"
+
+
+def cmd_init(args):
+    from .init import run
+    path = args.path or args.lab
+    run(path, args)
+    print(f"wrote {path}")
+    args.lab = path
+    return cmd_check(args)
 
 
 def cmd_check(args):
@@ -245,6 +255,21 @@ def main(argv=None):
     ap = argparse.ArgumentParser(prog="lab", description="Agentic Lab command line")
     ap.add_argument("--lab", default="lab.yaml", help="path to lab.yaml (default: ./lab.yaml)")
     sub = ap.add_subparsers(dest="cmd", required=True)
+
+    i = sub.add_parser("init", help="write a lab's first lab.yaml")
+    i.add_argument("path", nargs="?", help="where to write it (default: --lab)")
+    i.add_argument("--name", help="the lab's name (lowercase)")
+    i.add_argument("--tailnet", help="tailnet DNS suffix (default: detected)")
+    i.add_argument("--admin", help="the admin's member id")
+    i.add_argument("--admin-name", help="the admin's name")
+    i.add_argument("--slack-user", help="the admin's Slack member id (U...)")
+    i.add_argument("--secretary-host", help="this machine's host id (default: its tailnet name)")
+    i.add_argument("--secretary-name", help="this machine's tailnet name (default: detected)")
+    i.add_argument("--manager", help="also create the admin's manager with this id")
+    i.add_argument("--worker", action="append", help="a worker: id@host[=tailnet-name] "
+                   "(repeatable)")
+    i.add_argument("--force", action="store_true", help="overwrite an existing file")
+    i.set_defaults(fn=cmd_init)
 
     c = sub.add_parser("check", help="validate lab.yaml")
     c.add_argument("path", nargs="?", help="path to lab.yaml (overrides --lab)")
