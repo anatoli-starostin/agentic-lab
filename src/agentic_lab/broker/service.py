@@ -42,8 +42,8 @@ def tokens_from(lab, text):
     by_agent = yaml.safe_load(text or "") or {}
     tokens = {}
     for agent, token in by_agent.items():
-        if lab.agents.get(agent, {}).get("role") not in ("worker", "manager"):
-            raise SystemExit(f"agent-tokens.yaml: {agent!r} is not a worker or manager")
+        if lab.agents.get(agent, {}).get("role") not in ("worker", "manager", "secretary"):
+            raise SystemExit(f"agent-tokens.yaml: {agent!r} is not an agent in lab.yaml")
         if not isinstance(token, str) or len(token) < 32:
             raise SystemExit(f"agent-tokens.yaml: token for {agent} must be 32+ characters")
         tokens[token] = agent
@@ -87,7 +87,7 @@ async def serve(lab_path, host, port):
                 log.info("request %s timed out", req.id)
             await asyncio.sleep(EXPIRE_EVERY_S)
 
-    log.info("broker: %d worker(s), %d human(s), slack=%s, serving on %s:%d",
+    log.info("broker: %d agent(s), %d human(s), slack=%s, serving on %s:%d",
              len(tokens), len(broker.humans), bool(channel), host, port)
     tasks = [asyncio.create_task(server.serve()), asyncio.create_task(expire_loop())]
     await stop.wait()

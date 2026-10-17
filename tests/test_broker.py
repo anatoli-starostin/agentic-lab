@@ -274,3 +274,13 @@ def test_blocks_render():
     assert labels == ["Run once", "Deny"]                   # nothing to grant: no grant buttons
     r.state, r.decision = C.DECIDED, {"action": "timeout", "by": None, "note": None}
     assert "timed out" in str(decided_blocks(r))
+
+
+def test_broker_accepts_all_agent_tokens():
+    from pathlib import Path
+    from agentic_lab import registry
+    from agentic_lab.broker.service import tokens_from
+    lab = registry.load(Path(__file__).parent.parent / "examples" / "minimal" / "lab.yaml")
+    t = tokens_from(lab, "worker-a: " + "a" * 40 + "\nmgr-alice: " + "b" * 40 +
+                         "\nsecretary: " + "c" * 40 + "\n")
+    assert set(t.values()) == {"worker-a", "mgr-alice", "secretary"}
