@@ -18,6 +18,9 @@ def test_base_model():
     assert sb["network"]["allowedDomains"] == ["*.example.ts.net"]   # no internet, tailnet only
     assert sb["network"]["strictAllowlist"] is True                   # refuse, don't prompt
     assert sb["filesystem"]["allowWrite"] == [f"{HOME}/work", "/tmp"]
+    assert sb["filesystem"]["denyRead"] == ["/run", "/var/run"]    # host sockets hidden
+    assert sb["filesystem"]["allowRead"] == []
+    assert sb["network"]["allowAllUnixSockets"] is False           # seccomp socket block on
     assert s["permissions"]["defaultMode"] == "default"
     assert s["permissions"]["allow"] == [f"Edit(/{HOME}/work/**)", "Edit(//tmp/**)"]
 
@@ -89,3 +92,11 @@ def test_valid_grants(m):
 def test_invalid_grants(m, msg):
     with pytest.raises(G.GrantError, match=msg):
         G.from_mapping(m)
+
+
+def test_gpu_agent():
+    sb = sandbox.settings("~/work", gpu=True)["sandbox"]
+    # CUDA needs Unix sockets; /run stays hidden except nvidia-persistenced's socket dir
+    assert sb["network"]["allowAllUnixSockets"] is True
+    assert sb["filesystem"]["denyRead"] == ["/run", "/var/run"]
+    assert sb["filesystem"]["allowRead"] == ["/run/nvidia-persistenced"]

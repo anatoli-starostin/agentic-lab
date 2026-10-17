@@ -31,6 +31,7 @@ _HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, F
 _CHANNEL = {"type": (str, True), "timeout_s": (int, False), "on_timeout": (str, False)}
 _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "model": (str, False), "access": (str, False), "workdir": (str, False),
+          "gpu": (bool, False),
           "grants": (list, False),
           "slack_app": (str, False), "max_parallel_gpu_tasks": (int, False)}
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
@@ -88,7 +89,8 @@ class Lab:
             tailnet=self.data.get("tailnet"),
             trust_tailnet=self.data.get("trust_tailnet", True),
             grant_list=self.standing_grants(agent_id) + list(extra_grants),
-            now=now)
+            now=now,
+            gpu=a.get("gpu", a.get("role") == "worker"))
 
 
 def _fields(obj, spec, where, issues):

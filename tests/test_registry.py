@@ -50,6 +50,9 @@ def test_example_agent_settings():
     assert m["sandbox"]["network"]["allowedDomains"] == ["*.example.ts.net"]
     b = lab.agent_settings("worker-b")             # no grants: the bare model
     assert b["sandbox"]["network"]["allowedDomains"] == ["*.example.ts.net"]
+    # workers run CUDA by default; managers don't
+    assert w["sandbox"]["network"]["allowAllUnixSockets"] is True
+    assert m["sandbox"]["network"]["allowAllUnixSockets"] is False
 
 
 def test_timed_grant_through_registry():
@@ -96,6 +99,7 @@ def test_every_agent_needs_a_human(lab_dir):
     (lambda d: d["agents"]["worker-a"]["grants"].append(
         {"domain": "arxiv.org", "expires": dt.datetime(2026, 10, 18)}), "don't expire"),
     (lambda d: d.update(trust_tailnet="yes"), "expected bool"),
+    (lambda d: d["agents"]["worker-a"].update(gpu="yes"), "expected bool"),
     (lambda d: d.update(extra=1), "unknown key 'extra'"),
 ])
 def test_check_errors(lab_dir, mutate, expect):

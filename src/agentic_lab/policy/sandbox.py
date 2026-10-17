@@ -11,13 +11,21 @@ sandbox locked on, the network allowlist (tailnet + domain grants) and the writa
 service passes them to the Agent SDK (`ClaudeAgentOptions(sandbox=..., settings=...)`) or
 writes them as managed settings, so the agent can't change them.
 
-Keys marked VERIFY are taken from the docs but not yet exercised on a real host (M1).
+Verified on a cloud GPU worker (Ubuntu 24.04, H100, Claude Code 2.1.302), 2026-10-17:
+docs/security-notes.md has the details.
 """
 import os
 
 from . import grants as G
 
 TMP = "/tmp"
+
+# /run holds the host's Unix sockets: the user's systemd manager (`systemd-run --user` would
+# start a process OUTSIDE the sandbox), D-Bus, snapd, tailscaled... The sandbox hides all of
+# it. The only socket an agent needs there is nvidia-persistenced's, which CUDA opens in
+# cuInit.
+HIDDEN = ["/run", "/var/run"]
+GPU_VISIBLE = ["/run/nvidia-persistenced"]
 
 
 def _abs(path):
@@ -29,13 +37,19 @@ def _rule_path(path):
     return "/" + _abs(path)
 
 
-def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None):
+def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None, gpu=False):
     """Render the Claude Code settings for one agent.
 
     workdir:       the agent's working folder (writable inside the sandbox)
     tailnet:       the tailnet's DNS suffix (e.g. example.ts.net)
     trust_tailnet: tailnet resources count as safe -> reachable from inside the sandbox
     grant_list:    standing and timed Grants; expired ones are dropped (needs `now`)
+    gpu:           the agent runs CUDA inside the sandbox (GPU workers)
+
+    CUDA opens a Unix socket in cuInit, and Claude Code's seccomp filter can only block
+    Unix sockets wholesale. So a GPU agent allows Unix sockets, and the sandbox hides /run
+    (where the host's sockets live) instead. Other agents keep the seccomp block as well.
+    The GPU devices themselves come from the host setup (deploy/worker/bwrap-gpu).
     """
     live = G.active(grant_list, now) if now is not None else \
         [g for g in grant_list if g.expires is None]
@@ -56,10 +70,13 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None)
             "allowUnsandboxedCommands": True,
             "network": {
                 "allowedDomains": _dedup(domains),
-                "strictAllowlist": True,        # VERIFY: refuse unknown hosts, don't prompt
+                "strictAllowlist": True,        # refuse unknown hosts instead of prompting
+                "allowAllUnixSockets": gpu,     # CUDA needs Unix sockets (see above)
             },
             "filesystem": {
-                "allowWrite": _dedup(writable),  # VERIFY: key name for extra writable paths
+                "allowWrite": _dedup(writable),
+                "denyRead": list(HIDDEN),
+                "allowRead": list(GPU_VISIBLE) if gpu else [],
             },
         },
         "permissions": {
