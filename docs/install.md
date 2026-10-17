@@ -89,6 +89,8 @@ with `uv venv && uv pip install -e .`): `~/agentic-lab/.venv/bin/lab`, also unde
      isn't the admin's name, add `ssh_user: <user>` to the host in `lab.yaml`.
 
 10. **Everything else** (Claude)
+    - A GPU host that's stopped can't be set up: ask the secretary to power it on first
+      ("power on gpu-a"), or start it in the Nebius console.
     - `sudo lab plan` (nothing missing?), then `sudo lab apply`: every host gets the
       framework, the sandbox setup (AppArmor, GPU passthrough), its agents' users,
       secrets and services. The tokens agents use to reach each other are generated and
