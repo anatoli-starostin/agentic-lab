@@ -410,6 +410,12 @@ with no public exposure.
 - **Guardrails**: each agent's effective policy and the history of changes (who, why, diff).
 - **Spend**: cloud cost per host, per human and per task, today, this week and in total. No
   limits, just visibility.
+- **Claude usage, by account** (each member's seat), since several agents may share one:
+  the seat's limit windows (5-hour, weekly; shared by all its agents, so the freshest
+  reading wins) and the total tokens of all its agents, today and this week; under each
+  account, every agent's own tokens and tasks. **Every number shows when it was last
+  updated and which agent reported it**: limit readings only arrive while some agent on
+  that seat is running. Tokens, not dollars (the SDK's dollar figures are estimates).
 - **Credentials**: expiry dates and warnings (never values).
 - **Audit log**: one time-ordered feed of everything above.
 
