@@ -124,8 +124,9 @@ Tied to one GPU VM. Uses tokens freely. Humans don't talk to it directly.
     with incoming tasks, and interrupt. The worker keeps serving tasks meanwhile.
   - `lab console --takeover` (deep debugging): pauses the worker service and opens the real
     `claude --resume <session-id>` on the same session, with the full Claude Code UI (slash
-    commands, rewind, plan mode, …). On exit, the service resumes the session.
-    (Verify early in M1 that SDK sessions are CLI-resumable.)
+    commands, rewind, plan mode, …). On exit, the service resumes the session. (SDK and
+    CLI share session storage. SDK sessions don't appear in the picker or in `--continue`,
+    but `--resume <id>` finds them when the config dir is the same.)
   - Either way, approvals for console-typed work go to that human's own permission channel,
     so the console never bypasses the gate.
 - Reports progress (and W&B links) back through MCP. **There is no fixed results contract**:
@@ -306,16 +307,19 @@ agents:
     role: secretary
     host: nuc-01
     model: claude-haiku-5-5
+    auth: {seat: anatoly}     # attached to a human: runs on their Claude seat
   mgr-anatoly:
     role: manager
     human: anatoly
     host: mgr-vm-01
     slack_app: A0XXXX
     model: claude-sonnet-5-5
+    auth: {seat: anatoly}
   worker-h100-a:
     role: worker
     host: gpu-h100-a
     access: shared            # or: {dedicated: anatoly}
+    auth: {api_key: lab-shared}  # shared agent: company API key (or a seat, if allowed)
     max_parallel_gpu_tasks: 1
     policy_overlay: agents/worker-h100-a.yaml
 hosts:
@@ -359,9 +363,17 @@ dependencies at runtime.
 
 ## 10. Agent runtime
 
-**Recommendation: every agent runs on the Claude Agent SDK as a systemd service.** A
-terminal session that pairs itself with helper processes is fragile; spiky's approach has
-hit a 30-minute monitor limit and needs re-arming.
+**Every agent runs on the Claude Agent SDK as a systemd service.** A terminal session that
+pairs itself with helper processes is fragile: spiky's approach hits a 30-minute monitor
+limit and needs re-arming, and an unattended terminal UI can freeze on an unexpected
+prompt or dialog.
+
+**Runner interface.** The worker and manager services talk to the agent through a small
+`AgentRunner` interface (start, send, interrupt, resume, status, session id):
+- `SdkRunner`: the default, built in M1.
+- `TmuxCliRunner`: an optional fallback that drives a real `claude` console in tmux, typing
+  tasks in when idle and never while a human is attached. It is built only if the SDK
+  disappoints. Nothing above the interface (MCP, broker, policy, web UI) changes.
 
 - The SDK gives an in-process permission callback. That callback *is* the gate
   (`cage_policy` → broker), so "never prompts the wrong place" is enforceable.
@@ -370,6 +382,23 @@ hit a 30-minute monitor limit and needs re-arming.
   `--takeover` opens the full Claude Code UI on the same session when needed.
 - Each agent gets its own Unix user, working dir and memory dir. The policy and the broker
   run as different users from the agent they govern.
+
+### Auth (per agent, in `lab.yaml`)
+
+| `auth:` | Use for | Notes |
+|---|---|---|
+| `{seat: <human>}` | agents **attached to a human** (their manager, their dedicated workers, the secretary for now) | `claude setup-token` on that human's Team/Max seat. Shares the seat's 5-hour and weekly limits with that human's own Claude use. |
+| `{api_key: <name>}` | **shared** agents (shared workers) | Console API key, billed per token. Clearly allowed for services used by several people. |
+| `{bedrock\|vertex: …}` | deployments on a cloud provider | |
+
+Anthropic's terms reserve subscription login for "ordinary, individual usage" and ask
+services used by others to run on API keys. A seat therefore powers only agents attached to
+that seat's human. Whether a dedicated "lab seat" may power shared agents is a question for
+Anthropic, not something to assume.
+
+**The secretary reports the real auth** of every agent in the web UI. A stray
+`ANTHROPIC_API_KEY` silently overrides subscription login and bills per token, so any
+mismatch with `lab.yaml` is flagged.
 
 Model per role is set in `lab.yaml`. Defaults: Haiku-class for the secretary's chat,
 Sonnet-class for managers, the strongest available model for workers.
@@ -425,12 +454,14 @@ after M3–M4 as needed.
 | 2026-10-17 | Repo is private now and public later, so it stays generic. MIT license. |
 | 2026-10-17 | Shared workers: **first come, first served**. No quotas or priorities. |
 | 2026-10-17 | **No fixed results contract**: tasks vary, so a result is whatever fits (report, commit, W&B run, files). |
+| 2026-10-17 | **Agent SDK runtime** behind an `AgentRunner` interface. `lab console` + `--takeover` (real `claude --resume`) for humans. A tmux runner is only a fallback. |
+| 2026-10-17 | **Auth per agent**: an agent attached to a human uses that human's seat; shared agents use an API key. **The secretary is attached to the lab owner for now.** |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
 
 ## 14. Open questions
 
-1. **Worker runtime**: Agent SDK + `lab console` / `--takeover` (§4.2) instead of an
-   always-attached Claude Code terminal? (Recommended: yes.)
+1. **Shared agents' auth**: a company API key, or a dedicated Team seat if Anthropic confirms
+   that is allowed?
 2. **Manager VM layout**: one shared VM with one Unix user per manager, or one small VM per
    manager? (Start shared; it's cheaper and the secretary restarts it.)
 3. **Web UI approvals**: should the web UI later become a permission channel too (answer
