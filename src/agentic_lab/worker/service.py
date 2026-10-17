@@ -13,7 +13,6 @@ import asyncio
 import datetime as dt
 import logging
 import os
-import signal
 
 import uvicorn
 import yaml
@@ -100,16 +99,12 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
     app, _ = http_app(mcp, access, allowed_hosts=allowed)
     server = uvicorn.Server(uvicorn.Config(app, host=host, port=port, log_level="info"))
 
+    # uvicorn handles SIGTERM/SIGINT (a graceful shutdown); when it returns, the rest stops
     stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
 
     log.info("worker %s: %d manager(s), serving on %s:%d", agent_id,
              len(access._tokens), host, port)
     tasks = asyncio.create_task(run_tasks(store, runner, stop))
-    web = asyncio.create_task(server.serve())
-    await stop.wait()
-    server.should_exit = True
-    await web
+    await server.serve()
+    stop.set()
     tasks.cancel()

@@ -11,7 +11,6 @@ State (requests, grants) lives in ~/.local/state/agentic-lab/broker.
 import asyncio
 import logging
 import os
-import signal
 
 import uvicorn
 import yaml
@@ -76,10 +75,8 @@ async def serve(lab_path, host, port):
 
     server = uvicorn.Server(uvicorn.Config(app(broker, tokens), host=host, port=port,
                                            log_level="info"))
+    # uvicorn handles SIGTERM/SIGINT (a graceful shutdown); when it returns, the rest stops
     stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
 
     async def expire_loop():
         while not stop.is_set():
@@ -89,10 +86,9 @@ async def serve(lab_path, host, port):
 
     log.info("broker: %d agent(s), %d human(s), slack=%s, serving on %s:%d",
              len(tokens), len(broker.humans), bool(channel), host, port)
-    tasks = [asyncio.create_task(server.serve()), asyncio.create_task(expire_loop())]
-    await stop.wait()
-    server.should_exit = True
+    expiring = asyncio.create_task(expire_loop())
+    await server.serve()
+    stop.set()
     if channel:
         await channel.stop()
-    for t in tasks:
-        t.cancel()
+    expiring.cancel()

@@ -14,7 +14,6 @@ import asyncio
 import json
 import logging
 import os
-import signal
 import tempfile
 
 import uvicorn
@@ -133,10 +132,8 @@ async def serve(lab_path, host, port):
     except (OSError, ValueError):
         pass
 
+    # uvicorn handles SIGTERM/SIGINT (a graceful shutdown); when it returns, the rest stops
     stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (signal.SIGTERM, signal.SIGINT):
-        loop.add_signal_handler(sig, stop.set)
 
     async def collector():
         while not stop.is_set():
@@ -189,10 +186,9 @@ async def serve(lab_path, host, port):
                                            log_level="warning"))
     log.info("secretary: watching %d worker(s), slack=%s, web UI on http://%s:%d/",
              len(workers.known()), sec.slack is not None, host, port)
-    tasks = [asyncio.create_task(collector()), asyncio.create_task(server.serve()),
-             asyncio.create_task(notice_loop())]
-    await stop.wait()
-    server.should_exit = True
+    tasks = [asyncio.create_task(collector()), asyncio.create_task(notice_loop())]
+    await server.serve()
+    stop.set()
     if sec.slack is not None:
         await sec.slack.stop()
     for t in tasks:
