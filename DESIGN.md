@@ -148,9 +148,12 @@ On a CPU VM. Has its own **Slack identity**. Uses a moderate number of tokens.
 - **Guardrails**: the same model as every agent (§6.1), plus standing grants for reading
   the web (`WebFetch`, `WebSearch`). Every **write** (GitHub, Google Drive, …) is a
   permission request to its human. Its working folder is a scratchpad on its VM.
-- **Can read workers' guardrails and grants** through MCP and explain them to humans. It
-  can **request** grants for a worker, which the broker turns into a question to the human.
-  It cannot change its own guardrails.
+- **Can read workers' guardrails and grants** through MCP and explain them to humans.
+- **Initiates guardrail changes on a worker when its human asks** ("give worker-a arxiv for
+  an hour"). It calls `change_guardrails` on the worker. The worker tries to apply the change,
+  which needs permission. That request comes back through the broker to the human, showing
+  the exact change, and is applied only after the human approves (§6.2). It cannot change its
+  own guardrails.
 - Slack design reuses the spiky "Slack façade" (two processes). The Slack-facing process
   cannot stall and cannot leak secrets. The capable process does the work, and its
   approvals go out-of-band to the human.
@@ -173,7 +176,7 @@ token listed in `lab.yaml`. A dedicated worker rejects managers other than its o
 | `cancel_task(task_id)` | Cooperative cancel, then kill after a grace period. |
 | `list_tasks(filter)` | Queue overview. |
 | `pending_approvals()` | Read-only view of what the worker is blocked on (for context only; see §6.3). |
-| `request_grant(grant, reason)` | Ask for a grant on this worker. It becomes a question to the human (§6.2); the manager can't grant it itself. |
+| `change_guardrails(change, reason)` | Initiate a guardrail change on this worker (a grant, a standing grant, a removal). The worker service tries to apply it, which raises a permission request to the human (§6.2). Applied only if approved. |
 | `get_guardrails()` | This worker's sandbox config, standing grants and active grants with expiry. |
 | `health()` | Liveness, GPU state, disk, queue depth, agent session alive?, versions. |
 
@@ -239,9 +242,16 @@ A time-limited grant always widens the **sandbox**. It never means "trust unsand
 commands for an hour", because an unsandboxed command can do anything, so its scope can't
 be enforced.
 
-- **Grants can also be given ahead of time**, by the human, in any channel ("give worker-a
-  arxiv for an hour"). The manager may relay the request, but the grant is created only by
-  the broker after the human confirms it (§6.3).
+- **Changes can also be made ahead of time**, through the manager:
+  1. the human asks their manager ("give worker-a arxiv for an hour");
+  2. the manager initiates the change on the worker (`change_guardrails` over MCP, §5);
+  3. the worker service tries to apply it, and applying it needs permission;
+  4. that permission request goes through the broker back to the human, showing the exact
+     change ("worker-a: allow arxiv.org until 15:00");
+  5. on approval the change applies; on deny or timeout nothing changes.
+
+  The human confirms once more even though they just asked. That is deliberate: the manager
+  may have misunderstood, and the human sees exactly what will change.
 - **Standing grants** (always on) sit in `lab.yaml` per agent, for example a manager that
   may always read the web:
   ```yaml
@@ -502,6 +512,7 @@ after M3–M4 as needed.
 | 2026-10-17 | **Agent SDK runtime** behind an `AgentRunner` interface. `lab console` + `--takeover` (real `claude --resume`) for humans. A tmux runner is only a fallback. |
 | 2026-10-17 | **Every agent is attached to a human member in terms of tokens** (runs on their seat). Access is set separately. The secretary is attached to the lab owner. |
 | 2026-10-17 | **One simple sandbox model for all agents** (§6.1): inside = no internet, tailnet, working folder + tmp, auto-allowed; outside = internet and writes need permission, reads free. Enforced by Claude Code's built-in sandbox, with no command parsing. **Grants** (once / for a while / standing) customise it on the fly (§6.2). |
+| 2026-10-17 | **Guardrail changes through the manager**: human asks manager → manager initiates the change on the worker over MCP → the worker's attempt raises a permission request → through the broker back to the human → applied only on approval. |
 | 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
 
 ## 14. Open questions
@@ -510,6 +521,3 @@ after M3–M4 as needed.
    manager? (Start shared; it's cheaper and the secretary restarts it.)
 2. **Web UI approvals**: should the web UI later become a permission channel too (answer
    approvals in the browser)?
-3. **Manager guardrail edits**: the original brief lets a manager change a worker's
-   guardrails. Under §6.2 a manager can only *request* grants, which a human confirms.
-   Is that the intended reading?
