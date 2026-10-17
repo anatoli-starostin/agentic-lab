@@ -25,7 +25,7 @@ from ..slackio import SILENT, SlackIO
 from ..worker.approver import BrokerApprover
 from ..worker.runner import NoChannelApprover
 from ..worker.service import _read_secret
-from ..worker.usage import UsageLog
+from ..worker.usage import UsageLog, probe_loop, probe_now
 from .brain import Brain
 from .followup import finished_prompt, follow
 from .memory import Memory
@@ -178,15 +178,18 @@ async def serve(lab_path, agent_id, host=None, port=None):
 
         from .status import app as status_app
         status_server = uvicorn.Server(uvicorn.Config(
-            status_app(_read_secret(f"{CONFIG}/monitor-token"), usage, events),
+            status_app(_read_secret(f"{CONFIG}/monitor-token"), usage, events,
+                       check=(lambda: probe_now(usage, seat)) if seat else None),
             host=host, port=port, log_level="warning"))
         status_server.install_signal_handlers = lambda: None   # this process handles signals
         asyncio.create_task(status_server.serve())
+    prober = asyncio.create_task(probe_loop(usage, seat, stop))
     await stop.wait()
     if status_server is not None:
         status_server.should_exit = True
     await slack.stop()
     follower.cancel()
+    prober.cancel()
 
 
 class ConsoleIO:

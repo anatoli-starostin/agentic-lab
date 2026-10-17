@@ -99,8 +99,9 @@ def write_inbox_file(workdir, name, b64):
 
 
 def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=None,
-              usage=None, workdir=None, events=None):
-    """The worker's MCP server. `guardrails()` returns its current settings and grants."""
+              usage=None, workdir=None, events=None, check=None):
+    """The worker's MCP server. `guardrails()` returns its current settings and grants;
+    `check()` probes the seat's limits now."""
     mcp = MCPServer(name=f"agentic-lab worker {agent_id}",
                     instructions="Submit tasks to this worker and follow them.")
 
@@ -194,6 +195,17 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         if usage is not None:
             h["usage"] = usage.load()
         return h
+
+    @mcp.tool(description="Read this worker's Claude seat limits now (one tiny request); "
+              "returns the readings. For the web UI's 'check now'.")
+    async def check_usage(ctx: Context) -> dict:
+        who(ctx)
+        if check is None:
+            raise ToolError("this worker has no seat to check")
+        try:
+            return {"limits": await check()}
+        except Exception as e:
+            raise ToolError(f"usage check failed: {e}") from None
 
     return mcp
 

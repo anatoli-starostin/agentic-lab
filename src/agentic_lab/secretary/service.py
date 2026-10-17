@@ -28,10 +28,10 @@ from ..secrets.intake import Intake, message
 from ..slackio import SILENT, SlackIO
 from .brain import SecretaryBrain, expiry_notices
 from ..eventlog import EventLog
-from ..worker.usage import UsageLog
+from ..worker.usage import UsageLog, probe_loop, probe_now
 from . import home as H
 from . import power as P
-from .status import collect, manager_status
+from .status import check_seat, collect, manager_status
 from .web import app
 import datetime as dt
 from types import SimpleNamespace
@@ -39,6 +39,7 @@ from types import SimpleNamespace
 CONFIG = "~/.config/agentic-lab"
 STATE = "~/.local/state/agentic-lab"
 COLLECT_EVERY_S = 15
+CHECK_MIN_GAP_S = 60            # the web UI's "check now": at most once a minute per seat
 log = logging.getLogger("agentic_lab.secretary")
 
 
@@ -311,11 +312,41 @@ async def serve(lab_path, host, port):
             except asyncio.TimeoutError:
                 pass
 
-    server = uvicorn.Server(uvicorn.Config(app(lambda: latest["state"], get_events, is_admin),
+    checks = {}                     # human -> {at, agent | error}: the web UI's "check now"
+
+    async def check_usage(human):
+        last = checks.get(human)
+        now = dt.datetime.now(dt.timezone.utc)
+        if human not in lab.humans or (last and now - dt.datetime.fromisoformat(last["at"])
+                                       < dt.timedelta(seconds=CHECK_MIN_GAP_S)):
+            return
+        at = now.isoformat(timespec="seconds")
+        try:
+            agent = await check_seat(lab, human, workers, managers,
+                                     own=(sec_id, lambda: probe_now(usage, seat)) if seat else None)
+            checks[human] = {"at": at, "agent": agent}
+        except Exception as e:
+            checks[human] = {"at": at, "error": f"check failed: {str(e)[:300]}"}
+        try:
+            hosts = (latest["state"] or {}).get("hosts")
+            latest["state"] = await collect(lab, workers, broker, units, managers,
+                                            own=(sec_id, usage))
+            if hosts is not None:
+                latest["state"]["hosts"] = hosts
+        except Exception:
+            log.exception("collecting after a usage check failed")
+
+    def state_with_checks():
+        s = latest["state"]
+        return {**s, "checks": checks} if s else s
+
+    server = uvicorn.Server(uvicorn.Config(app(state_with_checks, get_events, is_admin,
+                                               check_usage),
                                            host=host, port=port, log_level="warning"))
     log.info("secretary: watching %d worker(s), slack=%s, web UI on http://%s:%d/",
              len(workers.known()), sec.slack is not None, host, port)
-    tasks = [asyncio.create_task(collector()), asyncio.create_task(notice_loop())]
+    tasks = [asyncio.create_task(collector()), asyncio.create_task(notice_loop()),
+             asyncio.create_task(probe_loop(usage, seat, stop))]
     await server.serve()
     stop.set()
     if sec.slack is not None:
