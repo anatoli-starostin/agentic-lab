@@ -35,6 +35,8 @@ deployment's own `lab.yaml` and secret files, which never enter this repo.
 **Non-goals (for now)**
 - A general multi-tenant SaaS. One lab = one deployment = one tailnet.
 - Replacing W&B or git. Experiment tracking stays in W&B, and code and results stay in git.
+- **Per-token (API) billing.** In this version every agent runs on a human member's Claude
+  seat, and nothing is billed per token.
 - Agents that approve each other. There is no agent-to-agent authority over boundary crossings.
 
 ---
@@ -391,8 +393,9 @@ host, and its usage counts towards that seat's limits. The web UI shows each age
 use under that member. This attachment only says whose tokens an agent uses. Who may use
 the agent is set separately (for example, a worker's `access`).
 
-**The secretary checks each agent's real auth.** A stray `ANTHROPIC_API_KEY` silently
-overrides seat login and bills per token, so the web UI flags it.
+**There is no per-token billing in this version.** The secretary checks each agent's real
+auth. A stray `ANTHROPIC_API_KEY` would silently override seat login and bill per token, so
+it is flagged in the web UI as an error.
 
 Model per role is set in `lab.yaml`. Defaults: Haiku-class for the secretary's chat,
 Sonnet-class for managers, the strongest available model for workers.
