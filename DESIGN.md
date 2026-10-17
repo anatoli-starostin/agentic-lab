@@ -286,12 +286,15 @@ The rule "the manager never grants permissions itself" must hold even if the man
 confused or prompt-injected. So **approval is a code path that bypasses the LLM**:
 
 ```
-worker gate ──req──► APPROVAL BROKER (manager VM, separate Unix user, no LLM)
-                          │  ├─► notifies manager agent: "approval pending" (read-only, for context)
-                          │  └─► human's permission channel (Slack DM with buttons)
-                          ◄── human decision (verified: Slack-signed interaction)
-worker gate ◄─signed decision── broker   (HMAC with a per-worker key the manager agent can't read)
+agent's gate ──request──► APPROVAL BROKER (secretary host, own Unix user `lab-broker`, no LLM)
+                               │  ├─► managers can see it, add a note (read-only, M3)
+                               │  └─► the human's DM from the "Lab Approvals" Slack app
+                               ◄── the human's click or reply (Socket Mode: identity from Slack)
+agent's gate ◄──pulls the decision── broker   (its own token, over the tailnet)
 ```
+
+The broker has its own Slack app ("Lab Approvals"), which only it can post as: humans trust
+approval buttons from that app only, and no agent can post a look-alike.
 
 - **An approval always goes to the human the action is for**, never simply to the
   agent's seat owner:
@@ -300,8 +303,9 @@ worker gate ◄─signed decision── broker   (HMAC with a per-worker key the
     the work. The manager's code (not its LLM) takes that member from the Slack event and
     attaches it to every approval request made in that conversation;
   - no requester (scheduled or background work): the agent's attached human.
-- The worker gate accepts only decisions **signed by the broker**. The broker signs only
-  after a **verified human interaction** on a registered channel.
+- **Workers pull decisions** from the broker, with their own token, over the tailnet. There
+  is no way to push a decision to a worker. The broker records one only after a **verified
+  human interaction**: a click or thread reply whose Slack identity is the asked human's.
 - The manager agent can **see** pending requests and **add context** to the message shown to
   the human ("this is the pip install from task 17, needed for the eval"). It has no tool
   that produces a decision.
