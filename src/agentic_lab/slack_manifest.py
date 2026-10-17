@@ -25,13 +25,14 @@ APPROVALS_SCOPES = ["chat:write", "im:write", "im:history"]
 APPROVALS_EVENTS = ["message.im"]
 
 
-def manifest(name, description, scopes, events, interactive=False):
+def manifest(name, description, scopes, events, interactive=False, home_tab=False):
     return {
         "display_information": {"name": name[:35], "description": description[:139],
                                 "background_color": "#2c2d30"},
         "features": {
             "bot_user": {"display_name": name[:80], "always_online": True},
-            "app_home": {"messages_tab_enabled": True, "messages_tab_read_only_enabled": False},
+            "app_home": {"home_tab_enabled": home_tab, "messages_tab_enabled": True,
+                         "messages_tab_read_only_enabled": False},
         },
         "oauth_config": {"scopes": {"bot": list(scopes)}},
         "settings": {
@@ -51,6 +52,10 @@ def for_agent(lab, agent_id):
         raise ValueError(f"{agent_id} is a {role}: only managers and the secretary use Slack")
     what = ("a member's team member: delegates work to the lab's workers" if role == "manager"
             else "keeps the lab running: machines, agents, tokens, status")
+    if role == "secretary":         # its Home tab: the lab at a glance
+        return manifest(lab.display_name(agent_id), f"Agentic Lab {lab.name}: {what}",
+                        CONVERSATIONAL_SCOPES, CONVERSATIONAL_EVENTS + ["app_home_opened"],
+                        home_tab=True)
     return manifest(lab.display_name(agent_id), f"Agentic Lab {lab.name}: {what}",
                     CONVERSATIONAL_SCOPES, CONVERSATIONAL_EVENTS)
 

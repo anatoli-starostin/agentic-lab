@@ -47,7 +47,7 @@ class Incoming:
 
 class SlackIO:
     def __init__(self, bot_token, app_token, members, may_use, on_message, inbox,
-                 engaged=None):
+                 engaged=None, on_home=None):
         """`members`: {slack user id: human id}; `may_use(human) -> (ok, reason)`;
         `on_message(Incoming)` is awaited per message (the caller serializes per
         conversation); `inbox`: folder for attachments; `engaged`: a set of thread keys
@@ -58,6 +58,7 @@ class SlackIO:
         self.members, self.may_use, self.on_message = members, may_use, on_message
         self.inbox = inbox
         self.engaged = engaged if engaged is not None else set()
+        self.on_home = on_home          # awaited with (slack user id) when the Home tab opens
         self.me = None
 
     # ── sending ──────────────────────────────────────────────────────────────
@@ -135,6 +136,10 @@ class SlackIO:
 
     async def _on_event(self, ev):
         etype, user = ev.get("type"), ev.get("user")
+        if etype == "app_home_opened":
+            if self.on_home is not None and ev.get("tab") == "home" and user in self.members:
+                await self.on_home(user)
+            return
         if ev.get("bot_id") or user == self.me or not user:
             return                      # never answer bots (including itself)
         if ev.get("subtype") not in (None, "file_share"):

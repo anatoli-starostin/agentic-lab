@@ -265,3 +265,46 @@ def test_idle_watch():
     ok, why = powerable(lab, "nuc-01")
     assert not ok and "Nebius VM" in why
     assert powerable(lab, "gpu-a")[0]
+
+
+def test_secretary_home_tab():
+    import datetime as dt
+    from agentic_lab.secretary import home
+    now = dt.datetime.now(dt.timezone.utc)
+    state = {"lab": "dev-lab", "at": now.isoformat(),
+             "agents": {"worker-a": {"name": "worker-a", "role": "worker", "up": True,
+                                     "queue": {"running": 1, "queued": 2},
+                                     "recent": [{"id": "t-1", "state": "running", "requester": "bob",
+                                                 "instruction": "train", "created": now.isoformat()},
+                                                {"id": "t-2", "state": "done", "requester": "alice",
+                                                 "instruction": "eval", "created": now.isoformat()}]}},
+             "accounts": {"alice": {"name": "Alice", "agents": ["worker-a"], "limits": {
+                 "seven_day": {"status": "allowed", "utilization": 0.34, "observed_at": now.isoformat(),
+                               "resets_at": (now + dt.timedelta(days=3)).isoformat(), "from": "worker-a"}},
+                 "tokens_today": {"worker-a": {"new": 1000, "cached": 9000}}}},
+             "approvals": {"pending": [{"agent": "worker-a", "human": "alice", "detail": "curl x",
+                                        "expires": now.isoformat()}]},
+             "hosts": {"gpu-a": {"state": "RUNNING"}}}
+    v = home.view(state, "alice", "http://sec:8774/", admin=True)
+    text = str(v)
+    assert v["type"] == "home" and "▰▰▰▱▱▱▱▱▱▱" in text and "*34%*" in text
+    assert "1 waiting for you" in text and "busy" in text and "gpu-a" in text
+    assert text.index("eval") < text.index("train")          # my tasks first
+    assert "http://sec:8774/" in text and "each agent's log" in text
+    lab = registry.load(EXAMPLE)
+    m = slack_manifest.for_agent(lab, "secretary")
+    assert m["features"]["app_home"]["home_tab_enabled"] and "app_home_opened" in m["settings"]["event_subscriptions"]["bot_events"]
+    assert not slack_manifest.for_agent(lab, "mgr-alice")["features"]["app_home"]["home_tab_enabled"]
+
+
+def test_home_opened_routes_to_callback():
+    io, seen = make_io()
+    opened = []
+
+    async def on_home(user):
+        opened.append(user)
+    io.on_home = on_home
+    asyncio.run(io._on_event({"type": "app_home_opened", "user": "U-ALICE", "tab": "home"}))
+    asyncio.run(io._on_event({"type": "app_home_opened", "user": "U-STRANGER", "tab": "home"}))
+    asyncio.run(io._on_event({"type": "app_home_opened", "user": "U-ALICE", "tab": "messages"}))
+    assert opened == ["U-ALICE"] and seen == []

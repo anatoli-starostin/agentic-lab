@@ -29,6 +29,7 @@ from ..slackio import SILENT, SlackIO
 from .brain import SecretaryBrain, expiry_notices
 from ..eventlog import EventLog
 from ..worker.usage import UsageLog
+from . import home as H
 from . import power as P
 from .status import collect, manager_status
 from .web import app
@@ -42,6 +43,12 @@ log = logging.getLogger("agentic_lab.secretary")
 
 
 INTAKE_PORT = 8771
+DASHBOARD_PORT = 8774
+HOME_REFRESH_ROUNDS = 20        # Home tabs are republished every ~5 min (20 x 15 s)
+
+
+def sec_id_of(lab):
+    return next(a for a, x in lab.agents.items() if x.get("role") == "secretary")
 
 
 class Secretary:
@@ -52,6 +59,8 @@ class Secretary:
         self.brain, self.state, self.slack = brain, state, slack
         self._locks = {}
         self.events = None
+        self.home_viewers = set()
+        self.dashboard_url = f"http://{lab.address(sec_id_of(lab))[0]}:{DASHBOARD_PORT}/"
         sec = next(a for a, x in lab.agents.items() if x.get("role") == "secretary")
         name, _ = lab.address(sec)
         self.intake_url = f"http://{name}:{INTAKE_PORT}"
@@ -114,6 +123,22 @@ class Secretary:
         if self.slack is not None:
             await self.slack.post(conv.channel, conv.thread_ts, reply)
         return reply
+
+    async def publish_home(self, slack_user):
+        """Publish one person's Home tab (and remember them, to keep it fresh)."""
+        if self.slack is None:
+            return
+        human_id = next((h for h, x in self.lab.humans.items()
+                         if (x or {}).get("slack_user") == slack_user), None)
+        if human_id is None:
+            return
+        self.home_viewers.add(slack_user)
+        admin = bool((self.lab.humans[human_id] or {}).get("admin"))
+        try:
+            await self.slack.web.views_publish(user_id=slack_user, view=H.view(
+                self.latest["state"], human_id, self.dashboard_url, admin=admin))
+        except Exception:
+            log.exception("publishing the Home tab for %s failed", human_id)
 
     async def notices(self):
         """Once a day: credentials expiring within 14 days, announced (and the owner of a
@@ -232,6 +257,9 @@ async def serve(lab_path, host, port):
                 if rounds["n"] % 4 == 0:
                     await check_power()
                 rounds["n"] += 1
+                if rounds["n"] % HOME_REFRESH_ROUNDS == 0:
+                    for user in list(sec.home_viewers):
+                        await sec.publish_home(user)
                 latest["state"]["hosts"] = {
                     h: {**(hosts_power.get(h) or {}), "power": (lab.hosts[h] or {}).get("power"),
                         "idle_since": (idle.idle_since.get(h).isoformat(timespec="seconds")
@@ -268,7 +296,8 @@ async def serve(lab_path, host, port):
                    if (h or {}).get("slack_user")}
         sec.slack = SlackIO(slack_env["SLACK_BOT_TOKEN"], slack_env["SLACK_APP_TOKEN"],
                             members, lambda human: (True, ""), sec.on_message,
-                            os.path.join(workdir, "inbox"), engaged=sec.state.engaged)
+                            os.path.join(workdir, "inbox"), engaged=sec.state.engaged,
+                            on_home=sec.publish_home)
         await sec.slack.start()
 
     async def notice_loop():
