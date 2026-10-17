@@ -226,10 +226,12 @@ class SdkRunner:
                 return
             if session["restart_for"] and "result" not in outcome \
                     and not store.get(task.id).cancel_requested:
-                prompt = ("A human granted: " +
+                prompt = ("Instead of running your last action outside the sandbox, a human "
+                          "widened your sandbox: " +
                           "; ".join(_grant_line(g) for g in session["restart_for"]) +
-                          ". Your sandbox now allows it. Retry what you were doing, inside "
-                          "the sandbox (without dangerouslyDisableSandbox).")
+                          ". (Your session was restarted to apply it; that's why the action "
+                          "showed as not run.) Retry what you were doing, inside the sandbox "
+                          "(without dangerouslyDisableSandbox).")
                 continue
             break
         self._finish(task, store, outcome, result_msg, last_text)
