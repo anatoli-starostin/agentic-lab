@@ -355,3 +355,88 @@ def test_home_opened_routes_to_callback():
     asyncio.run(io._on_event({"type": "app_home_opened", "user": "U-STRANGER", "tab": "home"}))
     asyncio.run(io._on_event({"type": "app_home_opened", "user": "U-ALICE", "tab": "messages"}))
     assert opened == ["U-ALICE"] and seen == []
+
+
+# ── staying reachable: turn budget, busy note ────────────────────────────────
+
+class _FakeClient:
+    """Stands in for ClaudeSDKClient: the first request hangs (long work); later ones answer."""
+
+    def __init__(self, options):
+        self.queries, self.interrupted = [], 0
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def query(self, prompt):
+        self.queries.append(prompt)
+
+    async def interrupt(self):
+        self.interrupted += 1
+
+    async def receive_response(self):
+        from claude_agent_sdk import AssistantMessage, TextBlock
+        if len(self.queries) == 1 and not self.interrupted:
+            await asyncio.sleep(3600)               # the long work
+        yield AssistantMessage(content=[TextBlock(text=f"reply to: {self.queries[-1][:20]}")],
+                               model="m")
+
+
+def test_a_long_turn_is_cut_off_and_wrapped_up():
+    from agentic_lab.manager import brain as B
+    clients = []
+
+    def factory(options):
+        clients.append(_FakeClient(options))
+        return clients[-1]
+    br = B.Brain("Flash", "lab", "/tmp", lambda grants: {}, turn_budget_s=0.2)
+    br.client_factory = factory
+    conv = SimpleNamespace(key="c", session_id=None)
+    ctx = SimpleNamespace(conv=conv, requester="alice", state=SimpleNamespace(save=lambda: None))
+    reply = asyncio.run(br.turn(ctx, "refactor the whole repo"))
+    c = clients[0]
+    assert c.interrupted >= 1 and c.queries[1] == B.TIME_UP
+    assert reply == "reply to: " + B.TIME_UP[:20]
+    assert "5 minutes" in B.system_prompt("Flash", "lab")
+    assert "1 minutes" not in B.system_prompt("Flash", "lab", 2)
+
+
+def test_busy_note_once_per_busy_spell(monkeypatch):
+    from agentic_lab.manager import service as S
+    posted = []
+
+    class Slack:
+        async def react(self, *a, **k):
+            pass
+
+        async def post(self, channel, thread, text):
+            posted.append(text)
+    m = S.Manager.__new__(S.Manager)
+    m._locks, m._told_busy, m.slack = {}, set(), Slack()
+    conv = SimpleNamespace(key="D1", channel="D1", thread_ts=None)
+    m.state = SimpleNamespace(conversation=lambda ch, ts: conv)
+    m.lab = None
+    started = asyncio.Event()
+
+    async def turn(conv_, requester, private, prompt):
+        lock = m._locks.setdefault(conv_.key, asyncio.Lock())
+        async with lock:
+            m._told_busy.discard(conv_.key)
+            started.set()
+            await asyncio.sleep(0.05)
+            return "done"
+    m._turn = turn
+    monkeypatch.setattr(S, "compose", lambda lab, msg: msg.text)
+    msg = lambda: SimpleNamespace(channel="D1", thread_ts=None, ts="1", human="alice",  # noqa
+                                  private=True, mentioned=True, text="hi", files=[],
+                                  history=[], user="U1")
+
+    async def go():
+        first = asyncio.create_task(m.on_message(msg()))
+        await started.wait()
+        await asyncio.gather(m.on_message(msg()), m.on_message(msg()), first)
+    asyncio.run(go())
+    assert posted.count(S.BUSY) == 1 and posted.count("done") == 3

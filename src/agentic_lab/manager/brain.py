@@ -5,6 +5,7 @@ message, so the manager remembers the conversation. The agent runs with its own 
 and settings from lab.yaml (plus its grants). Anything that needs a human, e.g. a write to
 GitHub, goes to the broker for the member whose message this turn answers.
 """
+import asyncio
 import datetime as dt
 import json
 import warnings
@@ -26,16 +27,19 @@ from ..worker.runner import NoChannelApprover, allowed_without_asking, sandbox_v
 from . import tools as lab_tools
 
 
-def system_prompt(agent_id, lab_name):
+def system_prompt(agent_id, lab_name, budget_min=5):
     return f"""
 You are {agent_id}, a manager agent in the agentic lab "{lab_name}": a team of humans and AI
 agents. You talk with lab members in Slack and get work done through worker agents.
 
-- Heavy or long work (experiments, training, evaluation, anything needing a GPU) goes to a
-  worker: list_workers, then submit_task with a clear, self-contained instruction. Its
-  progress and result are posted in this conversation automatically; when a task finishes
-  you'll get a message about it: summarise it for the member, and post its useful files
-  (post_worker_file). Quick things (reading, answering, small scripts) you do yourself.
+- Stay reachable: members must always be able to talk to you. Do work yourself only when
+  it takes a few minutes at most: reading, answering, a GitHub issue or comment, a small
+  script or a small code fix. Anything longer, and anything needing a GPU (experiments,
+  training, evaluation, bigger code changes), goes to a worker: list_workers, then
+  submit_task with a clear, self-contained instruction. Your turns are cut off after
+  {budget_min} minutes. A task's progress and result are posted in this conversation
+  automatically; when it finishes you'll get a message about it: summarise it for the
+  member, and post its useful files (post_worker_file).
 - You never approve anything. When a task waits for a human's approval, tell the member to
   check their DM from the lab's approvals app. You may add a note to the request
   (add_approval_note) to explain why the worker needs it.
@@ -59,9 +63,20 @@ def _grant(g):
                  g.get("granted_by"))
 
 
+TURN_BUDGET_S = 300     # a manager's turn is cut off after this: it must stay reachable
+WRAP_UP_S = 90          # ...and then gets this long to say where it got to
+TIME_UP = ("[lab] Time's up: your turn ran past its time limit and was stopped, so the "
+           "member can reach you. Don't continue the work here. In a few lines: say where you "
+           "got to, and either submit the rest to a worker (submit_task) or tell the member "
+           "what's left.")
+CUT_OFF = ("I ran past my time limit on this and had to stop. Tell me how you'd like to "
+           "continue (I can hand it to a worker).")
+
+
 class Brain:
     def __init__(self, agent_id, lab_name, workdir, settings_for, approver=None, model=None,
-                 env=None, usage=None, cli_path=None, events=None, prompt_extra=""):
+                 env=None, usage=None, cli_path=None, events=None, prompt_extra="",
+                 turn_budget_s=TURN_BUDGET_S):
         self.agent_id = agent_id
         self.lab_name = lab_name
         self.workdir = workdir
@@ -73,6 +88,17 @@ class Brain:
         self.cli_path = cli_path
         self.events = events
         self.prompt_extra = prompt_extra    # e.g. its GitHub identity
+        self.turn_budget_s = turn_budget_s  # a turn longer than this is cut off
+        self.client_factory = ClaudeSDKClient   # tests pass a fake
+
+    @staticmethod
+    async def _stop(client, drain):
+        """Interrupt the running turn and read what's left of it."""
+        try:
+            await client.interrupt()
+            await asyncio.wait_for(drain(client), 30)
+        except (asyncio.TimeoutError, Exception):
+            pass
 
     async def turn(self, ctx, prompt):
         """Run one turn in `ctx.conv`'s session; returns the reply text."""
@@ -112,14 +138,15 @@ class Brain:
             mcp_servers={"lab": lab_tools.build(ctx)},
             allowed_tools=list(lab_tools.LAB_TOOLS),
             system_prompt={"type": "preset", "preset": "claude_code",
-                           "append": system_prompt(self.agent_id, self.lab_name)
+                           "append": system_prompt(self.agent_id, self.lab_name,
+                                                   max(1, round(self.turn_budget_s / 60)))
                            + self.prompt_extra},
             model=self.model, env=self.env, cli_path=self.cli_path,
             resume=ctx.conv.session_id)
 
-        reply, last_text = None, None
-        async with ClaudeSDKClient(options) as client:
-            await client.query(prompt)
+        out = {"reply": None, "last": None}
+
+        async def drain(client):
             async for msg in client.receive_response():
                 if isinstance(msg, SystemMessage) and msg.subtype == "init":
                     sid = msg.data.get("session_id")
@@ -129,7 +156,7 @@ class Brain:
                 elif isinstance(msg, AssistantMessage):
                     for b in msg.content:
                         if isinstance(b, TextBlock):
-                            last_text = b.text
+                            out["last"] = b.text
                         elif isinstance(b, ToolUseBlock):
                             log("tool", tool_summary(b.name, b.input))
                 elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
@@ -140,8 +167,26 @@ class Brain:
                 elif isinstance(msg, RateLimitEvent) and self.usage:
                     self.usage.rate_limit(msg.rate_limit_info)
                 elif isinstance(msg, ResultMessage):
-                    reply = msg.result
+                    out["reply"] = msg.result
                     if self.usage:
                         self.usage.run(f"conv:{ctx.conv.key}", msg.model_usage)
+
+        async with self.client_factory(options) as client:
+            await client.query(prompt)
+            try:
+                await asyncio.wait_for(drain(client), self.turn_budget_s)
+            except asyncio.TimeoutError:
+                # too long: stop it, so the conversation is free again, and let the agent say
+                # where it got to (or hand the rest to a worker) in one short turn
+                log("note", f"turn cut off after {self.turn_budget_s:.0f} s")
+                await self._stop(client, drain)
+                out["reply"] = None
+                await client.query(TIME_UP)
+                try:
+                    await asyncio.wait_for(drain(client), WRAP_UP_S)
+                except asyncio.TimeoutError:
+                    await self._stop(client, drain)
+                    out["reply"] = out["last"] = CUT_OFF
+        reply, last_text = out["reply"], out["last"]
         log("reply", reply or last_text or "")
         return reply or last_text or ""
