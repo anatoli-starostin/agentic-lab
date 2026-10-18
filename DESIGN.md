@@ -256,10 +256,11 @@ agent's service ◄── decision ─── broker (its own token, over the tai
   requester — the agent's attached human.
 - Only **Lab Approvals** posts approval requests; only the broker holds its tokens. A
   decision is recorded only after a verified interaction of the asked human.
-- **Timeouts deny.** On by default: a request nobody answers within 120 s (per member:
-  `timeout_s`) is closed as denied. Silence always counts as "no", never as "yes"
-  (`on_timeout` can only be `deny`). The agent is told it was a timeout, not a refusal,
-  and asked to find a way inside the sandbox or to ask again later.
+- **No timeout by default**: a request waits until its human answers. A member may set one
+  (`timeout_s`); then an unanswered request is closed as denied when it runs out: silence
+  counts as "no", never as "yes" (`on_timeout` can only be `deny`), and the agent is told
+  it was a timeout, not a refusal. If the agent stops waiting (its task is cancelled, a
+  manager's turn is cut off), the request is **withdrawn**, so nobody is asked any more.
 - Grants are created only by the broker, after a verified human answer.
 
 ### 6.4 Secrets
@@ -289,9 +290,9 @@ humans:
   alice:
     slack_user: U0123ABC
     channels:
-      - {type: slack_dm, timeout_s: 120, on_timeout: deny}
+      - {type: slack_dm, on_timeout: deny}           # optional: timeout_s: 600
 ```
-- `on_timeout` is always `deny`.
+- No timeout unless `timeout_s` is set; `on_timeout` is always `deny`.
 - The broker's channel interface (`ask(request) -> decision`) leaves room for other channels
   later without touching its trust rules.
 
@@ -312,7 +313,7 @@ humans:
     admin: true                          # may read agents' logs, administer the lab
     tailscale_login: alice@example.org   # how the web UI recognises her
     channels:
-      - {type: slack_dm, timeout_s: 120, on_timeout: deny}
+      - {type: slack_dm, on_timeout: deny}
 agents:
   secretary:
     role: secretary
@@ -516,6 +517,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-18 | **Managers run on any host**: the secretary host, a VM of their own, or a GPU VM next to their workers. |
 | 2026-10-18 | **Managers stay reachable**: a work-size rule, a per-turn time limit (`turn_budget_min`, default 5), and a "still working" reply. |
 | 2026-10-18 | **A worker's event log goes only to the secretary's monitoring token.** |
+| 2026-10-18 | **Approval requests have no timeout by default** (a member may set `timeout_s`); a request the agent stops waiting for is withdrawn. |
 
 ## 14. Open questions
 
