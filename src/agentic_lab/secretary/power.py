@@ -99,12 +99,17 @@ def note_gpu(snapshot):
 
 def worker_busy(name, seen):
     """Why a worker's machine is busy (None if it isn't), from its health readings: tasks
-    running, queued or waiting, or the GPUs in use by anything (nvidia-smi: a process on a
+    running, queued or waiting, someone's ~/.lab-keep-awake, or the GPUs in use by anything (nvidia-smi: a process on a
     GPU, the lab's or anyone's, or any utilization above 0% in its last readings)."""
     q = seen.get("queue") or {}
     n = {k: q.get(k, 0) for k in BUSY if q.get(k)}
     if n:
         return f"{name} has " + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in n.items())
+    holders = seen.get("keep_awake") or []
+    if holders:                         # someone working on the machine directly
+        who = ", ".join(h["user"] + (f" ({h['note']})" if h.get("note") else "")
+                        for h in holders)
+        return f"kept awake by {who} (~/.lab-keep-awake)"
     procs = seen.get("gpu_processes") or []
     if procs:
         names = ", ".join(sorted({p.get("name") or "?" for p in procs}))

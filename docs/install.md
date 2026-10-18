@@ -217,6 +217,10 @@ deployed, and the secretary checks in code that the person asking is an admin.
   those repos) and a one-time link for it; then a redeploy. The agent then uses git and
   `gh` as that bot. **Protect `main`** in each repo (pull requests only, reviews by human
   code owners, no bypass for bots): that is what keeps bots from approving or merging.
+- **People working on a lab machine directly** (not through agents): tell them to create
+  `~/.lab-keep-awake` while they need the machine (`echo "CPU sweep until Friday" >
+  ~/.lab-keep-awake`) and delete it when done; otherwise an idle machine may be stopped
+  under them. The web UI shows who keeps a machine awake.
 - **Remove an agent:** PR → merge → deploy. Its Unix user and work folder stay on its host
   until removed at the console (`sudo userdel -r lab-<id>`, after archiving its work).
 - **From the console** (break glass, or if Slack is down): the same flow with the admin's

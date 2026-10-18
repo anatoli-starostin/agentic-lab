@@ -1,0 +1,6 @@
+[Unit]
+Description=Agentic Lab: who keeps this machine awake (~/.lab-keep-awake)
+
+[Service]
+Type=oneshot
+ExecStart=/opt/agentic-lab/src/deploy/worker/lab-keep-awake.sh

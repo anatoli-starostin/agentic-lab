@@ -259,7 +259,22 @@ def default_health(agent_id, store):
             gpu = "nvidia-smi failed"
     disk = shutil.disk_usage(os.path.expanduser("~"))
     return {"agent": agent_id, "host": platform.node(), "tasks": counts, "gpu": gpu,
-            "gpus": gpus, "gpu_processes": procs, "disk_free_gb": round(disk.free / 1e9, 1)}
+            "gpus": gpus, "gpu_processes": procs, "disk_free_gb": round(disk.free / 1e9, 1),
+            "keep_awake": keep_awake()}
+
+
+KEEP_AWAKE = "/var/lib/agentic-lab/keep-awake"
+
+
+def keep_awake(path=KEEP_AWAKE):
+    """People keeping this machine awake (their ~/.lab-keep-awake, listed every minute by
+    the root lab-keep-awake.timer, since homes are private): [{user, note}]."""
+    try:
+        with open(path) as f:
+            rows = [line.rstrip("\n").split(" ", 1) for line in f if line.strip()]
+    except OSError:
+        return []
+    return [{"user": r[0], "note": r[1].strip() if len(r) > 1 else ""} for r in rows]
 
 
 def _smi(query):

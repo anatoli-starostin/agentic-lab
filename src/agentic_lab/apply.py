@@ -242,6 +242,13 @@ ln -sf /opt/agentic-lab/venv/bin/lab /usr/local/bin/lab     # `lab` for every us
 
 say "sandbox prerequisites"
 /opt/agentic-lab/src/deploy/worker/setup-sandbox.sh
+
+say "keep-awake check (anyone's ~/.lab-keep-awake keeps this machine on)"
+install -m 644 /opt/agentic-lab/src/deploy/worker/lab-keep-awake.service \
+    /opt/agentic-lab/src/deploy/worker/lab-keep-awake.timer /etc/systemd/system/
+systemctl daemon-reload
+systemctl enable --now lab-keep-awake.timer >/dev/null 2>&1
+/opt/agentic-lab/src/deploy/worker/lab-keep-awake.sh
 """
 
 

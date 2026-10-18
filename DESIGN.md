@@ -106,8 +106,13 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   the broker's overview, local systemd units, machine power states (Nebius).
 - **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
   (a worker task running, queued or awaiting approval; any process on a GPU, anyone's; a GPU
-  above 0% in any of its last 5 readings, about 75 s; a manager on it) may be powered off only by an admin, after
-  confirming. Idle `on_demand` hosts with only workers are stopped after `idle_stop_min`.
+  above 0% in any of its last 5 readings, about 75 s; someone's `~/.lab-keep-awake`; a
+  manager on it) may be powered off only by an admin, after confirming. Idle `on_demand` hosts with only workers are stopped after `idle_stop_min`.
+- **Keep-awake**: someone working on a machine directly (not through agents, e.g. a
+  CPU-only job) creates `~/.lab-keep-awake` in their home (first line, optional: why); while
+  it's there the machine is busy, and the web UI shows who keeps it awake. A root timer
+  (`lab-keep-awake.timer`) lists these files every minute in `/var/lib/agentic-lab/`, since
+  homes are private.
 - **Notices**: daily, credentials and GitHub bot tokens expiring within 14 days; lab-wide
   notices go to an optional `announcements` channel.
 - **Chat**: a Claude agent with tools over the lab's state and the power, token-request and
@@ -525,6 +530,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-18 | **Managers stay reachable**: a work-size rule, a per-turn time limit (`turn_budget_min`, default 5), and a "still working" reply. |
 | 2026-10-18 | **A worker's event log goes only to the secretary's monitoring token.** |
 | 2026-10-18 | **Anyone in the lab may talk to any manager.** On a dedicated manager, other members are guests: conversation only, no tools, no work, no memory, 2-minute turns. |
+| 2026-10-18 | **`~/.lab-keep-awake`**: anyone working on a lab machine directly keeps it from being stopped. |
 | 2026-10-18 | **Approval requests have no timeout by default** (a member may set `timeout_s`); a request the agent stops waiting for is withdrawn. |
 
 ## 14. Open questions
