@@ -284,3 +284,37 @@ def test_broker_accepts_all_agent_tokens():
     t = tokens_from(lab, "worker-a: " + "a" * 40 + "\nmgr-alice: " + "b" * 40 +
                          "\nsecretary: " + "c" * 40 + "\n")
     assert set(t.values()) == {"worker-a", "mgr-alice", "secretary"}
+
+
+# ── no timeout by default; withdrawing ───────────────────────────────────────
+
+def test_no_timeout_by_default(tmp_path):
+    b = C.Broker(tmp_path, {"carol": {"slack_user": "U-CAROL"}})    # no timeout_s
+    r = b.submit("worker-a", "carol", "Bash", BASH_OUT, task_id="t-9")
+    assert r.expires is None
+    assert b.expire() == [] and b.get(r.id).state == C.PENDING        # it waits for carol
+    assert "it waits for your answer" in str(request_blocks(r))
+    with pytest.raises(C.BrokerError):
+        b.withdraw(r.id, "worker-b")                                  # not its request
+    w = b.withdraw(r.id, "worker-a")
+    assert w.state != C.PENDING and w.decision["action"] == "withdrawn"
+    assert "withdrawn" in str(decided_blocks(w))
+
+
+def test_approver_withdraws_when_the_task_is_cancelled(tmp_path, free_port):
+    b = C.Broker(tmp_path, {"carol": {"slack_user": "U-CAROL"}})
+    server, th = _serve(app(b, {TOK_A: "worker-a"}), free_port)
+    url = f"http://127.0.0.1:{free_port}"
+    task = T.Task(id="t-1", instruction="x", requester="carol", manager="mgr-carol")
+    cancelled = {"now": False}
+    threading.Timer(0.5, lambda: cancelled.update(now=True)).start()
+    try:
+        t0 = time.time()
+        d = asyncio.run(BrokerApprover(url, TOK_A).ask(task, "Bash", BASH_OUT, [],
+                                                       stop=lambda: cancelled["now"]))
+        assert d.kind == "deny" and "withdrawn" in d.message
+        assert time.time() - t0 < 12                                  # noticed promptly
+    finally:
+        server.should_exit = True
+        th.join()
+    assert b.pending("carol") == []                                   # nobody's asked any more

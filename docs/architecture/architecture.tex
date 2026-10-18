@@ -296,11 +296,12 @@ sandbox violations that explain it.
   \item[How] A DM from the \emph{Lab Approvals} app with buttons: \textbf{Run once},
     \textbf{Allow \emph{X} for 1 hour}, \textbf{Allow \emph{X} for this task}, \textbf{Deny}.
     A reply in the DM's thread denies, with the reply as the reason.
-  \item[Timeout] On by default: a request nobody answers within 120 seconds (per member:
-    \code{timeout\_s} in \code{lab.yaml}) is closed as \emph{denied}. Silence always counts
-    as ``no'', never as ``yes'' (\code{on\_timeout} can only be \code{deny}). The agent is
-    told it was a timeout, not a refusal, and to find a way inside its sandbox or ask
-    again later.
+  \item[Timeout] Off by default: a request waits until the human answers. A member may set
+    one (\code{timeout\_s} in \code{lab.yaml}); then a request nobody answers in time is
+    closed as \emph{denied}: silence counts as ``no'', never as ``yes'' (\code{on\_timeout}
+    can only be \code{deny}), and the agent is told it was a timeout, not a refusal. If the
+    agent stops waiting (its task is cancelled, or a manager's turn is cut off), the
+    request is \emph{withdrawn}, so nobody is asked about it any more.
   \item[Grants] ``For a while'' answers become \emph{grants} that widen the sandbox
     (a domain, a writable path, or a tool) with an expiry; the agent's session restarts
     with the wider sandbox. \emph{Standing} grants are written in \code{lab.yaml}.

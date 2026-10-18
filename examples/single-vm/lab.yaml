@@ -15,7 +15,7 @@ humans:
     name: Alice
     slack_user: U00000001
     channels:
-      - {type: slack_dm, timeout_s: 120, on_timeout: deny}
+      - {type: slack_dm, on_timeout: deny}
 
 hosts:
   dev-vm:

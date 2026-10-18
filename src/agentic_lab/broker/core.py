@@ -2,7 +2,8 @@
 
 A worker that needs something outside its sandbox files a request here. The broker asks the
 human (through a channel: Slack DM), and records the decision only when it comes from that
-human's own verified interaction. Unanswered requests are denied on timeout. Workers pull
+human's own verified interaction. A request waits for its human's answer; if the human set
+a timeout (`timeout_s`), an unanswered request is denied when it runs out. Workers pull
 decisions from the broker; nothing else can hand them one.
 
 Decisions:
@@ -11,7 +12,8 @@ Decisions:
             for 1 hour or for the rest of the task. Grants are stored here, and workers
             fetch their active grants when a session starts.
     deny    with an optional note from the human ("do it differently")
-    timeout nobody answered in time
+    timeout nobody answered in time (only with a timeout set)
+    withdrawn the agent stopped waiting (e.g. its task was cancelled)
 """
 import datetime as dt
 import json
@@ -26,7 +28,7 @@ from urllib.parse import urlparse
 PENDING, DECIDED = "pending", "decided"
 ACTIONS = ("once", "hour", "task", "deny")
 TASK_GRANT_MAX = dt.timedelta(hours=24)      # a "this task" grant never outlives a day
-DEFAULT_TIMEOUT_S = 120
+DEFAULT_TIMEOUT_S = None        # no timeout: a request waits for its human (lab.yaml: timeout_s)
 
 
 class BrokerError(ValueError):
@@ -219,14 +221,15 @@ class Broker:
                 human, manager, confirmed = reg["requester"], reg["manager"], True
         if human not in self.humans:
             raise BrokerError(f"unknown human {human!r}")
-        timeout = int(self.humans[human].get("timeout_s") or DEFAULT_TIMEOUT_S)
+        timeout = self.humans[human].get("timeout_s") or DEFAULT_TIMEOUT_S   # None: no timeout
         t = now()
         req = Request(
             id=f"r-{t.strftime('%Y%m%d%H%M%S%f')}{secrets.token_hex(3)}", agent=agent,
             task_id=task_id, human=human, tool=tool, detail=describe(tool, tool_input),
             violations=list(violations or [])[-5:],
             options=grant_options(tool, tool_input, violations),
-            created=_iso(t), expires=_iso(t + dt.timedelta(seconds=timeout)),
+            created=_iso(t),
+            expires=_iso(t + dt.timedelta(seconds=int(timeout))) if timeout else None,
             manager=manager, requester_confirmed=confirmed)
         with self._lock:
             self._save(req)
@@ -266,7 +269,7 @@ class Broker:
         out = []
         with self._lock:
             for req in self.pending():
-                if now() >= dt.datetime.fromisoformat(req.expires):
+                if req.expires and now() >= dt.datetime.fromisoformat(req.expires):
                     req.state = DECIDED
                     req.decision = {"action": "timeout", "by": None, "at": _iso(now()),
                                     "note": None}
@@ -275,6 +278,21 @@ class Broker:
         for req in out:
             self._notify(req)
         return out
+
+    def withdraw(self, rid, agent):
+        """The agent that filed a request stops waiting for it (its task was cancelled):
+        it's closed, so nobody is asked about it any more."""
+        with self._lock:
+            req = self.get(rid)
+            if req.agent != agent:
+                raise BrokerError(f"no request {rid!r}")
+            if req.state != PENDING:
+                return req
+            req.state = DECIDED
+            req.decision = {"action": "withdrawn", "by": None, "at": _iso(now()), "note": None}
+            self._save(req)
+        self._notify(req)
+        return req
 
     def for_manager(self, manager):
         """Pending requests a manager may see: those of its tasks and its own."""

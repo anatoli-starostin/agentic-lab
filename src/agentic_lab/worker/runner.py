@@ -71,7 +71,7 @@ class Decision:
 
 class Approver(Protocol):
     async def ask(self, task: T.Task, tool_name: str, tool_input: dict,
-                  violations: list) -> Decision: ...
+                  violations: list, stop=None) -> Decision: ...
 
     async def active_grants(self) -> list[dict]: ...
 
@@ -79,7 +79,7 @@ class Approver(Protocol):
 class NoChannelApprover:
     """No approval channel: every request outside the sandbox is denied, with guidance."""
 
-    async def ask(self, task, tool_name, tool_input, violations):
+    async def ask(self, task, tool_name, tool_input, violations, stop=None):
         return Decision("deny", (
             "No human approval channel is connected, so actions outside the sandbox are "
             "denied. Find a way to do this inside the sandbox (your working folder, /tmp, "
@@ -185,7 +185,8 @@ class SdkRunner:
             self._log("approval", "asked: " + tool_summary(tool_name, tool_input), task=task.id)
             try:
                 d = await self.approver.ask(task, tool_name, tool_input,
-                                            list(session["violations"]))
+                                            list(session["violations"]),
+                                            stop=lambda: store.get(task.id).cancel_requested)
             finally:
                 if store.get(task.id).state == T.AWAITING:
                     store.update(task.id, state=T.RUNNING)
