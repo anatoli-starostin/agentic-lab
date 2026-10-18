@@ -68,11 +68,13 @@ class Manager:
         self._told_busy = set()         # conversations told "still working" this busy spell
 
     def may_use(self, human):
-        a = self.lab.agents[self.agent_id]
-        if a.get("access", "dedicated") == "dedicated" and human != a.get("human"):
-            return False, (f"I'm {self.lab.display_name(self.agent_id)}, dedicated to "
-                           f"{a.get('human')}. Ask your own manager, or the lab's admin.")
+        """Every lab member may talk to any manager; for a dedicated manager, other members
+        are guests (is_guest): conversation only, no work."""
         return True, ""
+
+    def is_guest(self, human):
+        a = self.lab.agents[self.agent_id]
+        return a.get("access", "dedicated") == "dedicated" and human != a.get("human")
 
     def mention(self, human):
         uid = (self.lab.humans.get(human) or {}).get("slack_user")
@@ -89,10 +91,15 @@ class Manager:
         return out
 
     def _ctx(self, conv, requester, private):
+        owner = self.lab.agents[self.agent_id].get("human")
         return SimpleNamespace(workers=self.workers, broker=self.broker, state=self.state,
                                conv=conv, requester=requester, private=private,
                                memory=self.memory, workdir=self.workdir, slack=self.slack,
-                               describe_workers=self.describe_workers)
+                               describe_workers=self.describe_workers,
+                               guest=self.is_guest(requester),
+                               owner_name=(self.lab.humans.get(owner) or {}).get("name") or owner,
+                               guest_name=(self.lab.humans.get(requester) or {}).get("name")
+                               or requester)
 
     async def _turn(self, conv, requester, private, prompt):
         lock = self._locks.setdefault(conv.key, asyncio.Lock())

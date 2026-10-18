@@ -69,6 +69,26 @@ TIME_UP = ("[lab] Time's up: your turn ran past its time limit and was stopped, 
            "member can reach you. Don't continue the work here. In a few lines: say where you "
            "got to, and either submit the rest to a worker (submit_task) or tell the member "
            "what's left.")
+GUEST_TURN_BUDGET_S = 120   # a guest's turn (someone else's dedicated manager): talk only
+# every built-in tool, removed from a guest's turn (on top of the permission callback)
+BUILTIN_TOOLS = ["Bash", "BashOutput", "KillShell", "Read", "Write", "Edit", "MultiEdit",
+                 "Glob", "Grep", "NotebookEdit", "WebFetch", "WebSearch", "Task",
+                 "TodoWrite", "SlashCommand", "ExitPlanMode"]
+GIT_ENV = ("GH_TOKEN", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0")
+
+
+def guest_prompt(owner, guest):
+    return (f"\nThis conversation is with {guest}, a lab member who is NOT your member "
+            f"({owner}): {guest} is a guest. With a guest you only talk: answer questions, "
+            "discuss science and ideas, explain things. You have no tools here: you can't run "
+            "commands, read files, use GitHub, give workers tasks, or remember anything for "
+            f"later; don't share {owner}'s work or files. If {guest} asks for real work "
+            "(experiments, code, tasks, anything long), say kindly that you're "
+            f"{owner}'s manager and suggest {guest}'s own manager or a shared one.\n")
+
+
+GUEST_TIME_UP = ("[lab] Time's up: this conversation is with a guest and your turn ran past "
+                 "its limit. Answer in a few lines now, with what you have.")
 CUT_OFF = ("I ran past my time limit on this and had to stop. Tell me how you'd like to "
            "continue (I can hand it to a worker).")
 
@@ -110,8 +130,14 @@ class Brain:
         tool_grants = {g["value"] for g in grants if g["kind"] == "tool"}
         violations = []
         asker = SimpleNamespace(id=None, requester=ctx.requester)
+        guest = bool(getattr(ctx, "guest", False))    # someone else's dedicated manager: talk only
+        budget = GUEST_TURN_BUDGET_S if guest else self.turn_budget_s
 
         async def can_use_tool(tool_name, tool_input, context):
+            if guest:
+                return PermissionResultDeny(message=(
+                    "This conversation is with a guest: no tools. Answer from what you know, "
+                    "or suggest their own manager for real work."))
             if (tool_name in lab_tools.LAB_TOOLS or tool_name in tool_grants
                     or allowed_without_asking(tool_name, tool_input)):
                 return PermissionResultAllow()
@@ -135,13 +161,17 @@ class Brain:
             setting_sources=[],
             permission_mode="default",
             can_use_tool=can_use_tool,
-            mcp_servers={"lab": lab_tools.build(ctx)},
-            allowed_tools=list(lab_tools.LAB_TOOLS),
+            mcp_servers={} if guest else {"lab": lab_tools.build(ctx)},
+            allowed_tools=[] if guest else list(lab_tools.LAB_TOOLS),
+            disallowed_tools=BUILTIN_TOOLS if guest else [],
             system_prompt={"type": "preset", "preset": "claude_code",
                            "append": system_prompt(self.agent_id, self.lab_name,
-                                                   max(1, round(self.turn_budget_s / 60)))
-                           + self.prompt_extra},
-            model=self.model, env=self.env, cli_path=self.cli_path,
+                                                   max(1, round(budget / 60)))
+                           + (guest_prompt(getattr(ctx, "owner_name", "your member"),
+                                           getattr(ctx, "guest_name", ctx.requester))
+                              if guest else self.prompt_extra)},
+            model=self.model, cli_path=self.cli_path,
+            env={k: v for k, v in self.env.items() if not (guest and k in GIT_ENV)},
             resume=ctx.conv.session_id)
 
         out = {"reply": None, "last": None}
@@ -174,14 +204,14 @@ class Brain:
         async with self.client_factory(options) as client:
             await client.query(prompt)
             try:
-                await asyncio.wait_for(drain(client), self.turn_budget_s)
+                await asyncio.wait_for(drain(client), budget)
             except asyncio.TimeoutError:
                 # too long: stop it, so the conversation is free again, and let the agent say
                 # where it got to (or hand the rest to a worker) in one short turn
-                log("note", f"turn cut off after {self.turn_budget_s:.0f} s")
+                log("note", f"turn cut off after {budget:.0f} s")
                 await self._stop(client, drain)
                 out["reply"] = None
-                await client.query(TIME_UP)
+                await client.query(GUEST_TIME_UP if guest else TIME_UP)
                 try:
                     await asyncio.wait_for(drain(client), WRAP_UP_S)
                 except asyncio.TimeoutError:

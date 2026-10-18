@@ -381,6 +381,7 @@ class _FakeClient:
     """Stands in for ClaudeSDKClient: the first request hangs (long work); later ones answer."""
 
     def __init__(self, options):
+        self.options = options
         self.queries, self.interrupted = [], 0
 
     async def __aenter__(self):
@@ -458,3 +459,50 @@ def test_busy_note_once_per_busy_spell(monkeypatch):
         await asyncio.gather(m.on_message(msg()), m.on_message(msg()), first)
     asyncio.run(go())
     assert posted.count(S.BUSY) == 1 and posted.count("done") == 3
+
+
+# ── guests: other members talking to someone's dedicated manager ─────────────
+
+def test_guest_mode(monkeypatch):
+    from agentic_lab.manager import brain as B
+    from agentic_lab.manager import service as S
+    lab = registry.load(EXAMPLE)
+    lab.humans["bob"] = {"name": "Bob", "slack_user": "U-BOB"}
+    m = S.Manager.__new__(S.Manager)
+    m.lab, m.agent_id = lab, "mgr-alice"                  # dedicated to alice
+    assert m.may_use("bob") == (True, "")                 # anyone in the lab may talk...
+    assert m.is_guest("bob") and not m.is_guest("alice")  # ...but bob is a guest
+
+    clients = []
+
+    def factory(options):
+        clients.append(_FakeClient(options))
+        return clients[-1]
+    br = B.Brain("Flash", "lab", "/tmp", lambda grants: {}, turn_budget_s=300,
+                 env={"GH_TOKEN": "ghp_x", "CLAUDE_CODE_OAUTH_TOKEN": "seat"},
+                 prompt_extra="GitHub: you act as flash-bot")
+    br.client_factory = factory
+    monkeypatch.setattr(B, "GUEST_TURN_BUDGET_S", 0.2)
+    conv = SimpleNamespace(key="c", session_id=None)
+
+    def ctx(guest):
+        return SimpleNamespace(conv=conv, requester="bob" if guest else "alice", guest=guest,
+                               owner_name="Alice", guest_name="Bob",
+                               state=SimpleNamespace(save=lambda: None))
+    asyncio.run(br.turn(ctx(True), "run my training job"))
+    o = clients[-1].options
+    assert o.mcp_servers == {} and o.allowed_tools == []
+    assert {"Bash", "Read", "WebFetch"} <= set(o.disallowed_tools)
+    assert "GH_TOKEN" not in o.env and o.env["CLAUDE_CODE_OAUTH_TOKEN"] == "seat"
+    prompt = o.system_prompt["append"]
+    assert "Bob" in prompt and "guest" in prompt and "flash-bot" not in prompt
+    assert clients[-1].queries[1] == B.GUEST_TIME_UP          # 0.2 s guest limit hit
+    allowed = asyncio.run(o.can_use_tool("Bash", {"command": "ls"}, None))
+    assert allowed.behavior == "deny"
+
+    br.turn_budget_s = 0.3
+    clients.clear()
+    asyncio.run(br.turn(ctx(False), "hi"))                    # the owner: everything
+    o = clients[-1].options
+    assert "lab" in o.mcp_servers and o.env["GH_TOKEN"] == "ghp_x"
+    assert "flash-bot" in o.system_prompt["append"]

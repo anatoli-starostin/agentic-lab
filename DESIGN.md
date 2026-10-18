@@ -132,9 +132,15 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 - Its own **Slack identity** (Socket Mode). A DM is one conversation; in channels it joins
   only threads where it's mentioned or already involved, reading the thread so far on first
   mention (its first 5 messages, which often set the topic, and the last 50 before the
-  mention). Only lab members, and only those allowed to use it, are answered.
-- Attached to a human **for tokens**; **access** `dedicated` (one member) or `shared` (all
-  members, with a separate memory per member, enforced in code).
+  mention). Only lab members are answered.
+- Attached to a human **for tokens**; **access** `dedicated` (its member gets everything;
+  other members are **guests**) or `shared` (every member gets everything, with a
+  separate memory per member, enforced in code).
+- **Guests** only talk: questions, explanations, scientific discussion. In a guest's
+  conversation code removes every tool (commands, files, worker tasks, GitHub — the bot's
+  token is left out — anything outside the sandbox, memory), and turns are cut off after
+  2 minutes. Asked for real work, the manager points to the guest's own manager or a
+  shared one.
 - **Turns requests into worker tasks**, follows them and reports back (progress, plots,
   summaries) in the conversation that asked.
 - **Relays approvals**: it can show what a task waits for and add a note to the request; it
@@ -518,6 +524,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-18 | **Managers run on any host**: the secretary host, a VM of their own, or a GPU VM next to their workers. |
 | 2026-10-18 | **Managers stay reachable**: a work-size rule, a per-turn time limit (`turn_budget_min`, default 5), and a "still working" reply. |
 | 2026-10-18 | **A worker's event log goes only to the secretary's monitoring token.** |
+| 2026-10-18 | **Anyone in the lab may talk to any manager.** On a dedicated manager, other members are guests: conversation only, no tools, no work, no memory, 2-minute turns. |
 | 2026-10-18 | **Approval requests have no timeout by default** (a member may set `timeout_s`); a request the agent stops waiting for is withdrawn. |
 
 ## 14. Open questions

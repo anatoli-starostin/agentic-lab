@@ -338,8 +338,8 @@ sandbox violations that explain it.
     so far on first mention: its first 5 messages (they often set the topic) and the
     last 50 before the mention. In such a thread it sees every message and
     may stay silent. Attachments (up to 50 MB) are downloaded into its working folder.
-  \item Every message is checked against \code{lab.yaml}: only lab members, and only those
-    who may use this manager.
+  \item Every message is checked against \code{lab.yaml}: only lab members are answered. On
+    a dedicated manager, other members are \emph{guests} (\S6.3).
   \item \textbf{Tools}: list workers, submit and follow tasks, pending approvals and notes
     on them, post files, fetch a worker's file into the conversation, send a file to a
     worker, \code{recall} and \code{remember}.
@@ -367,15 +367,24 @@ Every manager and worker has an \code{access} setting in \code{lab.yaml}: \code{
  & \code{access: dedicated} (default) & \code{access: shared} \\
 \midrule
 \textbf{Manager} (members talk to it) &
-  Only its own member (the one in \code{human:}) can talk to it; anyone else is told it's
-  dedicated to that member. &
-  Every member of the lab can talk to it. It keeps a separate memory for each member. \\
+  Its own member (the one in \code{human:}) gets everything. Every other member can talk
+  to it as a \emph{guest}: questions, explanations, scientific discussion, but no work
+  (see below). &
+  Every member of the lab gets everything. It keeps a separate memory for each member. \\
 \addlinespace
 \textbf{Worker} (managers give it tasks) &
   Only the managers of its own member can give it tasks. &
   Every manager in the lab can give it tasks; they queue first come, first served. \\
 \bottomrule
 \end{tabularx}
+
+\medskip
+\textbf{Guests} of a dedicated manager only talk with it. In a guest's conversation, code
+(not the prompt) takes away every tool: no commands or files, no worker tasks, no GitHub
+(its bot's token is left out), nothing outside the sandbox, and no memory (the member's
+private notes stay private). A guest's turns are cut off after 2 minutes. Asked for real
+work, the manager says whose manager it is and points to the guest's own manager or a
+shared one.
 
 \medskip
 \code{access} only says who may use an agent. It doesn't change whose Claude seat the agent
