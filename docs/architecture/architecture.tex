@@ -119,51 +119,97 @@ mechanisms that bind them together, and the conventions the framework relies on.
 %=====================================================================
 \section{The big picture}
 
-\begin{figure}[h]
+\begin{figure}[!htbp]
 \centering
-\begin{tikzpicture}[scale=0.93, transform shape,
-  box/.style={draw, rounded corners=3pt, align=center, font=\small, inner sep=4pt,
-              minimum height=9mm, minimum width=22mm},
-  host/.style={draw, dashed, rounded corners=6pt, inner sep=6pt},
-  lbl/.style={font=\scriptsize\itshape, inner sep=1.5pt, fill=white},
+\begin{tikzpicture}[scale=0.88, transform shape,
+  box/.style={draw, rounded corners=3pt, align=center, font=\small, inner sep=3pt,
+              minimum height=9mm, minimum width=21mm},
+  host/.style={draw, dashed, rounded corners=6pt, inner sep=5pt},
+  hl/.style={font=\scriptsize\itshape},
+  n/.style={circle, draw=black, solid, fill=white, text=black, inner sep=0.6pt,
+            font=\scriptsize\bfseries},
   ar/.style={-{Stealth[length=2mm]}, thick},
   da/.style={{Stealth[length=2mm]}-{Stealth[length=2mm]}, thick},
-  dt/.style={-{Stealth[length=2mm]}, dotted, thick}
+  mon/.style={-{Stealth[length=2mm]}, thick, gray, dashed},
+  dt/.style={-{Stealth[length=2mm]}, thick, dotted}
 ]
-% secretary host
-\node[box, fill=agt] (sec) at (0,0) {Secretary\\\scriptsize web UI :8774};
-\node[box, fill=svc] (bro) at (2.9,0) {Broker\\\scriptsize approvals :8772};
-\node[box, fill=svc] (int) at (5.8,0) {Intake\\\scriptsize secrets :8771};
-\node[box, fill=agt] (mgr) at (1.45,-1.6) {Managers\\\scriptsize Slack team-mates};
-\node[host, fit=(sec)(bro)(int)(mgr), label={[font=\scriptsize\itshape]above:secretary host (always on)}] (sh) {};
-% GPU hosts
-\node[box, fill=agt] (w1) at (0.4,-4.6) {Worker\\\scriptsize MCP :8770};
-\node[host, fit=(w1), label={[font=\scriptsize\itshape]below:GPU VM}] (g1) {};
-\node[box, fill=agt] (w2) at (4.4,-4.6) {Worker\\\scriptsize MCP :8770};
-\node[host, fit=(w2), label={[font=\scriptsize\itshape]below:GPU VM}] (g2) {};
-% outside
-\node[box, fill=hum] (hum) at (-3.9,1.9) {Members\\\scriptsize and admins};
-\node[box, fill=ext] (slack) at (-3.9,0) {Slack\\\scriptsize DMs, threads};
-\node[box, fill=ext] (claude) at (-3.9,-3.2) {Claude\\\scriptsize members' seats};
-\node[box, fill=ext] (gh) at (10.1,0.9) {GitHub\\\scriptsize config repo,\\\scriptsize project repos};
-\node[box, fill=ext] (neb) at (10.1,-1.6) {Nebius\\\scriptsize VM power};
-% edges
-\draw[da] (hum) -- (slack);
-\draw[da] (slack) -- node[lbl, above]{chat, approvals} (sh.west |- slack);
-\draw[ar] (mgr) -- node[lbl, left, pos=0.45]{tasks} (w1);
-\draw[ar] (mgr) -- node[lbl, right, pos=0.45]{tasks (MCP)} (w2);
-\draw[ar] (w2.north) -- node[lbl, right, pos=0.35]{permission requests} (w2.north |- sh.south);
-\draw[ar] (sh.east |- gh) -- node[lbl, above]{PRs, deploys} (gh);
-\draw[ar] (sh.east |- neb) -- node[lbl, above]{start, stop} (neb);
-\draw[dt] (g2.east) -- (11.75,-4.6) |- node[lbl, right, pos=0.25]{bots} (gh.east);
-\draw[dt] (claude) -- (sh.south west);
-\draw[dt] (claude) -- (g1.west);
+% ---- secretary host
+\node[box, fill=agt] (sec) at (0,2) {Secretary\\\scriptsize + web UI :8774};
+\node[box, fill=svc] (bro) at (2.9,2) {Broker\\\scriptsize :8772};
+\node[box, fill=svc] (int) at (5.8,2) {Intake\\\scriptsize :8771};
+\node[host, fit=(sec)(bro)(int), label={[hl, anchor=north east]south east:secretary host}] (sh) {};
+% ---- managers (on their own host, or on the secretary host)
+\node[box, fill=agt] (mgr) at (1.45,-0.9) {Managers\\\scriptsize status :8773\\[-1pt]
+      \tiny\itshape own host or the secretary host};
+\node[host, fit=(mgr)] (mh) {};
+% ---- GPU VMs
+\node[box, fill=agt] (w1) at (-0.7,-3.9) {Worker\\\scriptsize MCP :8770};
+\node[host, fit=(w1), label={[hl]below:GPU VM}] (g1) {};
+\node[box, fill=agt] (w2) at (3.6,-3.9) {Worker\\\scriptsize MCP :8770};
+\node[host, fit=(w2), label={[hl]below:GPU VM}] (g2) {};
+% ---- people and outside services
+\node[box, fill=hum] (hum) at (-4.6,3.5) {Members\\\scriptsize Slack, browser};
+\node[box, fill=ext] (slack) at (-4.6,0.6) {Slack\\\scriptsize one app per agent,\\\scriptsize + Lab Approvals};
+\node[box, fill=ext] (gh) at (9.7,2.4) {GitHub\\\scriptsize config repo,\\\scriptsize project repos};
+\node[box, fill=ext] (neb) at (9.7,0.0) {Nebius API\\\scriptsize starts, stops\\\scriptsize GPU VMs};
+\node[box, fill=ext] (cl) at (1.45,-6.6) {Claude API\\\scriptsize members' seats};
+% ---- 1 members <-> Slack
+\draw[da] (hum) -- node[n]{1} (slack);
+% ---- 2 Slack <-> the apps (they connect out: Socket Mode)
+\draw[da] (slack.east) -- (-2.6,0.6) |- (sh.west);
+\draw[ar] (-2.6,0.6) |- (mh.west);
+\node[n] at (-2.6,0.6) {2};
+% ---- 3 members' browsers and laptops: web UI, intake
+\draw[ar] (hum.east) -- (5.8,3.5) -- node[n, pos=0.4]{3} (int.north);
+\draw[ar] (0,3.5) -- (sec.north);
+% ---- 4 tasks and files
+\draw[ar] (mh.south) ++(-0.6,0) -- node[n]{4} (w1.north);
+\draw[ar] (mh.south) ++(0.6,0) -- node[n]{4} (w2.north);
+% ---- 5 permission requests to the broker
+\draw[ar] (mh.north east) -- node[n, pos=0.4]{5} (bro.south);
+\draw[ar] (g2.north east) -- (g2.north east |- 0,0.6) -- node[n, pos=0.5]{5} (bro.south east);
+% ---- 6 monitoring (read-only) and deploys (SSH)
+\draw[mon] (sec.south) -- node[n, pos=0.45]{6} (mh.north west);
+\draw[mon] (sec.south west) -- node[n, pos=0.75]{6} (g1.north west);
+% ---- 7 VM power, 8 config repo
+\draw[ar] (sh.south east) -- node[n]{7} (neb.west);
+\draw[da] (sh.east |- gh) -- node[n]{8} (gh);
+% ---- 9 bots on project repos
+\draw[dt] (g2.east) -- (11.5,-3.9) |- (gh.east);
+\draw[dt] (mh.east) -- (11.5,-0.9);
+\node[n] at (11.5,-2.4) {9};
+% ---- 10 every agent calls Claude
+\draw[dt] (g1.south) |- (cl.west);
+\draw[dt] (g2.south) |- (cl.east);
+\draw[dt] (mh.south) -- node[n, pos=0.82]{10} (cl.north);
 \end{tikzpicture}
-\caption{Components and their main conversations. Between lab hosts, everything runs over
-the tailnet. Slack, Claude, GitHub and Nebius are reached over the internet by the
-services; sandboxed agent commands reach none of them, except GitHub for an agent with a
-bot (\S\ref{sec:github}). Every agent calls Claude on a member's seat (dotted).}
+
+
+\caption{Components and connections. Dashed boxes are hosts; all traffic between lab hosts
+runs over the tailnet. Slack, GitHub, Nebius and Claude are reached over the internet by the
+services, never by sandboxed agent commands, except GitHub for an agent with a bot (9).}
 \end{figure}
+
+\noindent\textbf{The numbered connections in Figure~1:}\par
+\small
+\begin{tabularx}{\linewidth}{rL}
+1 & Members talk to agents and answer approvals in Slack (DMs, threads, buttons). \\
+2 & Each Slack-facing agent has its own Slack app (the secretary, every manager), the broker
+    has \emph{Lab Approvals}; all connect \emph{out} to Slack (Socket Mode, no public URL). \\
+3 & Over the tailnet: members' browsers open the web UI (served by the secretary); their
+    laptops hand secrets to the intake (one-time links and codes). \\
+4 & Managers give workers tasks and exchange files with them (MCP, a token per pair). \\
+5 & Every worker and every manager sends its permission requests to the broker, which asks
+    the human the action is for (2, 1). \\
+6 & The secretary monitors workers (MCP, read-only token), managers (status endpoint) and the
+    broker; \code{lab apply}/\code{apply-main} deploy from this host to every host over SSH. \\
+7 & The secretary starts and stops the GPU VMs through the Nebius API. \\
+8 & Deploys fetch the config repo's \code{main}; the secretary pushes branches for review. \\
+9 & Managers and workers with a GitHub bot reach github.com from their sandboxes. \\
+10 & Every agent (the secretary too) runs Claude on its member's seat. \\
+\end{tabularx}
+\normalsize
+
 
 A typical piece of work:
 \begin{enumerate}
