@@ -54,3 +54,88 @@ def png(name, size=SIZE):
             + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 2, 0, 0, 0))
             + chunk(b"IDAT", zlib.compress(b"".join(rows), 9))
             + chunk(b"IEND", b""))
+
+
+# ── drawn by Claude ──────────────────────────────────────────────────────────
+# Claude can't output pixels, but it draws well in SVG: one request for an icon inspired by
+# the agent's name and role, checked (self-contained, nothing external or active), then
+# converted to a PNG with rsvg-convert. Any failure falls back to the pattern above.
+
+PROMPT = """Draw an app icon as one self-contained SVG for an AI agent named "{name}", {role} \
+in a scientific lab. viewBox 0 0 512 512; a solid rounded-square background in a colour \
+close to {colour}; one bold, recognizable motif inspired by the name; flat modern style; \
+no text or letters; no external references, images, scripts or fonts. Output ONLY the SVG \
+code."""
+UNSAFE = ("<script", "<image", "<foreignobject", "href=\"http", "href='http", "url(http",
+          "javascript:", "@import", "<!entity", "<!doctype")
+ROLES = {"manager": "a manager agent, a team-mate members talk to in Slack",
+         "secretary": "the lab's secretary agent, who keeps the lab running",
+         "worker": "a worker agent that runs experiments on a GPU",
+         "approvals": "the lab's approvals app, which asks humans to approve actions"}
+
+
+class IconError(RuntimeError):
+    pass
+
+
+def background_hint(name):
+    """A background colour of the name's own, so icons don't all come out alike."""
+    digest = hashlib.sha256(name.strip().lower().encode()).digest()
+    hue = int.from_bytes(digest[9:13], "big") / 2**32
+    r, g, b = colorsys.hls_to_rgb(hue, 0.38, 0.55)
+    return "#%02x%02x%02x" % (int(r * 255), int(g * 255), int(b * 255))
+
+
+def clean_svg(text):
+    """The SVG in Claude's answer, if it's self-contained; else IconError."""
+    start, end = text.find("<svg"), text.rfind("</svg>")
+    if start < 0 or end < start:
+        raise IconError("no SVG in the answer")
+    svg = text[start:end + len("</svg>")]
+    low = svg.lower()
+    bad = [u for u in UNSAFE if u in low]
+    if bad:
+        raise IconError(f"the SVG refers to something outside itself ({bad[0]})")
+    if len(svg) > 200_000:
+        raise IconError("the SVG is too large")
+    return svg
+
+
+def rasterize(svg, size=SIZE):
+    import shutil
+    import subprocess
+    exe = shutil.which("rsvg-convert")
+    if exe is None:
+        raise IconError("rsvg-convert isn't installed (apt install librsvg2-bin)")
+    r = subprocess.run([exe, "-w", str(size), "-h", str(size), "-f", "png"],
+                       input=svg.encode(), capture_output=True, timeout=30)
+    if r.returncode or not r.stdout.startswith(b"\x89PNG"):
+        raise IconError(f"couldn't render the SVG: {r.stderr.decode()[-200:]}")
+    return r.stdout
+
+
+async def claude_svg(name, role="", env=None, model="sonnet", cwd=None):
+    """Ask Claude for the SVG (one turn, no tools)."""
+    from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ResultMessage,
+                                  TextBlock, query)
+    opts = ClaudeAgentOptions(
+        allowed_tools=[], max_turns=1, setting_sources=[], model=model, env=env or {},
+        cwd=cwd, system_prompt="You draw app icons. You answer with SVG code only.")
+    prompt = PROMPT.format(name=name, role=ROLES.get(role, role or "an agent"),
+                           colour=background_hint(name))
+    text = ""
+    async for msg in query(prompt=prompt, options=opts):
+        if isinstance(msg, AssistantMessage):
+            text += "".join(b.text for b in msg.content if isinstance(b, TextBlock))
+        elif isinstance(msg, ResultMessage) and msg.result and "<svg" in msg.result:
+            text = msg.result
+    return clean_svg(text)
+
+
+async def drawn(name, role="", env=None, draw=None):
+    """(PNG bytes, how it was made): drawn by Claude, or the pattern if that fails."""
+    try:
+        svg = await (draw or claude_svg)(name, role, env=env)
+        return rasterize(svg), "drawn by Claude"
+    except Exception as e:
+        return png(name), f"a pattern (Claude's drawing failed: {str(e)[:120]})"

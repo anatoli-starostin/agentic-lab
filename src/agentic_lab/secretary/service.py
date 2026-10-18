@@ -85,6 +85,8 @@ class Secretary:
                                                                 redeploy=redeploy),
             request_slack_app=lambda agent: self.request_slack_app(agent, asked_by=human,
                                                                    conv=conv),
+            redraw_app_icon=lambda agent: self.redraw_app_icon(agent, asked_by=human,
+                                                               conv=conv),
             slack_verify=lambda owner: self.slack_verify(owner, asked_by=human),
             request_github_token=lambda account: self.request_github_token(
                 account, asked_by=human, conv=conv))
@@ -163,16 +165,9 @@ class Secretary:
         await self.slack.post(conv.channel, conv.thread_ts, steps)
         await self.slack.post(conv.channel, conv.thread_ts,
                               f"```{M.render(manifest)}```")
-        try:                            # its icon, generated from its name
-            import tempfile
-            from ..icon import png
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                f.write(png(name))
-            await self.slack.upload(conv.channel, conv.thread_ts, f.name,
-                                    f"{name}-icon.png", "The app icon (step 6).")
-            os.unlink(f.name)
-        except Exception:
-            log.exception("posting the app icon failed")
+        role = ("approvals" if owner == "service:broker"
+                else self.lab.agents.get(agent, {}).get("role", ""))
+        await self.post_icon(name, role, conv, "The app icon (step 6)")
         return (f"posted the steps, the manifest and the one-time link for {name}'s app. "
                 "When the admin says done: check_slack_app, then offer_deploy with redeploy.")
 
@@ -204,6 +199,37 @@ class Secretary:
             "code owners (people only), and don't let bots bypass it."))
         return (f"posted how to make {account}'s token and the one-time link. Then: the "
                 "expiry date into lab.yaml (a PR), and offer_deploy with redeploy.")
+
+    async def post_icon(self, name, role, conv, comment):
+        """Draw an app icon (Claude, or a pattern if that fails) and post it in `conv`."""
+        try:
+            import tempfile
+            from ..icon import drawn
+            data, how = await drawn(name, role, env=getattr(self.brain, "env", None))
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                f.write(data)
+            await self.slack.upload(conv.channel, conv.thread_ts, f.name,
+                                    f"{name}-icon.png", f"{comment}: {how}. Want another? "
+                                    "Just ask.")
+            os.unlink(f.name)
+            return f"posted {name}'s icon ({how})"
+        except Exception as e:
+            log.exception("posting the app icon failed")
+            return f"couldn't post the icon: {e}"
+
+    async def redraw_app_icon(self, agent, asked_by=None, conv=None):
+        refused = self._admin_only(asked_by, "set up Slack apps")
+        if refused:
+            return refused
+        if self.slack is None or conv is None:
+            return "this needs Slack; from the console: lab slack-icon <agent> --claude"
+        if agent in ("broker", "approvals"):
+            name, role = "Lab Approvals", "approvals"
+        elif agent in self.lab.agents:
+            name, role = self.lab.display_name(agent), self.lab.agents[agent].get("role", "")
+        else:
+            return f"no agent {agent!r} in the deployed lab.yaml"
+        return await self.post_icon(name, role, conv, "Another icon")
 
     async def offer_apply(self, asked_by=None, conv=None, redeploy=False):
         """Post a 'Deploy' button for main's current commit. Nothing is deployed until an

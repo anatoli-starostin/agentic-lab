@@ -433,10 +433,18 @@ def cmd_slack_icon(args):
     else:
         sys.exit(f"lab slack-icon: no agent {args.agent!r} (or 'approvals')")
     out = args.output or f"{args.agent}-icon.png"
+    if args.claude:
+        import asyncio
+
+        from .icon import drawn
+        role = "approvals" if name == "Lab Approvals" else lab.agents[args.agent].get("role")
+        data, how = asyncio.run(drawn(name, role))
+    else:
+        data, how = png(name), "a pattern from the name"
     with open(out, "wb") as f:
-        f.write(png(name))
-    print(f"wrote {out}: {name}'s icon (512x512). In the app's settings: Basic Information "
-          "→ Display Information → App icon.")
+        f.write(data)
+    print(f"wrote {out}: {name}'s icon, {how} (512x512). In the app's settings: Basic "
+          "Information → Display Information → App icon.")
     return 0
 
 
@@ -639,6 +647,8 @@ def main(argv=None):
                         "from its name")
     si.add_argument("agent", help="a manager, the secretary, or 'approvals'")
     si.add_argument("-o", "--output", help="the PNG to write (default: <agent>-icon.png)")
+    si.add_argument("--claude", action="store_true",
+                    help="have Claude draw it (falls back to the pattern if that fails)")
     si.set_defaults(fn=cmd_slack_icon)
 
     pr = sub.add_parser("pr-link", help="the link to open a pull request for the config "
