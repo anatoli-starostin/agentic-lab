@@ -358,15 +358,29 @@ sandbox violations that explain it.
 \end{itemize}
 
 \subsection{Who may use what}
-\begin{tabularx}{\linewidth}{lL}
+Every manager and worker has an \code{access} setting in \code{lab.yaml}: \code{dedicated}
+(the default) or \code{shared}. ``Using'' means something different for each role:
+
+\medskip
+\begin{tabularx}{\linewidth}{lLL}
 \toprule
-\code{access} & Meaning \\
+ & \code{access: dedicated} (default) & \code{access: shared} \\
 \midrule
-\code{dedicated} & Only the agent's own member (\code{human:}) may use it; a dedicated worker
-  takes tasks only from its member's managers. \\
-\code{shared} & Every member may use it; a shared manager keeps per-member memory. \\
+\textbf{Manager} (members talk to it) &
+  Only its own member (the one in \code{human:}) can talk to it; anyone else is told it's
+  dedicated to that member. &
+  Every member of the lab can talk to it. It keeps a separate memory for each member. \\
+\addlinespace
+\textbf{Worker} (managers give it tasks) &
+  Only the managers of its own member can give it tasks. &
+  Every manager in the lab can give it tasks; they queue first come, first served. \\
 \bottomrule
 \end{tabularx}
+
+\medskip
+\code{access} only says who may use an agent. It doesn't change whose Claude seat the agent
+runs on: that's always its \code{human:}, whoever asked. A shared worker owned by Alice runs
+Bob's task on Alice's seat. Approvals still go to the member the work is for (Bob).
 
 %=====================================================================
 \section{The secretary}
