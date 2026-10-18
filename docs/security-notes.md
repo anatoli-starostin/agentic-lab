@@ -82,6 +82,12 @@ What it took:
   git and `gh` work). Safety comes from GitHub: private repositories, a fine-grained token
   limited to the lab's repos, and branch protection (human code owners, no bypass for
   bots), so a bot can't approve or merge.
+- **Guests run on the owner's seat**: a member talking to someone else's dedicated manager
+  uses that manager's member's Claude seat. Guests get no tools and 2-minute turns (enforced
+  in code), so it stays small.
+- **Anyone with a login on a lab machine can keep it on** (`~/.lab-keep-awake`), which
+  costs money while it runs. Visible to everyone in the web UI; an admin can still power it
+  off (`force_off`).
 - **`sudo` on a lab host is admin power**: it reads every agent's files and logs there.
   Give members SSH without `sudo`.
 - **Admins' devices are the keys to the logs**: the web UI trusts Tailscale's identity of

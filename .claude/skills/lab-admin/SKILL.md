@@ -124,6 +124,11 @@ asking before each one. The whole lab, one host, or one agent.
   `sandbox.bwrapPath` at `/usr/local/libexec/agentic-lab/bwrap-gpu`.
 - **`cuInit` returns 304 inside the sandbox:** the agent's settings lack
   `allowAllUnixSockets` (set automatically for agents with `gpu: true`).
+- **A machine wasn't stopped when idle** (or the secretary refuses to power it off): it's
+  *busy*. The secretary says why: a worker task running, queued or awaiting approval; a
+  process on a GPU (anyone's); a GPU above 0% in its last 5 readings (~75 s); someone's
+  `~/.lab-keep-awake` (the web UI shows who); or a manager runs there. Ask the person, or
+  an admin powers it off anyway (`force_off`, after confirming).
 - **A host can't be reached from the sandbox:** use its tailnet name, not its IP; raw IPs
   are refused.
 - Known limits and what was verified: `docs/security-notes.md`.

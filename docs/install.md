@@ -202,6 +202,10 @@ deployed, and the secretary checks in code that the person asking is an admin.
   (`lab apply-main`, its one sudo command). The result is posted back in the DM.
 - **Add a member:** their name and Slack member ID → PR → merge → deploy; the secretary
   then DMs them their Claude-token command.
+- **Who talks to which manager:** every member may talk to any manager. A *dedicated*
+  manager (`access: dedicated`, the default) does real work only for its own member;
+  others are guests there: questions and discussion, no tasks, no tools. A *shared* manager
+  works for everyone.
 - **Add a manager:** its name → PR → merge → deploy (its service waits for its Slack
   app) → the secretary posts the app's manifest, the clicks and a one-time link for its
   tokens → you create the app (~3 minutes, in the browser) → "done" → it checks the
