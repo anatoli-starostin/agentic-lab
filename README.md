@@ -5,17 +5,21 @@ A framework for running a scientific lab as a team of **humans and AI agents**:
 - **Workers** run experiments on cloud GPU VMs inside a sandbox, without prompts.
 - **Managers** are your team members in Slack. They turn requests into worker tasks and
   relay every approval request to a human. They never approve anything themselves.
-- A light **secretary** keeps the infrastructure alive: VM power, agent health, token
-  expiry, and the lab's web UI.
+- A **secretary** keeps the lab running: VM power and idle stops, Claude usage per
+  account, token expiry, the lab's web UI; and admins administer the lab through it in
+  Slack (it proposes changes as pull requests; only an admin's click deploys).
+- The lab is described by one `lab.yaml` in the lab's **private config repository**; only
+  what's merged to its `main` is ever deployed.
 
 Anything that crosses the sandbox boundary needs a real human's yes, and the code enforces
 that, not a prompt.
 
-Status: **v0, working end to end** on a GPU VM with a real Slack workspace: workers
-running experiments in Claude Code's built-in sandbox, approvals and grants in Slack DMs,
-managers and a secretary in Slack, VM power, a web UI, and a guided setup. See
-[DESIGN.md](DESIGN.md), [docs/install.md](docs/install.md) and
-[docs/security-notes.md](docs/security-notes.md).
+Status: **working end to end**, rehearsed on a GPU VM with a real Slack workspace. Read:
+- [docs/architecture/architecture.pdf](docs/architecture/architecture.pdf): roles, logic,
+  conventions, with a diagram;
+- [DESIGN.md](DESIGN.md): the design, its reasoning and the decisions log;
+- [docs/install.md](docs/install.md), [docs/uninstall.md](docs/uninstall.md),
+  [docs/security-notes.md](docs/security-notes.md).
 
 ## Install
 
@@ -47,9 +51,13 @@ src/agentic_lab/
   secretary/  lab state, web UI, VM power, its Slack chat
   secrets/    the intake: one-time codes and forms (secrets never pass through chat)
   slackio.py  what an agent sees in Slack, and how it answers
-  apply.py    `lab plan` / `lab apply`;  doctor.py, init.py, debug.py, nebius_connect.py
+  apply.py    `lab plan` / `lab apply`; configrepo.py (deploy only `main`), lock.py
+              (framework pin), selfadmin.py (administering from Slack, `lab apply-main`)
+  github.py   agents' GitHub bot identities
+  doctor.py, init.py, debug.py, nebius_connect.py, slack_verify.py, slack_manifest.py
 client/       lab-member.py: the one file a member ever runs
 deploy/       host setup (sandbox, GPU, AppArmor), systemd units
+docs/         install, uninstall, security notes, architecture (PDF + LaTeX)
 examples/     lab.yaml examples (minimal, single VM)
 ```
 

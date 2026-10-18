@@ -29,7 +29,6 @@ agents:
     role: secretary
     human: alice
     host: dev-vm
-    model: claude-haiku-5-5
   mgr-alice:
     role: manager
     human: alice

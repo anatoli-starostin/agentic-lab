@@ -1,201 +1,184 @@
 # Agentic Lab — design
 
 A framework that lets a team of **humans and AI agents run a scientific lab together**:
-agents run experiments on GPU machines, coordinate through manager agents that speak for
-them in Slack, and a light secretary agent keeps the infrastructure alive. Humans stay in
-control of anything that crosses a boundary, through a permission channel that **agents
-cannot spoof**.
+members talk to **manager** agents in Slack, managers delegate work to **worker** agents on
+GPU machines, and a **secretary** agent keeps the lab running. Humans stay in control of
+anything that crosses a boundary, through a permission channel that **agents cannot spoof**.
 
-> Status: draft for review (2026-10-17). Nothing here is implemented yet; most pieces exist
-> as prototypes in the spiky project and will be extracted and generalised.
+> Status (2026-10-18): implemented and on `main`; rehearsed end to end on a single GPU VM.
+> `docs/architecture/architecture.pdf` is the illustrated reference; this file is the
+> design with its reasoning and the decisions log (§13). Section numbers are stable: the
+> code refers to them.
 
 This document is deliberately free of hostnames, tokens and account ids. Those belong in a
-deployment's own `lab.yaml` and secret files, which never enter this repo.
+deployment's own `lab.yaml` (in its private config repository) and secret files.
 
 ---
 
 ## 1. Goals and non-goals
 
 **Goals**
-- Three agent roles (**secretary**, **manager**, **worker**) with clear jobs, budgets and guardrails.
-- **Frictionless inside, approval outside.** A worker does nearly all its work in a sandbox
+- Three agent roles (**secretary**, **manager**, **worker**) with clear jobs and guardrails.
+- **Frictionless inside, approval outside.** An agent does nearly all its work in a sandbox
   with no prompts. Anything that crosses the sandbox boundary needs a real human's yes.
-- **Everything is visible.** The lab is built for small teams where everyone sees what's
-  going on. A shared **web UI** (§9) shows every agent, task, approval, guardrail change and
-  dollar spent. Transparency replaces spend limits and quotas.
-- **Humans are never bypassed.** Agents relay approval requests; they never answer them.
-  **Code enforces this, not prompts.**
-- **One description of the lab.** A single registry (`lab.yaml`) lists the humans, agents,
-  hosts, channels and credentials (with expiry dates), and every component reads it.
-- **Close to production from day one.** Workers and managers run on cloud VMs. Only the
-  secretary runs on an always-on on-prem box.
-- **Easy to set up and maintain, guided by Claude.** A single Claude Code on the secretary
-  host walks the human admin through the first setup, and afterwards helps with every
-  maintenance task: adding or removing agents, hosts and humans, rotating tokens,
-  diagnosing problems (§11a).
-- **Portable.** No hard-coded hosts or providers. Nebius, Slack and Tailscale come
-  first, behind small interfaces. Project tools (experiment trackers, data stores...) are
+- **Everything is visible.** A shared **web UI** (§9) shows agents, tasks, approvals, grants,
+  machines and Claude usage per account. Transparency replaces spend limits and quotas.
+- **Humans are never bypassed.** Agents relay approval requests; they never answer them, and
+  they never approve or merge pull requests. **Code enforces this, not prompts.**
+- **One description of the lab.** `lab.yaml` lists the humans, agents, hosts, grants, GitHub
+  bots and expiring credentials. It lives in the lab's private config repository; only what
+  is merged to its `main` is deployed (§11a).
+- **Easy to set up and maintain.** The admin's own Claude Code guides the install; after it,
+  admins administer the lab in a Slack DM with the secretary (§11a).
+- **Portable and generic.** No hard-coded hosts, organisations or providers. Nebius, Slack
+  and Tailscale come first. Project tools (experiment trackers, data stores...) are
   extensions a lab adds, not part of the framework.
 
 **Non-goals (for now)**
 - A general multi-tenant SaaS. One lab = one deployment = one tailnet.
 - Replacing a project's own tools: code and results stay in git, experiment tracking in
   whatever the project uses.
-- **Per-token (API) billing.** In this version every agent runs on a human member's Claude
-  seat, and nothing is billed per token.
-- Agents that approve each other. There is no agent-to-agent authority over boundary crossings.
+- **Per-token (API) billing.** Every agent runs on a human member's Claude seat.
+- Agents that approve each other. There is no agent-to-agent authority over boundary
+  crossings.
 
 ---
 
 ## 2. Prerequisites
 
-- A **cloud account** with balance (Nebius first) for GPU workers and CPU manager VMs.
-- A **Slack workspace** (for teams). Each manager is its own Slack app and bot user.
-- **Tailscale.** Every host is on one tailnet. No service listens on a public interface.
-- An **always-on box** for the secretary (a small NUC or similar; no GPU needed).
-- A **Claude seat** (e.g. Team plan) for each human member. Their agents run on it.
+- A **Tailscale tailnet**: every host is on it; no lab service listens on a public interface.
+- A **Slack workspace** where the admin can create apps: one app per Slack-facing agent (the
+  secretary, each manager) plus one **Lab Approvals** app for the broker.
+- A **Claude seat** (Team or Max) for each member whose agents will run.
+- A **cloud account** (Nebius first) for GPU workers, and any VMs for managers.
+- An **always-on host** for the secretary (small, no GPU).
+- A **GitHub** account or organisation for the lab's **private config repository**, and
+  optionally bot accounts for agents (§4.4).
 
 ---
 
 ## 3. Topology
 
 ```
-                         ┌─────────────────────── Slack ───────────────────────┐
-     humans ─────────────┤  channels / threads        DMs (permission channel) │
-                         └──────────▲───────────────────────────▲──────────────┘
-                                    │                           │
-                    ┌───────────────┴───────────┐   ┌───────────┴───────────┐
-                    │ MANAGER VM (cloud, CPU)   │   │ SECRETARY (on-prem)   │
-                    │  manager agent (LLM)      │   │  scheduler + checks   │
-                    │  approval broker (code) ◄─┼─┐ │  dashboard (html)     │
-                    └──────┬────────────────────┘ │ │  chat (small model)   │
-                  MCP over │ tailnet              │ │  cloud power keys     │
-            ┌──────────────┼────────────────┐     │ └───┬───────────┬───────┘
-            ▼              ▼                ▼     │     │ power,    │ health
-     ┌────────────┐ ┌────────────┐  ┌────────────┐│     │ restart   │ probes
-     │ WORKER VM  │ │ WORKER VM  │  │ WORKER VM  ││     ▼           ▼
-     │ GPU, sbx   │ │ GPU, sbx   │  │ GPU, sbx   │└── approval requests
-     │ worker svc │ │ worker svc │  │ worker svc │    (worker → broker)
-     └────────────┘ └────────────┘  └────────────┘
-                   all hosts on one tailnet · git
+                 ┌──────────────────────── Slack ─────────────────────────┐
+   members ──────┤ one app per Slack-facing agent  +  Lab Approvals app    │
+   (browsers:    └────▲──────────────────────▲──────────────────────▲─────┘
+    web UI,           │ (all connect out: Socket Mode)              │
+    intake)  ┌────────┴──────────── SECRETARY HOST (always on) ─────┴──────┐
+       ─────►│ secretary + web UI :8774   broker :8772   intake :8771       │──► Nebius API
+             │ deploys (lab apply / apply-main, over SSH)                   │──► GitHub (config repo)
+             └──▲───────────▲───────────────────────────────────▲───────────┘
+   monitoring   │           │ permission requests (every agent) │
+   (read-only)  │   ┌───────┴────────────┐                      │
+                │   │ MANAGERS (any host)│                      │
+                │   │ status :8773       │                      │
+                │   └───────┬────────────┘                      │
+                │           │ tasks, files (MCP over the tailnet)
+            ┌───┴───────────▼──┐                     ┌──────────┴─────┐
+            │ GPU VM: worker   │        ...          │ GPU VM: worker │
+            │ MCP :8770        │                     │ MCP :8770      │
+            └──────────────────┘                     └────────────────┘
+       every agent → Claude (its member's seat) · agents with a bot → GitHub
 ```
 
-- **Secretary**: always-on, on-prem, holds the cloud power keys. One per lab.
-- **Managers**: **one shared cloud CPU VM** for all managers, each manager under its own Unix
-  user (§10).
-  It may be preemptible; the secretary restarts it.
-- **Workers**: cloud GPU VMs, powered on demand. One worker agent per VM.
+- **Secretary host**: always on (on-prem or a small VM). Runs the secretary, the broker,
+  the intake and the web UI; deploys run from here.
+- **Managers**: on any host — the secretary host, a VM of their own, or a GPU VM next to
+  their workers (`host:` per manager).
+- **Workers**: GPU VMs, `on_demand` (stopped when idle) or `always_on`.
+- Several agents on one host each have their own Unix user (§10).
 
 ---
 
 ## 4. Roles
 
-### 4.1 Secretary — "keeps the lights on"
-
-Cheap and always on. **Mostly deterministic code. The LLM only handles conversation.**
+### 4.1 Secretary — "keeps the lab running"
 
 | Does | Doesn't |
 |---|---|
-| Power VMs on and off; report what's running and what it costs | Run research or design experiments |
-| Host the lab **web UI** (§9) | Enforce spend limits (there are none; spend is visible to all) |
-| Check that agent services came back after a VM restart, and restart them if not | Approve anything for anyone |
-| Check each credential's **expiry date** in `lab.yaml` and warn ahead of time | Read secret *values* (it only needs expiry dates, plus its own cloud key) |
-| Restart preempted manager VMs | |
-| Answer simple analytical questions: "did exp042 finish?", "compare tasks A and B" | |
-| Politely redirect research tasks to a manager | |
+| Collect the lab's state every 15 s; serve the **web UI** (§9) and a Slack Home tab | Research or experiments (it points to the member's manager) |
+| Power cloud VMs on and off; **stop idle ones** | Approve anything for anyone |
+| Show Claude usage per account; warn about expiring tokens and credentials | Read the content of secrets it doesn't need |
+| Answer questions about the lab in Slack (DMs, threads it's tagged in) | Power off its own host |
+| Administer the lab with admins: propose changes as PRs, deploy `main` (§11a) | Merge anything |
 
-- **Scheduler and checks** run as a systemd service and use no LLM tokens. Each check is a
-  small plugin (`vm_state`, `agent_health`, `token_expiry`, `cost_burn`, `disk`) that writes
-  into one `state.json`.
-- **Web UI**: the secretary hosts it (§9).
-- **Chat**: a small model (Haiku-class) with **read-only** tools over `state.json` and
-  `lab.yaml`, plus the power tools. Any team member may power VMs on, or off when idle,
-  without an approval (a busy machine: admins only). There are no spend limits. Every power action is logged and shown in
-  the web UI with who asked for it.
-- **Who watches the secretary?** Every manager probes the secretary's health endpoint and
-  tells its human if the secretary stops answering. The secretary runs under systemd with
-  automatic restart.
+- **State**: workers over MCP (a read-only monitoring token), managers' status endpoints,
+  the broker's overview, local systemd units, machine power states (Nebius).
+- **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
+  (a worker task running, queued or awaiting approval; any process on a GPU, anyone's; a GPU
+  at ≥10% utilization; a manager on it) may be powered off only by an admin, after
+  confirming. Idle `on_demand` hosts with only workers are stopped after `idle_stop_min`.
+- **Notices**: daily, credentials and GitHub bot tokens expiring within 14 days; lab-wide
+  notices go to an optional `announcements` channel.
+- **Chat**: a Claude agent with tools over the lab's state and the power, token-request and
+  admin tools; admin-only tools are checked in code.
 
 ### 4.2 Worker — "does the science"
 
-Tied to one GPU VM. Uses tokens freely. Humans don't talk to it directly.
-
-- Runs as a **service** that exposes the **worker MCP server** (§5) on its tailnet address.
-- Executes tasks inside the **sandbox** (§6.1), without prompts. Anything outside it becomes
-  an **approval request to the approval broker** of the manager that owns the task.
-- Like every agent, it is **attached to one human for tokens** (it runs on their seat). This
-  is separate from who may use it: access is either **dedicated** (only one human's manager
-  may submit tasks) or **shared** (any manager may). Both are set in `lab.yaml`.
-- **Watching and debugging** (the same for every agent):
-  - **Everyday:** the web UI (§9) shows each agent's recent transcript (its messages, tool
-    calls and their results) for a reasonable period. It is read from the agent's own
-    session files; nothing extra runs on the agent.
-  - **Real debugging: `lab debug <agent>`.** On the agent's host, the admin runs it: it
-    stops the agent's service and opens **the same session** in the classic Claude Code
-    console, as the agent's own user, with its own sandbox settings. The admin talks to the
-    agent directly; permission prompts appear right there at the console. On exit, the
-    service starts again (and resumes any task it was on).
-- Reports progress (and links to results) back through MCP. **There is no fixed results contract**:
-  tasks vary, so a result may be a text report, a git commit, a link, files, or any mix of
-  these. The worker follows the project's conventions.
+- Runs as a **service** exposing the **worker MCP server** (§5) on its tailnet address.
+- Executes tasks inside the **sandbox** (§6.1), without prompts. Anything outside it is a
+  **permission request to the broker** (§6.3), for the task's requester.
+- **Attached to one human for tokens** (whose seat it runs on). **Access** is separate:
+  `dedicated` (only its member's managers may submit tasks) or `shared` (any manager).
+- **No fixed results contract**: a result is a summary plus whatever artifacts fit (files,
+  commits, links). The worker follows the project's conventions.
+- **Watching and debugging** (the same for every agent): the agent's own **event log**
+  (messages, tool calls, results, approvals, task events), shown to admins in the web UI;
+  `sudo lab debug <agent>` stops its service and opens **the same session** in the classic
+  Claude Code console, as the agent's user, with its sandbox; the service restarts on exit.
 
 ### 4.3 Manager — "the team member humans talk to"
 
-On a CPU VM. Has its own **Slack identity**. Uses a moderate number of tokens.
+- Its own **Slack identity** (Socket Mode). A DM is one conversation; in channels it joins
+  only threads where it's mentioned or already involved, reading the thread so far on first
+  mention. Only lab members, and only those allowed to use it, are answered.
+- Attached to a human **for tokens**; **access** `dedicated` (one member) or `shared` (all
+  members, with a separate memory per member, enforced in code).
+- **Turns requests into worker tasks**, follows them and reports back (progress, plots,
+  summaries) in the conversation that asked.
+- **Relays approvals**: it can show what a task waits for and add a note to the request; it
+  **cannot answer** one (§6.3). Its own actions outside its sandbox are permission requests
+  for the member whose message started the work.
+- **Stays reachable**: one turn at a time *per conversation* (other threads and members are
+  never blocked); it does work itself only when it takes a few minutes; a turn longer than
+  `turn_budget_min` (default 5) is cut off, and it gets one short turn to hand the rest to a
+  worker; a message arriving meanwhile gets an immediate "still working" reply.
+- Auto-compacts its context early (17% of the window) to keep long conversations cheap.
 
-- Like workers, a manager is attached to a human **for tokens** (whose seat it runs on), and
-  has **access** of its own: `dedicated` (one member talks to it) or `shared` (several
-  members do; it may run on a general, e.g. administrative, account).
+### 4.4 GitHub for agents
 
-- **Converses** in Slack and turns human requests into worker tasks. It picks the worker,
-  writes the task, follows progress and reports results.
-- **Always has an active permission channel** with its human: their **Slack DM** in the
-  first version (§7).
-- **Relays worker approval requests** to the human and adds context (what the task is, why
-  the worker asks). It **cannot answer them** (§6.3).
-- **Guardrails**: the same model as every agent (§6.1), plus standing grants for reading
-  the web (`WebFetch`, `WebSearch`). Every **write** (GitHub, Google Drive, …) is a
-  permission request to its human. Its working folder is a scratchpad on its VM.
-- **Can read workers' guardrails and grants** through MCP and explain them to humans.
-- **Initiates guardrail changes on a worker when its human asks** ("give worker-a arxiv for
-  an hour"). It calls `change_guardrails` on the worker. The worker tries to apply the change,
-  which needs permission. That request comes back through the broker to the human, showing
-  the exact change, and is applied only after the human approves (§6.2). It cannot change its
-  own guardrails.
-- Slack design reuses the spiky "Slack façade" (two processes). The Slack-facing process
-  cannot stall and cannot leak secrets. The capable process does the work, and its
-  approvals go out-of-band to the human.
+A manager or worker may have **one GitHub identity**: a bot account (a machine user) named
+in `lab.yaml` (`github: <bot>`; several agents may share a bot). The bot's token is in the
+agent's environment (`GH_TOKEN`; git and `gh` set up; commits carry the bot's name and
+email), and `github.com` is reachable from its sandbox. The agent can read that token: the
+safety is GitHub's — private repositories, a fine-grained token limited to the lab's repos
+(contents, pull requests, issues), and **branch protection** on `main` (pull requests,
+reviews by human code owners, no bypass for bots). Bots push branches and open pull
+requests, issues and comments; they never approve or merge.
 
 ---
 
 ## 5. The worker protocol (MCP over the tailnet)
 
-Each worker runs an MCP server (streamable HTTP) bound to **its tailnet IP only**.
-Managers connect as MCP clients. Every request is authenticated with a per-manager bearer
-token listed in `lab.yaml`. A dedicated worker rejects managers other than its owner's.
-
-**Tools exposed to managers**
+Each worker runs an MCP server (streamable HTTP) on **its tailnet address**, port 8770. Every
+request carries a bearer token: one per manager allowed on the worker (a dedicated worker
+accepts only its member's managers), plus the secretary's **read-only** monitoring token.
 
 | Tool | Purpose |
 |---|---|
-| `submit_task(spec) -> task_id` | Queue a task (FIFO). `spec` = instruction, project, requester (human), optional deadline. |
-| `task_status(task_id)` | `queued \| running \| awaiting_approval \| done \| failed \| cancelled`, plus last progress line. |
-| `task_result(task_id)` | Final report (text and artifact pointers: git commit, links, files). |
-| `cancel_task(task_id)` | Cooperative cancel, then kill after a grace period. |
-| `list_tasks(filter)` | Queue overview. |
-| `pending_approvals()` | Read-only view of what the worker is blocked on (for context only; see §6.3). |
-| `change_guardrails(change, reason)` | Initiate a guardrail change on this worker (a grant, a standing grant, a removal). The worker service tries to apply it, which raises a permission request to the human (§6.2). Applied only if approved. |
-| `get_guardrails()` | This worker's sandbox config, standing grants and active grants with expiry. |
-| `health()` | Liveness, GPU state, disk, queue depth, agent session alive?, versions. |
+| `submit_task(instruction, requester, project?)` | Queue a task (first come, first served). The manager also registers the task with the broker, so the requester is known for approvals. |
+| `task_status(task_id)` | `queued \| running \| awaiting_approval \| done \| failed \| cancelled`, plus the latest progress line. |
+| `task_result(task_id)` | All progress lines and, when finished, the result (summary + artifacts). |
+| `cancel_task(task_id)` | A queued task at once; a running one as soon as the agent can stop. |
+| `list_tasks(state?)` | The queue. |
+| `get_guardrails()` | The worker's sandbox settings, standing and active grants. |
+| `read_file(path)`, `write_file(name, data)` | Files in its working folder (up to 20 MB): results out, attachments in. |
+| `health_check()` | Queue, GPUs and the processes on them, disk, usage. |
+| `check_usage()` | Read its seat's limits now (the web UI's "Check now"). |
+| `recent_events(hours)` | Its event log: **the secretary's monitoring token only** (the admins' log viewer). |
 
-Progress and approvals flow back as **notifications** (MCP server→client), with polling via
-`task_status` as a fallback, so a manager that was offline loses nothing. The queue is
-durable on disk, so tasks survive restarts of both the worker service and the agent.
-
-Ordering: **first come, first served** across all managers allowed on a worker. There are
-no quotas or priorities; the queue is visible to everyone in the web UI, and people sort out
-contention among themselves. **One GPU task at a time per worker by default** (GPU contention
-silently corrupts benchmarks). `lab.yaml` may raise this per worker.
+Managers follow tasks by polling. The queue is durable on disk; after a restart a running
+task is requeued and its Claude session resumed. One task runs at a time per worker.
 
 ---
 
@@ -203,400 +186,297 @@ silently corrupts benchmarks). `lab.yaml` may raise this per worker.
 
 ### 6.1 One simple model for every agent
 
-Every agent (secretary, manager, worker) lives by the same two zones.
-
 | | **Inside the sandbox: auto-allowed** | **Outside the sandbox: only with permission** |
 |---|---|---|
-| Internet | none | allowed after a human says yes |
-| Tailnet (lab resources) | **allowed**: tailnet resources count as safe | — |
-| Local files | read and write the **working folder and tmp** | **reads are free**; writes need permission |
-| GPU | available | — |
+| Internet | none (plus granted hosts; github.com for an agent with a bot) | allowed after a human says yes |
+| Tailnet (lab resources) | **allowed**, by tailnet name (raw IPs refused) | — |
+| Local files | write the **working folder and /tmp**; read anything except `/run` and its service's secrets and state | writes elsewhere need permission |
+| GPU | available to workers | — |
 
-Enforcement uses **Claude Code's built-in sandbox**, not our own code:
+Enforcement is **Claude Code's built-in sandbox** (bubblewrap + seccomp + a network proxy),
+rendered per agent from `lab.yaml` (`lab settings <agent>`):
+- **Every Bash command runs sandboxed** and is allowed without asking. There is no command
+  parsing. The sandbox protects `.git/hooks`, `.git/config` and Claude's own settings.
+- `failIfUnavailable`: an agent never runs unsandboxed by accident. Strict network allowlist:
+  unknown hosts are refused, not prompted.
+- **GPU**: a `bwrap-gpu` wrapper (set as `sandbox.bwrapPath` in Claude Code's managed
+  settings) binds the NVIDIA devices. CUDA needs Unix sockets, so GPU agents allow them and
+  `/run` is hidden instead (closing a `systemd-run` escape). Host setup:
+  `deploy/worker/setup-sandbox.sh` (AppArmor profile for bubblewrap, the wrapper, the
+  managed settings).
+- **Outside the sandbox**: Bash re-run unsandboxed, writes outside the allowed folders, other
+  tools — each is a permission request (§6.3).
+- **The tailnet is trusted by design for now**; this may tighten to per-host lists.
 
-- **Every Bash command runs sandboxed automatically** (bubblewrap on Linux, plus a network
-  proxy with a domain allowlist). Sandboxed commands are auto-allowed. There is no command
-  parsing, so a cleverly written command can't slip past a parser.
-- The sandbox also blocks writes to `.git/hooks`, `.git/config`, `.bashrc` and Claude's own
-  settings, even inside the working folder. A sandboxed step can't plant code that later
-  runs outside it.
-- **Locked by managed settings** that the agent can't change: sandboxing on and required
-  (`failIfUnavailable`), and the network allowlist admin-only. A repository's own settings
-  can't widen it.
-- **Outside the sandbox**, the normal permission flow applies. Write/Edit outside the
-  working folder, `WebFetch`/`WebSearch`, and Bash commands the agent re-runs unsandboxed
-  are all **permission requests**. They go to the broker (§6.3), then to the human.
-- **Tailnet is trusted by design for now.** The sandbox allowlist includes the tailnet. This
-  may tighten (per-host lists) as the organisation grows.
-
-**The usual flow:** the agent runs a command → the sandbox refuses it (say, a domain that
-isn't allowed) → the agent sees why and retries it outside the sandbox → that is a
-permission request → the human decides (§6.2).
+**The usual flow:** the agent runs a command → the sandbox refuses it (say, a host that isn't
+allowed) → the agent sees why and retries it outside the sandbox → that's a permission
+request → the human decides (§6.2).
 
 ### 6.2 Grants: permissions customised on the fly
 
-When the human answers a request, they choose how far the answer reaches:
+When a human answers a request, they choose how far the answer reaches:
+- **Run once**: this one action runs.
+- **Allow *X* for 1 hour** or **for this task**: a **grant** that widens the sandbox (a
+  domain, a writable path, or a tool) with an expiry. The agent's session restarts with
+  the wider sandbox and is told what changed (a running session doesn't pick up a changed
+  allowlist; resuming is seamless).
+- **Deny**, or a typed reply: "no, do it this way" (the reply goes back to the agent).
 
-- **Once**: this one action runs (an unsandboxed command runs once outside the sandbox).
-- **For a while**: "allow arxiv.org for 1 hour", or "for this session". This **widens the
-  sandbox**: the domain (or writable folder) is added to the agent's sandbox config with an
-  expiry. The unsandboxed retry is declined with *"arxiv.org is now allowed in the sandbox
-  for 1h, retry inside it"*, the agent retries, and the sandbox's own proxy enforces the
-  grant until it expires.
-- **Deny**, or **deny with a note** ("do it differently"), which goes back to the agent as
-  an instruction.
+A grant always widens the **sandbox**; it never means "trust unsandboxed commands for an
+hour". **Standing grants** are in `lab.yaml` per agent (changed by a reviewed PR):
+```yaml
+agents:
+  worker-a:
+    grants:
+      - {domain: pypi.org}
+      - {domain: files.pythonhosted.org}
+      - {write: ~/datasets}
+  mgr-flash:
+    grants:
+      - {tool: WebFetch}
+```
+Active grants, their expiry and who gave them are shown in the web UI.
 
-A time-limited grant always widens the **sandbox**. It never means "trust unsandboxed
-commands for an hour", because an unsandboxed command can do anything, so its scope can't
-be enforced.
+### 6.3 Approvals: the broker decides who answered
 
-- **Changes can also be made ahead of time**, through the manager:
-  1. the human asks their manager ("give worker-a arxiv for an hour");
-  2. the manager initiates the change on the worker (`change_guardrails` over MCP, §5);
-  3. the worker service tries to apply it, and applying it needs permission;
-  4. that permission request goes through the broker back to the human, showing the exact
-     change ("worker-a: allow arxiv.org until 15:00");
-  5. on approval the change applies; on deny or timeout nothing changes.
-
-  The human confirms once more even though they just asked. That is deliberate: the manager
-  may have misunderstood, and the human sees exactly what will change.
-- **Standing grants** (always on) sit in `lab.yaml` per agent, for example a manager that
-  may always read the web:
-  ```yaml
-  agents:
-    mgr-alice:
-      grants:
-        - {tool: WebFetch}
-        - {tool: WebSearch}
-    worker-a:
-      grants:
-        - {domain: pypi.org}
-        - {domain: files.pythonhosted.org}
-        - {write: ~/datasets}
-  ```
-- **Every grant is visible**: active grants, their expiry and who gave them are shown in the
-  web UI. Expired grants are removed automatically.
-- **A grant applies by restarting the agent's session.** A running session doesn't pick
-  up a changed allowlist (verified), so the runner interrupts it and resumes the same
-  session with the new settings and a note ("your sandbox now allows arxiv.org until
-  15:00; retry"). Resuming is seamless (verified: the agent carries on where it was).
-
-### 6.3 Approvals: the broker, not the manager, decides who answered
-
-The rule "the manager never grants permissions itself" must hold even if the manager LLM is
-confused or prompt-injected. So **approval is a code path that bypasses the LLM**:
+The rule "agents never approve" holds even if an agent is confused or prompt-injected,
+because **approval is a code path outside every LLM**:
 
 ```
-agent's gate ──request──► APPROVAL BROKER (secretary host, own Unix user `lab-broker`, no LLM)
-                               │  ├─► managers can see it, add a note (read-only, M3)
-                               │  └─► the human's DM from the "Lab Approvals" Slack app
-                               ◄── the human's click or reply (Socket Mode: identity from Slack)
-agent's gate ◄──pulls the decision── broker   (its own token, over the tailnet)
+agent's service ──request──► BROKER (secretary host, user lab-broker, no LLM)
+                                 ├─► managers may see it and add a note (no decision)
+                                 └─► the human's DM from the "Lab Approvals" app
+                                 ◄── the human's click or reply (identity from Slack)
+agent's service ◄── decision ─── broker (its own token, over the tailnet)
 ```
 
-The broker has its own Slack app ("Lab Approvals"), which only it can post as: humans trust
-approval buttons from that app only, and no agent can post a look-alike.
-
-- **An approval always goes to the human the action is for**, never simply to the
-  agent's seat owner:
-  - a worker's request: the human who requested the task;
-  - a manager's own action (e.g. a GitHub write): the member whose Slack message started
-    the work. The manager's code (not its LLM) takes that member from the Slack event and
-    attaches it to every approval request made in that conversation;
-  - no requester (scheduled or background work): the agent's attached human.
-- **Workers pull decisions** from the broker, with their own token, over the tailnet. There
-  is no way to push a decision to a worker. The broker records one only after a **verified
-  human interaction**: a click or thread reply whose Slack identity is the asked human's.
-- The manager agent can **see** pending requests and **add context** to the message shown to
-  the human ("this is the pip install from task 17, needed for the eval"). It has no tool
-  that produces a decision.
-- **Timeouts deny.** An unanswered request auto-denies after `N` seconds (configurable per
-  human and channel). The denial reason tells the agent it was a timeout, not a "no", and
-  asks it to find a way inside the sandbox first. (This is spiky's lesson: cheap paths
-  inside the sandbox keep real approvals rare and meaningful.)
-- **Grants belong to the human, not the agent** (§6.2). Only the broker creates them, and
-  only after a verified human answer.
-- **Typed reply = redirect.** A human typing an answer instead of clicking means "no, do it
-  this way". The note goes back to the agent as an instruction.
-
-The manager's *own* boundary crossings (GitHub and Drive writes) go through **the same
-broker** and the same channel. The manager agent is just another gated client.
+- **An approval goes to the human the action is for**: a worker's task — the requester the
+  manager registered (not what the worker claims); a manager's own action — the member whose
+  message started the work (taken by the manager's *code* from the Slack event); no
+  requester — the agent's attached human.
+- Only **Lab Approvals** posts approval requests; only the broker holds its tokens. A
+  decision is recorded only after a verified interaction of the asked human.
+- **Timeouts deny** (per human, `timeout_s`, default 120 s); the agent is told it was a
+  timeout and asked to find a way inside the sandbox.
+- Grants are created only by the broker, after a verified human answer.
 
 ### 6.4 Secrets
 
-- Secrets live in per-host files (`chmod 600`, owned by the service user) and never in the
-  repo, `lab.yaml`, Slack or agent memory.
-- `lab.yaml` lists each credential's **name, owner host, scope and expiry date**, never its
-  value. The secretary needs only that to warn about expiry.
-- **Local reads are free** (§6.1), so an agent can read token files on its own host. This
-  is an accepted trade-off for small, transparent teams. Where a token matters more, move it
-  to another Unix user (for example the broker's), and the agent can't read it at all.
-- A Slack-facing process holds only its own Slack tokens and has no filesystem reach beyond
-  its own workspace.
+- **Agents can't read their lab secrets.** Each agent's service keeps them in
+  `~/.config/agentic-lab` (and its state in `~/.local/state/agentic-lab`): the agent's Read
+  tool is denied there, its sandbox hides them, and the Claude token is stripped from
+  sandboxed commands. One exception by design: a GitHub bot's token (§4.4).
+- **Secrets never pass through a chat.** They arrive through the **intake**: one-time codes
+  (24 h, single use, rate-limited) for web forms, and a small client that runs
+  `claude setup-token` on a member's laptop and sends the token straight to the lab. The
+  intake checks Claude tokens with Anthropic and GitHub tokens with GitHub.
+- **Lab tokens** (manager↔worker, agent↔broker, the secretary's monitoring tokens) are
+  generated by `lab apply` and never shown.
+- `lab.yaml` holds no secrets: only GitHub bots' and other credentials' expiry dates.
 
 ---
 
 ## 7. Permission channels
 
-**First version: Slack DM only.** Every permission request reaches its human as a direct
-message from their manager's Slack app, with buttons:
-
-- **Once** · **For 1 hour** · **For this session** · **Deny** (§6.2)
-- or a typed reply, meaning "no, do it this way" (the note goes back to the agent).
-
-**Per-human settings** in `lab.yaml`:
+**This version: Slack DM only**, from the **Lab Approvals** app, with buttons **Run once ·
+Allow *X* · 1 hour · Allow *X* · this task · Deny**, or a typed reply in the request's
+thread (a denial with a reason).
 
 ```yaml
 humans:
-  anatoly:
+  alice:
     slack_user: U0123ABC
     channels:
       - {type: slack_dm, timeout_s: 120, on_timeout: deny}
 ```
-
-- **Timeouts deny** (§6.3). The timeout is per human.
-- The broker verifies each answer: it accepts only signed Slack interactions from that
-  human's own Slack user.
-- The code keeps a small channel interface (`ask(request) -> decision`), so more channels
-  (console, Telegram, email, …) can be added later without touching the broker's trust
-  rules.
-- Possible later options: escalation to a second channel if the first times out, batching
-  several requests into one message, and per-category defaults ("always deny pushes to
-  `main`").
+- `on_timeout` is always `deny`.
+- The broker's channel interface (`ask(request) -> decision`) leaves room for other channels
+  later without touching its trust rules.
 
 ---
 
 ## 8. The lab registry: `lab.yaml`
 
-The one source of truth that every component reads. An example deployment:
+The one description every component reads, kept in the lab's private config repository:
 
 ```yaml
-lab: deepspike
+lab: example-lab
 tailnet: example.ts.net
-providers:
-  nebius: {project: ..., key_host: secretary}       # only the secretary holds the key
+announcements: "#lab"                    # optional: lab-wide notices
 humans:
-  anatoly: {...}                                    # §7
+  alice:
+    name: Alice
+    slack_user: U0123ABC
+    admin: true                          # may read agents' logs, administer the lab
+    tailscale_login: alice@example.org   # how the web UI recognises her
+    channels:
+      - {type: slack_dm, timeout_s: 120, on_timeout: deny}
 agents:
   secretary:
     role: secretary
-    host: nuc-01
-    model: claude-haiku-5-5
-    human: anatoly            # every agent is attached to a human member
-  mgr-anatoly:
+    human: alice                         # whose Claude seat it runs on
+    host: sec-01
+    display_name: Iris
+  mgr-flash:
     role: manager
-    human: anatoly
-    host: mgr-vm-01
-    slack_app: A0XXXX
-    model: claude-sonnet-5-5
-  worker-h100-a:
+    human: alice
+    host: sec-01                         # managers run on any host
+    access: dedicated
+    display_name: Flash
+    github: flash-bot                    # its GitHub identity (§4.4)
+    turn_budget_min: 5
+  worker-a:
     role: worker
-    host: gpu-h100-a
-    human: anatoly
-    access: shared            # or: dedicated (only anatoly's manager may submit)
-    max_parallel_gpu_tasks: 1
-    grants:                   # standing grants (§6.2)
+    human: alice
+    host: gpu-a
+    access: shared
+    grants:                              # standing grants (§6.2)
       - {domain: pypi.org}
 hosts:
-  nuc-01:      {kind: onprem}
-  mgr-vm-01:   {kind: cloud, provider: nebius, instance: ..., preemptible: true,  restart_by: secretary}
-  gpu-h100-a:  {kind: cloud, provider: nebius, instance: ..., power: on_demand, idle_stop_min: 30}
+  sec-01: {kind: onprem, power: always_on}
+  gpu-a:  {kind: cloud, provider: nebius, instance: computeinstance-..., power: on_demand,
+           idle_stop_min: 30, tailnet_name: gpu-a.example.ts.net}
+github:
+  accounts:
+    flash-bot: {expires: 2027-10-01}     # its token's expiry, for reminders
 credentials:
-  - {name: slack/mgr-anatoly, host: mgr-vm-01, expires: null}
-  - {name: github/bot-pat,     host: gpu-h100-a, expires: 2026-12-11, scope: "repo"}
-  - {name: nebius/api-key,     host: nuc-01,     expires: 2027-03-01}
+  - {name: some/other-key, host: gpu-a, expires: 2027-03-01}
 ```
 
-A small CLI validates it (`lab check`) and renders it into the dashboard.
+`lab check` validates all of it at once (unknown keys are errors); agent ids are lowercase,
+since they become Unix user names (`lab-<id>`). Names humans see (`display_name`) are the
+admin's choice; the guide never invents them.
 
 ---
 
 ## 9. Web UI — the lab's shared window
 
-The web UI is the main place where transparency happens. Everyone on the team sees the same
-picture. The secretary hosts it on the tailnet, so it is reachable only from lab devices,
-with no public exposure.
+Served by the secretary on the tailnet (`:8774`), refreshed every 20 s. **Monitoring only**:
+permissions are answered in Slack (§7).
 
-- **Live overview**: hosts (up/down, GPU use, cost per hour), agents (alive, model, current
-  task), each worker's queue.
-- **Tasks**: who asked, which manager and worker, status, live progress, results (report,
-  commits, links).
-- **Approvals**: pending requests (who is being asked, on which channel, time left) and the
-  full history (who approved or denied what, and when).
-- **Guardrails**: each agent's effective policy and the history of changes (who, why, diff).
-- **Spend**: cloud cost per host, per human and per task, today, this week and in total. No
-  limits, just visibility.
-- **Claude usage, by account** (each member's seat), since several agents may share one:
-  the seat's limit windows (5-hour, weekly; shared by all its agents, so the freshest
-  reading wins) and the total tokens of all its agents, today and this week; under each
-  account, every agent's own tokens and tasks. **Every number shows when it was last
-  updated and which agent reported it**: limit readings only arrive while some agent on
-  that seat is running. Tokens, not dollars (the SDK's dollar figures are estimates).
-- **Credentials**: expiry dates and warnings (never values).
-- **Audit log**: one time-ordered feed of everything above.
+- **Claude usage, by account** (each member's seat): the 5-hour and weekly windows (the
+  freshest reading of any agent on that seat, with *as of when* and *from which agent*), and
+  today's tokens split by agent. Percentages come from a **probe**: each agent's service
+  reads the seat's utilization headers from one tiny request every 10 minutes, only while the
+  seat's 5-hour window is open; **Check now** probes at once.
+- **Workers**: busy or idle, GPU (utilization, memory, processes), disk, recent tasks.
+- **Approvals and grants**: pending requests and who decides; active grants and expiry.
+- **Machines**: power state, policy, idle since.
+- **Agents**: role, seat, host, service state.
+- **Deployed**: the config and framework commits every host runs (flagged if unreviewed).
+- **Agents' logs** (`/logs/<agent>`): **admins only**. The request's tailnet address must not
+  be a lab host; `tailscale whois` must name a person (not a tagged device) whose login is an
+  admin's in `lab.yaml`. Tailscale authenticates every packet with its device's key, so the
+  address can't be forged.
 
-It is **for monitoring only**. Permissions are answered in Slack DM (§7), never in the web
-UI.
-
-Implementation: a small web app on the secretary. It reads the secretary's state store plus
-the `health()` and `list_tasks()` of every worker over MCP, and refreshes live. No external
-dependencies at runtime.
+The main page needs no login: it's visible to whoever can reach the secretary host on the
+tailnet (restrict with Tailscale ACLs if the tailnet is wider than the lab).
 
 ## 10. Agent runtime
 
-**Every agent runs on the Claude Agent SDK as a systemd service.** A terminal session that
-pairs itself with helper processes is fragile: spiky's approach hits a 30-minute monitor
-limit and needs re-arming, and an unattended terminal UI can freeze on an unexpected
-prompt or dialog.
+**Every agent runs on the Claude Agent SDK as a systemd service** (`lab-worker@<id>`,
+`lab-manager@<id>`, `lab-secretary`), with Claude Code's built-in sandbox. The SDK's
+permission callback *is* the gate: sandboxed Bash is allowed, active grants are checked,
+anything else goes to the broker.
 
-**Runner interface.** The worker and manager services talk to the agent through a small
-`AgentRunner` interface (start, send, interrupt, resume, status, session id):
-- `SdkRunner`: the default, built in M1.
-- `TmuxCliRunner`: an optional fallback that drives a real `claude` console in tmux, typing
-  tasks in when idle and never while a human is attached. It is built only if the SDK
-  disappoints. Nothing above the interface (MCP, broker, policy, web UI) changes.
-
-- The SDK runs Claude Code's built-in sandbox (`ClaudeAgentOptions(sandbox=...)`, with
-  `failIfUnavailable` set explicitly) and gives an in-process permission callback. That
-  callback *is* the gate: it checks active grants, then asks the broker. So "never prompts
-  the wrong place" is enforceable.
+- **One Unix user per agent**, `lab-<agent-id>`, even when several agents share a host: no
+  password, no SSH keys, a `nologin` shell, lingering off, home folder private. Agents on one
+  host are separated by Unix permissions. Nobody runs anything else as these users (GPU
+  agents allow Unix sockets, so a socket server running as the agent's user would be a way
+  out). Humans log in as themselves; `sudo lab debug <agent>` switches to the agent's user.
 - Sessions persist on disk and resume after restarts.
-- Humans watch agents in the web UI, and `lab debug <agent>` (§4.2) opens an agent's
-  session in the classic Claude Code console when needed.
-- **Each agent runs as a system service under its own dedicated Unix user**, with no tmux
-  and no login session anywhere. **One user per agent, even when several agents share a
-  host** (like the managers on the shared manager VM). The user is named after the agent:
-  `lab-<agent-id>`, e.g. `lab-mgr-alice`, `lab-worker-a`.
-  - The user can't log in: no password, no SSH keys, a `nologin` shell. It has **lingering
-    off**, so it never has a per-user systemd manager, and it owns only its working folder,
-    which is private to it.
-  - So agents on the same host are separated by ordinary Unix permissions. "Local reads are
-    free" (§6.1) means what *its own user* can read: one agent can't read another's working
-    folder, memory or tokens.
-  - A system-level unit (e.g. `lab-worker-a.service`, `User=lab-worker-a`) starts it at boot
-    and restarts it if it dies.
-  - Humans SSH in as themselves; `lab debug <agent>` (run with sudo) switches to the
-    agent's user for a debugging session.
-  - Why: GPU agents must allow Unix sockets (CUDA needs one), so any socket server running
-    *as the agent's user* would be a way out of the sandbox, for example a tmux session
-    (`tmux send-keys`) or a forwarded SSH agent in `/tmp`. Nobody ever runs anything as
-    that user except the service.
-  - Later: the service and the agent can run as two separate users, so the agent can't read
-    the service's own secrets (its MCP tokens).
-- The broker runs as a different user from the agent it governs.
-
-### Every agent is attached to a human, in terms of tokens
-
-Each agent in `lab.yaml` names the **human member whose tokens it uses** (`human:`). It runs
-on that member's Claude seat, through a `claude setup-token` token stored on the agent's
-host, and its usage counts towards that seat's limits. The web UI shows each agent's token
-use under that member. This attachment only says whose tokens an agent uses. Who may use
-the agent is set separately (for example, a worker's `access`).
-
-**There is no per-token billing in this version.** The secretary checks each agent's real
-auth. A stray `ANTHROPIC_API_KEY` would silently override seat login and bill per token, so
-it is flagged in the web UI as an error.
-
-Model per role is set in `lab.yaml`. Defaults: Haiku-class for the secretary's chat,
-Sonnet-class for managers, the strongest available model for workers.
+- **Every agent is attached to a human, in terms of tokens**: `human:` names the member whose
+  Claude seat it runs on (a `claude setup-token` token, valid a year). Who may *use* the
+  agent is set separately (`access`). No per-token billing in this version.
+- **Models**: per agent in `lab.yaml` (`model:`), else Claude Code's default.
+- **Context**: managers auto-compact at 17% of the window (`compact_percent`); others at
+  Claude's default.
 
 ---
 
-## 11a. Setup and maintenance: guided by Claude
+## 11a. Setup and maintenance
 
-The lab must be easy to set up. A human admin with Claude Code on the secretary host
-should be able to go from nothing to a working lab, and later maintain it, by talking to
-Claude.
-
-**Two different Claudes on the secretary host:**
+**Two Claudes on the secretary host:**
 
 | | Admin assistant | Secretary agent |
 |---|---|---|
-| What | an ordinary interactive Claude Code session | the lab's 24/7 service (§4.1) |
-| Runs as | the admin's own Unix user, in a checkout of this repo | its own `lab-secretary` user |
-| Does | setup and maintenance: needs SSH and sudo across hosts | monitoring, power, health, the web UI |
-| Approvals | the admin, at the console | Slack DM, like every agent |
+| What | the admin's own interactive Claude Code session, in a checkout of this repo | the lab's 24/7 service (§4.1) |
+| Runs as | the admin's Unix user (SSH and sudo across hosts) | `lab-secretary` |
+| Used for | the install, emergencies, uninstalling | everyday administration, in a Slack DM |
 
-Setup and maintenance need broad rights (SSH to every host, sudo), so they belong to the
-admin's own session, never to the always-on agent.
+**The install** follows `docs/install.md`, guided by the repo's `lab-admin` skill: the
+private config repo, `lab init`, the secretary's services, the Lab Approvals and secretary
+Slack apps (one at a time), the admin's Claude token, VM power, GPU hosts, the first deploy.
 
-**The guide ships with the repo as a Claude Code skill**, `.claude/skills/lab-admin/`.
-Opening Claude Code in the repo picks it up. It covers:
-- **first-time bootstrap**: prerequisites, preparing the secretary host, writing the first
-  `lab.yaml` together, preparing each host, creating each agent;
-- **maintenance**: add or remove an agent, a host or a human; change grants; rotate a token;
-  upgrade the framework;
-- **diagnosis**: an agent is down, a sandbox doesn't start, approvals don't arrive.
+**Only reviewed configuration is deployed.** `lab apply` fetches the config repo and deploys
+`lab.yaml` and `framework.lock` (the framework's pinned commit) **as they are on `main`**,
+never the working copy, and ships the framework only from a clean checkout at the pinned
+commit. Every change: a branch → `lab plan --working-tree` → a pull request (`lab pr-link`) →
+a human reviews and merges → deploy. Every host records what it runs
+(`/etc/agentic-lab/applied.yaml`). Break glass: `lab apply --unreviewed` (flagged).
 
-**Underneath, everything is declarative and repeatable**, so Claude guides by running a
-few safe commands rather than improvising:
+**After the install, admins work with the secretary in Slack**, with admin-only tools checked
+in code: `propose_lab_change` (a checked branch, pushed; replies with the diff and "here is
+the PR, review and merge it"), `offer_deploy` (a **Deploy** button; only an admin's click
+deploys), `request_slack_app`, `request_github_token`, `check_slack_app`. The secretary's one
+root command is **`lab apply-main`** (a sudoers rule, no arguments): it deploys only `main`,
+as its own systemd unit. Even a misled secretary can only deploy what a human merged.
 
 | Command | Does |
 |---|---|
-| `lab init` | start a `lab.yaml` from questions (lab name, tailnet, first human) |
+| `lab init` | the first `lab.yaml` (and `framework.lock`), with names the admin chose |
 | `lab check` | validate `lab.yaml` |
-| `lab plan` | show what would change on the hosts (users, sandbox setup, services, settings) |
-| `lab apply [host\|agent]` | make the hosts match `lab.yaml`, over SSH; idempotent, safe to re-run |
-| `lab doctor [agent]` | diagnose: service up? sandbox starts? GPU visible? tokens valid? Slack reachable? |
-| `lab secret set <name>` | store a secret on its host, read hidden from the terminal |
+| `lab plan [--working-tree]` | what a deploy would change; missing secrets |
+| `lab apply` / `lab apply-main` | deploy `main` (idempotent, over SSH to other hosts) |
+| `lab pr-link` | the link to open a pull request for the config branch |
+| `lab doctor` | check a host; every failure says how to fix it |
+| `lab secret request` | a one-time code or link for a secret |
+| `lab slack-manifest`, `lab slack-verify` | a Slack app's manifest; check its tokens |
+| `lab nebius connect` | VM power with one admin login |
+| `lab logs`, `lab debug` | an agent's log; its session in the console |
 
-"Add a worker" is then: add it to `lab.yaml` → `lab check` → `lab plan` → `lab apply`.
-Every change to the lab is a reviewable diff of `lab.yaml`, kept in git.
+**Secrets never pass through the chat** (§6.4). **Uninstalling**: `docs/uninstall.md`, at
+the console only.
 
-**Secrets never pass through the chat.** Some steps only a human can do: creating the
-Slack app, running `claude setup-token`, getting the cloud API key. The skill explains
-these step by step. The admin types the values into `lab secret set` in their own terminal,
-so tokens never land in Claude's conversation or logs.
-
-**The bar:** a fresh secretary host, Claude Code and this repo, plus the admin's accounts
-(cloud, Slack, Claude seat, Tailscale), should be enough. The admin should never need to
-read the code.
-
-## 11. Repo layout (proposed)
+## 11. Repo layout
 
 ```
-agentic_lab/
+src/agentic_lab/
   registry/      lab.yaml schema, loader, `lab check`
-  policy/        sandbox settings generator (per agent) + grant store + tests
-  broker/        approval broker + permission channel (Slack DM; an interface for more later)
-  worker/        worker service: MCP server, durable queue, agent runner
-  manager/       manager service: Slack face (from slack-facade) + MCP client + agent runner
-  secretary/     scheduler, checks, web UI, chat
-  providers/     cloud provider interface + nebius implementation
-deploy/          systemd units, bootstrap scripts (`lab install <role>`), example lab.yaml
-docs/            this design, runbooks, threat model
+  policy/        per-agent sandbox settings, grants
+  broker/        approval broker + Slack DM channel (Lab Approvals)
+  worker/        worker service: MCP server, durable queue, SDK runner, usage
+  manager/       manager service: Slack, brain, tools, memory, follow-up, status
+  secretary/     state collection, web UI, Home tab, power, chat
+  secrets/       intake (one-time codes, web forms)
+  apply.py, configrepo.py, lock.py, selfadmin.py   deploying (lab apply / apply-main)
+  github.py, slackio.py, slack_manifest.py, eventlog.py, doctor.py, init.py, cli.py, ...
+deploy/          systemd units, sandbox setup (AppArmor, bwrap-gpu), user creation
+client/          lab-member.py: members hand their Claude token to the lab
+docs/            install, uninstall, security notes, architecture (PDF)
+examples/        example lab.yaml files
 tests/
 ```
 
-Python ≥ 3.12, managed with `uv`. Only stdlib plus a few dependencies (MCP SDK, Agent SDK,
-slack_sdk, PyYAML).
+Python ≥ 3.12, managed with `uv`; dependencies: Claude Agent SDK, MCP SDK, slack_sdk,
+PyYAML, Starlette/uvicorn.
 
 ---
 
 ## 12. Milestones
 
-Each milestone ends with a demo that works on real infrastructure.
+All of M0–M4 are built and were rehearsed end to end on one GPU VM (the whole lab on one
+host, each agent its own user: `examples/single-vm/lab.yaml`).
 
-**Development and integration setup: the whole lab on one GPU VM.** Because every agent
-runs as its own system service under its own Unix user (§10), the secretary, the
-manager(s) and a worker can share one GPU VM, with the same sandbox, MCP, broker and Slack
-DM approvals as production (`examples/single-vm/lab.yaml`). Differences: the secretary
-only logs power actions (it can't power off the VM it runs on), and there is one worker.
-M1–M4 are developed and demoed on this setup first.
-
-| # | Milestone | Done when |
+| # | Milestone | Status |
 |---|---|---|
-| M0 | **Skeleton**: repo, `lab.yaml` schema + `lab check`, per-agent sandbox settings generated from `lab.yaml` | `pytest` green; `lab check` validates the example lab |
-| M1 | **Worker**: MCP server, durable queue, SDK agent runner, built-in sandbox, `lab debug` | A manager played by hand over MCP submits a task to a cloud GPU VM, watches progress and gets the result |
-| M2 | **Broker + Slack DM channel**: signed decisions, grants buttons, timeout policy | A worker's `pip install` reaches the human's DM. Approve and deny both work, the timeout denies, and **the manager agent provably cannot approve** (test) |
-| M3 | **Manager**: Slack face + MCP client + its own guardrails | "@manager run exp X on a GPU worker" in Slack → task → approval in DM → result in thread |
-| M3a | **Guided setup**: `lab-admin` skill, `lab init/plan/apply/doctor/secret` | From a fresh secretary host, Claude guides an admin to a working single-VM lab without the admin reading code |
-| M4 | **Secretary + web UI**: checks, cloud power, web UI (§9), chat | Web UI shows tasks, approvals, guardrails and spend live. A GPU VM idle 30 min is stopped. A preempted manager is restarted. A token expiring within 14 days is reported |
-| M5 | **Spiky pilot**: real spiky experiments run through the lab for a week | Spiky's existing ad-hoc tooling retired in favour of the lab |
-| M6 | **DeepSpike rollout**: separate deployment, its own `lab.yaml`, Slack workspace and tailnet | Team members use their own managers |
-
-More permission channels (console, Telegram, email), multiple workers per manager, and preemptible-VM tuning come
-after M3–M4 as needed.
+| M0 | Skeleton: `lab.yaml` schema, `lab check`, per-agent sandbox settings | done |
+| M1 | Worker: MCP server, durable queue, SDK runner, built-in sandbox with GPU, `lab debug` | done |
+| M2 | Broker + Lab Approvals in Slack DM: buttons, grants, timeouts | done |
+| M3 | Manager: Slack, tasks, follow-up, memory, approvals relay | done |
+| M3a | Guided setup: `lab-admin` skill, `lab init/plan/apply/doctor`, intake; config repo; Slack admin | done |
+| M4 | Secretary + web UI: state, usage, power and idle stop, notices, Home tab | done |
+| M5 | First real lab: install and use it with a real team | next |
 
 ---
 
@@ -604,25 +484,35 @@ after M3–M4 as needed.
 
 | Date | Decision |
 |---|---|
-| 2026-10-17 | Secretary runs on an on-prem always-on box. Every other host is a cloud VM, as close to real use as possible. |
+| 2026-10-17 | The secretary runs on an always-on host. Other hosts are cloud VMs, as close to real use as possible. |
 | 2026-10-17 | Repo is private now and public later, so it stays generic. MIT license. |
 | 2026-10-17 | Shared workers: **first come, first served**. No quotas or priorities. |
-| 2026-10-17 | **No fixed results contract**: tasks vary, so a result is whatever fits (report, commit, link, files). |
-| 2026-10-17 | **Agent SDK runtime** behind an `AgentRunner` interface. Humans watch agents in the web UI and debug with `lab debug <agent>` (real `claude --resume` on the agent's session). A tmux runner is only a fallback. |
-| 2026-10-17 | **Every agent is attached to a human member in terms of tokens** (runs on their seat). Access is set separately. The secretary is attached to the lab owner. |
-| 2026-10-17 | **One simple sandbox model for all agents** (§6.1): inside = no internet, tailnet, working folder + tmp, auto-allowed; outside = internet and writes need permission, reads free. Enforced by Claude Code's built-in sandbox, with no command parsing. **Grants** (once / for a while / standing) customise it on the fly (§6.2). |
-| 2026-10-17 | **Guardrail changes through the manager**: human asks manager → manager initiates the change on the worker over MCP → the worker's attempt raises a permission request → through the broker back to the human → applied only on approval. |
-| 2026-10-17 | **All managers share one cloud CPU VM**, one Unix user each. |
-| 2026-10-17 | **Permissions only in Slack DM** in the first version; more channels maybe later. The **web UI is for monitoring only**. |
-| 2026-10-17 | **Agents run as system services, each under its own dedicated Unix user** (`lab-<agent-id>`), even when several agents share a host. Nobody logs into these users (no tmux, no login sessions, lingering off). Humans debug an agent with `lab debug <agent>`. |
-| 2026-10-17 | **Setup and maintenance are guided by Claude**: a `lab-admin` skill in the repo, run by the admin's own Claude Code on the secretary host, over declarative, idempotent `lab` commands. Secrets never pass through the chat. |
-| 2026-10-17 | **No `lab console`.** The web UI shows each agent's recent transcript; `lab debug <agent>` stops its service and opens the same session in the classic Claude Code console. |
-| 2026-10-17 | **Approvals go to the human the action is for** (task requester, or the member whose message started a manager's work), not to the agent's seat owner. Managers, like workers, can be `dedicated` or `shared`. |
-| 2026-10-17 | **The secretary is in Slack like a manager**: tagged in channels (it joins the thread) and in DMs; lab-wide notices nobody asked for go to an optional `announcements` channel in `lab.yaml`, personal ones by DM. |
-| 2026-10-17 | **Names**: an agent's id (lab.yaml key, also its Unix user `lab-<id>`) plus an optional `display_name` humans see (Slack, web UI, how it introduces itself). |
-| 2026-10-17 | **Auto-compaction per agent** (`compact_percent`, Claude Code's `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE`): managers compact ~5x earlier (17%); the secretary and workers keep Claude's default. |
-| 2026-10-17 | **Agents can't read their lab secrets**: the service holds them; the agent's Read tool is denied `~/.config/agentic-lab`, its sandbox hides it, and the seat token is stripped from sandboxed commands. |
-| 2026-10-17 | **No spend limits.** The lab is transparent; the web UI (§9) is a core feature, not an add-on. Power actions need no approval and are logged. |
+| 2026-10-17 | **No fixed results contract**: a result is whatever fits (report, commit, link, files). |
+| 2026-10-17 | **Agent SDK runtime.** (An `AgentRunner` interface with a tmux fallback was planned; not built, the SDK was enough.) Humans watch agents in the web UI and debug with `lab debug <agent>`. |
+| 2026-10-17 | **Every agent is attached to a human member in terms of tokens** (runs on their seat). Access is set separately. |
+| 2026-10-17 | **One simple sandbox model for all agents** (§6.1), enforced by Claude Code's built-in sandbox, no command parsing. **Grants** (once / for a while / standing) customise it (§6.2). |
+| 2026-10-17 | ~~Guardrail changes initiated by the manager over MCP (`change_guardrails`).~~ Not built: grants come from answering requests, standing grants from `lab.yaml` PRs. |
+| 2026-10-17 | ~~All managers share one cloud CPU VM.~~ Superseded 2026-10-18. |
+| 2026-10-17 | **Permissions only in Slack DM** in this version. The **web UI is for monitoring only**. |
+| 2026-10-17 | **Agents run as system services, each under its own Unix user** (`lab-<agent-id>`). Nobody logs into these users. |
+| 2026-10-17 | **Setup is guided by Claude**: the `lab-admin` skill and `docs/install.md`, over declarative, idempotent `lab` commands. Secrets never pass through the chat. |
+| 2026-10-17 | **No `lab console`.** Each agent's event log is shown to admins in the web UI; `lab debug <agent>` opens its session in the console. |
+| 2026-10-17 | **Approvals go to the human the action is for**, from one Lab Approvals app held by the broker. Managers, like workers, are `dedicated` or `shared`. |
+| 2026-10-17 | **The secretary is in Slack** (DMs, threads it's tagged in, a Home tab); lab-wide notices go to an optional `announcements` channel. |
+| 2026-10-17 | **Names**: an id (also the Unix user) plus a `display_name` humans see. |
+| 2026-10-17 | **Auto-compaction per agent**: managers at 17%; others at Claude's default. |
+| 2026-10-17 | **Agents can't read their lab secrets** (§6.4). |
+| 2026-10-17 | **No spend limits.** Transparency through the web UI instead. |
+| 2026-10-17 | **Agents' logs are for admins only** (`admin: true` + Tailscale identity). |
+| 2026-10-17 | **Usage percentages from a probe** of the seat's rate-limit headers, only while a window is open; "Check now" in the web UI. |
+| 2026-10-17 | **Admin-only actions, checked in code**: powering off a busy machine (after confirming), asking for someone else's token. **Busy** includes any process on a GPU or ≥10% GPU utilization. |
+| 2026-10-17 | **Private config repository**: `lab.yaml` + `framework.lock` (the framework pinned by commit). **Only `main` is deployed**; every change is a reviewed PR. |
+| 2026-10-17 | **Administering from Slack**: the secretary proposes PRs and deploys `main` on an admin's click, with one sudo command (`lab apply-main`). The console is for the install and emergencies. |
+| 2026-10-18 | **GitHub for agents**: one bot account per agent (may be shared), its token in the agent's environment; safety from GitHub (private repos, fine-grained tokens, branch protection: bots never approve or merge). |
+| 2026-10-18 | **No experiment tracker in the framework**: project tools are a lab's extensions. |
+| 2026-10-18 | **Managers run on any host**: the secretary host, a VM of their own, or a GPU VM next to their workers. |
+| 2026-10-18 | **Managers stay reachable**: a work-size rule, a per-turn time limit (`turn_budget_min`, default 5), and a "still working" reply. |
+| 2026-10-18 | **A worker's event log goes only to the secretary's monitoring token.** |
 
 ## 14. Open questions
 
