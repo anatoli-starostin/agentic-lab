@@ -131,7 +131,8 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 
 - Its own **Slack identity** (Socket Mode). A DM is one conversation; in channels it joins
   only threads where it's mentioned or already involved, reading the thread so far on first
-  mention. Only lab members, and only those allowed to use it, are answered.
+  mention (its first 5 messages, which often set the topic, and the last 50 before the
+  mention). Only lab members, and only those allowed to use it, are answered.
 - Attached to a human **for tokens**; **access** `dedicated` (one member) or `shared` (all
   members, with a separate memory per member, enforced in code).
 - **Turns requests into worker tasks**, follows them and reports back (progress, plots,

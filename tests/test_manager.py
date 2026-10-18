@@ -110,8 +110,12 @@ class FakeWeb:
     async def chat_postMessage(self, **kw):
         self.posts.append(kw)
 
-    async def conversations_replies(self, **kw):
-        return {"messages": self.replies}
+    async def conversations_replies(self, limit=1000, cursor=None, **kw):
+        start = int(cursor or 0)                    # pages, oldest first, like Slack
+        page = self.replies[start:start + limit]
+        more = start + limit < len(self.replies)
+        return {"messages": page,
+                "response_metadata": {"next_cursor": str(start + limit) if more else ""}}
 
 
 def make_io(may_use=lambda h: (True, ""), replies=()):
@@ -157,6 +161,20 @@ def test_history_read_on_first_mention_midthread():
     asyncio.run(io._on_event({"type": "app_mention", "channel": "C1", "user": "U-ALICE",
                               "ts": "8.0", "thread_ts": "7.0", "text": "<@U-BOT> can you check"}))
     assert seen[0].history == ["alice: loss diverges after step 3k", "bob: lr too high?"]
+
+
+def test_history_keeps_the_threads_start_and_its_last_50():
+    """A long thread: the first 5 messages (they set the topic) and the last 50 before the
+    mention, read across pages; what's in between is marked as skipped."""
+    replies = [{"ts": f"{100 + i}.0", "user": "U-BOB", "text": f"m{i}"} for i in range(450)]
+    mention = {"ts": "600.0", "user": "U-ALICE", "text": "<@U-BOT> summarise"}
+    io, seen = make_io(replies=replies + [mention])
+    asyncio.run(io._on_event({"type": "app_mention", "channel": "C1", "user": "U-ALICE",
+                              "ts": "600.0", "thread_ts": "100.0", "text": mention["text"]}))
+    h = seen[0].history
+    assert h[:5] == [f"bob: m{i}" for i in range(5)]
+    assert h[5] == "[... 395 messages skipped ...]"
+    assert h[6:] == [f"bob: m{i}" for i in range(400, 450)] and len(h) == 56
 
 
 def test_strangers_and_dedicated():

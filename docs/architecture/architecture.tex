@@ -331,7 +331,8 @@ sandbox violations that explain it.
 \begin{itemize}
   \item \textbf{Slack}: Socket Mode (no public URL). A DM is one conversation; in channels a
     manager joins only threads where it's mentioned or already involved, reading the thread
-    so far (up to 50 messages) on first mention. In such a thread it sees every message and
+    so far on first mention: its first 5 messages (they often set the topic) and the
+    last 50 before the mention. In such a thread it sees every message and
     may stay silent. Attachments (up to 50 MB) are downloaded into its working folder.
   \item Every message is checked against \code{lab.yaml}: only lab members, and only those
     who may use this manager.
