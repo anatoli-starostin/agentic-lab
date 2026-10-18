@@ -180,7 +180,7 @@ mechanisms that bind them together, and the conventions the framework relies on.
 \draw[da] (sh.east |- gh) -- node[n]{8} (gh);
 % ---- 9 bots on project repos
 \draw[dt] (g2.east) -- (11.5,-3.9) |- (gh.east);
-\draw[dt] (mh.east) -- (11.5,-0.9);
+\draw[dt] (mh.east) -- node[n, pos=0.5]{9} (11.5,-0.9);
 \node[n] at (11.5,-2.4) {9};
 % ---- 10 every agent calls Claude
 \draw[dt] (g1.south) |- node[n, pos=0.3]{10} (cl.west);
