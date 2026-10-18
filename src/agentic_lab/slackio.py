@@ -4,7 +4,8 @@ Shared by managers and the secretary. Scope:
   - A DM is one conversation (its threads are conversations of their own).
   - In channels, the agent takes part only in threads where it's mentioned or already
     involved, never the whole channel. When first mentioned partway through a thread, it
-    reads the thread so far.
+    reads the thread so far: its first 5 messages (they often set the topic) and the last
+    50 before the mention.
   - In a thread it's involved in, it sees every message and decides for itself whether to
     answer (it may answer `<silent>`): judgment stays in the model, not in filters.
   - Every message is checked against lab.yaml: the sender must be a lab member who may use
@@ -29,7 +30,9 @@ log = logging.getLogger("agentic_lab.slack")
 SILENT = "<silent>"
 MAX_TEXT = 3800                 # Slack's limit is ~4000 characters per message
 MAX_FILE_BYTES = 50 * 1024 * 1024
-HISTORY_MESSAGES = 50           # how much of a thread is read on first mention
+HISTORY_MESSAGES = 50           # on first mention: the last messages before it...
+HISTORY_FIRST = 5               # ...plus the thread's first ones (where the topic is set)
+HISTORY_PAGES = 5               # at most 5 x 200 messages read
 
 
 class Incoming:
@@ -112,25 +115,34 @@ class SlackIO:
         return out
 
     async def _history(self, channel, thread_ts, before_ts):
+        """The thread before `before_ts`: its first HISTORY_FIRST messages and the last
+        HISTORY_MESSAGES (Slack returns replies oldest first, so read up to the mention)."""
+        msgs, cursor = [], None
         try:
-            r = await self.web.conversations_replies(channel=channel, ts=thread_ts,
-                                                     limit=HISTORY_MESSAGES)
+            for _ in range(HISTORY_PAGES):
+                r = await self.web.conversations_replies(channel=channel, ts=thread_ts,
+                                                         limit=200, cursor=cursor)
+                page = r.get("messages", [])
+                done = any(m.get("ts") == before_ts for m in page)
+                msgs += [m for m in page if float(m.get("ts", 0)) < float(before_ts)]
+                cursor = (r.get("response_metadata") or {}).get("next_cursor")
+                if done or not cursor:
+                    break
         except Exception:
-            return []
-        lines = []
-        for m in r.get("messages", []):
-            if m.get("ts") == before_ts:
-                break
-            who = self.members.get(m.get("user"), m.get("username") or m.get("user") or "bot")
-            if m.get("bot_id") and m.get("user") == self.me:
-                who = "you"
-            lines.append(f"{who}: {m.get('text', '')}")
-        return lines
+            if not msgs:
+                return []
+        lines = [self._line(m) for m in msgs]
+        if len(lines) <= HISTORY_FIRST + HISTORY_MESSAGES:
+            return lines
+        skipped = len(lines) - HISTORY_FIRST - HISTORY_MESSAGES
+        return (lines[:HISTORY_FIRST] + [f"[... {skipped} messages skipped ...]"]
+                + lines[-HISTORY_MESSAGES:])
 
-    async def post_blocks(self, channel, thread_ts, text, blocks):
-        r = await self.web.chat_postMessage(channel=channel, thread_ts=thread_ts, text=text,
-                                            blocks=blocks, unfurl_links=False)
-        return r.get("ts")
+    def _line(self, m):
+        who = self.members.get(m.get("user"), m.get("username") or m.get("user") or "bot")
+        if m.get("bot_id") and m.get("user") == self.me:
+            who = "you"
+        return f"{who}: {m.get('text', '')}"
 
     async def _on_socket(self, client: SocketModeClient, req: SocketModeRequest):
         await client.send_socket_mode_response(SocketModeResponse(envelope_id=req.envelope_id))
