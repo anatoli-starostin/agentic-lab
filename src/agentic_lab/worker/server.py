@@ -182,7 +182,10 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
               "approvals, task events) for the last `hours`, newest last. For the admin's "
               "log viewer.")
     def recent_events(ctx: Context, hours: float = 24, limit: int = 500) -> dict:
-        who(ctx)
+        # the log is for the admins' log viewer only: the secretary's monitoring token,
+        # never a manager's
+        if not who(ctx).readonly:
+            raise ToolError("access denied: the event log is for the secretary only")
         import datetime as _dt
         if events is None:
             return {"events": []}
