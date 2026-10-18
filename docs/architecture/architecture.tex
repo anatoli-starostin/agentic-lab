@@ -22,7 +22,7 @@
 \definecolor{hum}{RGB}{245,232,245}
 
 \title{\textbf{Agentic Lab}\\[4pt]\large Architecture: roles, logic, conventions}
-\author{Framework reference, as of main \code{53bd0d8}}
+\author{Framework reference, as of the merge of PR \#13}
 \date{October 2026}
 
 \begin{document}
@@ -287,6 +287,13 @@ sandbox violations that explain it.
     conversations stay private).
   \item \textbf{Follow-up}: a background loop posts each task's progress and result in the
     conversation that started it, mentioning the requester.
+  \item \textbf{Staying reachable}: a manager runs one turn at a time \emph{per
+    conversation} (other threads and members are never blocked). It does work itself only
+    when it takes a few minutes (an issue, a comment, a small fix); longer work and
+    anything needing a GPU goes to a worker. A turn longer than \code{turn\_budget\_min}
+    (default 5) is interrupted, and the manager gets one short turn (90 s) to say where it
+    got to or hand the rest to a worker. A message arriving while it's busy in that
+    conversation gets an immediate ``still working on the previous message'' reply.
 \end{itemize}
 
 \subsection{Who may use what}
@@ -363,7 +370,8 @@ Section & Contents \\
   Slack DM), \code{admin}, \code{tailscale\_login}. \\
 \code{agents} & Each agent: \code{role}, \code{human} (whose seat), \code{host},
   \code{access}, \code{display\_name}, \code{grants} (standing), \code{github} (its bot),
-  \code{model}, \code{workdir}, \code{port}, \code{compact\_percent}, \code{slack\_app}. \\
+  \code{model}, \code{workdir}, \code{port}, \code{compact\_percent}, \code{slack\_app},
+  \code{turn\_budget\_min} (managers). \\
 \code{hosts} & \code{kind} (onprem/cloud), \code{provider}, \code{instance},
   \code{power}, \code{idle\_stop\_min}, \code{tailnet\_name}, \code{ssh\_user}. \\
 \code{github} & \code{accounts}: the bots, with their commit \code{email} and token
