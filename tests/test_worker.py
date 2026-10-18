@@ -162,6 +162,22 @@ def test_mcp_submit_and_follow(tmp_path):
     asyncio.run(_with_server(store, access, scenario))
 
 
+def test_event_log_is_for_the_secretary_only(tmp_path):
+    """A worker's log goes only to the secretary's monitoring token (the admins' log
+    viewer), never to a manager's, even one that may use the worker."""
+    store = T.TaskStore(tmp_path)
+    access = Access({TOK_A: Caller("mgr-alice", "alice"),
+                     TOK_B: Caller("secretary", "alice", readonly=True)})
+
+    async def scenario(url):
+        err, msg = await _call(url, TOK_A, "recent_events", {"hours": 1})
+        assert err and "secretary only" in msg
+        err, r = await _call(url, TOK_B, "recent_events", {"hours": 1})
+        assert not err and r == {"events": []}
+
+    asyncio.run(_with_server(store, access, scenario))
+
+
 def test_mcp_rejects_unknown_tokens(tmp_path):
     store = T.TaskStore(tmp_path)
     access = Access({TOK_A: Caller("mgr-alice", "alice")})
