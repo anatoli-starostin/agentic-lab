@@ -49,7 +49,7 @@ deployment's own `lab.yaml` and secret files, which never enter this repo.
 
 ## 2. Prerequisites
 
-- A **cloud account** with balance (Nebius first) for GPU workers and CPU manager VMs.
+- A **cloud account** with balance (Nebius first) for GPU workers (and any VMs for managers).
 - A **Slack workspace** (for teams). Each manager is its own Slack app and bot user.
 - **Tailscale.** Every host is on one tailnet. No service listens on a public interface.
 - An **always-on box** for the secretary (a small NUC or similar; no GPU needed).
@@ -65,7 +65,7 @@ deployment's own `lab.yaml` and secret files, which never enter this repo.
                          └──────────▲───────────────────────────▲──────────────┘
                                     │                           │
                     ┌───────────────┴───────────┐   ┌───────────┴───────────┐
-                    │ MANAGER VM (cloud, CPU)   │   │ SECRETARY (on-prem)   │
+                    │ MANAGER HOST (any host)   │   │ SECRETARY (on-prem)   │
                     │  manager agent (LLM)      │   │  scheduler + checks   │
                     │  approval broker (code) ◄─┼─┐ │  dashboard (html)     │
                     └──────┬────────────────────┘ │ │  chat (small model)   │
@@ -465,7 +465,7 @@ prompt or dialog.
   session in the classic Claude Code console when needed.
 - **Each agent runs as a system service under its own dedicated Unix user**, with no tmux
   and no login session anywhere. **One user per agent, even when several agents share a
-  host** (like the managers on the shared manager VM). The user is named after the agent:
+  host** (e.g. managers on the secretary host, or a manager next to its workers). The user is named after the agent:
   `lab-<agent-id>`, e.g. `lab-mgr-alice`, `lab-worker-a`.
   - The user can't log in: no password, no SSH keys, a `nologin` shell. It has **lingering
     off**, so it never has a per-user systemd manager, and it owns only its working folder,
@@ -613,6 +613,7 @@ after M3–M4 as needed.
 | 2026-10-17 | **One simple sandbox model for all agents** (§6.1): inside = no internet, tailnet, working folder + tmp, auto-allowed; outside = internet and writes need permission, reads free. Enforced by Claude Code's built-in sandbox, with no command parsing. **Grants** (once / for a while / standing) customise it on the fly (§6.2). |
 | 2026-10-17 | **Guardrail changes through the manager**: human asks manager → manager initiates the change on the worker over MCP → the worker's attempt raises a permission request → through the broker back to the human → applied only on approval. |
 | 2026-10-17 | **All managers share one cloud CPU VM**, one Unix user each. |
+| 2026-10-18 | **Managers run on any host** (supersedes "all managers share one CPU VM"): the secretary host, a VM of their own, or a GPU VM next to their workers; set per manager by `host:` in lab.yaml. |
 | 2026-10-17 | **Permissions only in Slack DM** in the first version; more channels maybe later. The **web UI is for monitoring only**. |
 | 2026-10-17 | **Agents run as system services, each under its own dedicated Unix user** (`lab-<agent-id>`), even when several agents share a host. Nobody logs into these users (no tmux, no login sessions, lingering off). Humans debug an agent with `lab debug <agent>`. |
 | 2026-10-17 | **Setup and maintenance are guided by Claude**: a `lab-admin` skill in the repo, run by the admin's own Claude Code on the secretary host, over declarative, idempotent `lab` commands. Secrets never pass through the chat. |

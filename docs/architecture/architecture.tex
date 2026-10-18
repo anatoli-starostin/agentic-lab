@@ -109,7 +109,10 @@ mechanisms that bind them together, and the conventions the framework relies on.
 \begin{itemize}
   \item \textbf{Secretary host}: small, always on (on-prem or a small VM). Runs the
     secretary, broker, intake and web UI, and the admin's Claude Code session for the
-    install. Managers usually run here or on one shared CPU VM.
+    install.
+  \item \textbf{Managers} run on any host: the secretary host, a CPU VM of their own, or a
+    GPU VM next to the workers they use. Each manager's \code{host:} in \code{lab.yaml}
+    says where; several agents on one host still each have their own Unix user.
   \item \textbf{GPU hosts}: cloud VMs (Nebius in this version), \code{power: on\_demand} or
     \code{always\_on}, stopped when idle.
   \item All hosts are on one \textbf{Tailscale tailnet}; services talk to each other only
@@ -140,7 +143,7 @@ mechanisms that bind them together, and the conventions the framework relies on.
 \node[host, fit=(sec)(bro)(int), label={[hl, anchor=north east]south east:secretary host}] (sh) {};
 % ---- managers (on their own host, or on the secretary host)
 \node[box, fill=agt] (mgr) at (1.45,-0.9) {Managers\\\scriptsize status :8773\\[-1pt]
-      \tiny\itshape own host or the secretary host};
+      \tiny\itshape on any host};
 \node[host, fit=(mgr)] (mh) {};
 % ---- GPU VMs
 \node[box, fill=agt] (w1) at (-0.7,-3.9) {Worker\\\scriptsize MCP :8770};
