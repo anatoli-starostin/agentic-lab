@@ -165,7 +165,7 @@ mechanisms that bind them together, and the conventions the framework relies on.
 \node[n] at (-2.6,0.6) {2};
 % ---- 3 members' browsers and laptops: web UI, intake
 \draw[ar] (hum.east) -- (5.8,3.5) -- node[n, pos=0.4]{3} (int.north);
-\draw[ar] (0,3.5) -- (sec.north);
+\draw[ar] (0,3.5) -- node[n, pos=0.4]{3} (sec.north);
 % ---- 4 tasks and files
 \draw[ar] (mh.south) ++(-0.6,0) -- node[n]{4} (w1.north);
 \draw[ar] (mh.south) ++(0.6,0) -- node[n]{4} (w2.north);
@@ -183,10 +183,10 @@ mechanisms that bind them together, and the conventions the framework relies on.
 \draw[dt] (mh.east) -- (11.5,-0.9);
 \node[n] at (11.5,-2.4) {9};
 % ---- 10 every agent calls Claude
-\draw[dt] (g1.south) |- (cl.west);
-\draw[dt] (g2.south) |- (cl.east);
+\draw[dt] (g1.south) |- node[n, pos=0.3]{10} (cl.west);
+\draw[dt] (g2.south) |- node[n, pos=0.3]{10} (cl.east);
 \draw[dt] (mh.south) -- node[n, pos=0.82]{10} (cl.north);
-\draw[dt] (sh.south west) -| (-2.3,-7.4) -| (cl.south);
+\draw[dt] (sh.south west) -| node[n, pos=0.8]{10} (-2.3,-7.4) -| (cl.south);
 \end{tikzpicture}
 
 
