@@ -231,6 +231,10 @@ def _workers(state):
             f"<td class='muted small'>{e(ago(t.get('finished') or t.get('created')))}</td></tr>"
             for t in a.get("recent") or [])
         out.append(f"<h2>{e(a['name'])} {status}</h2>"
+                   + "".join(f"<div class='small warn'>kept awake by {e(h['user'])}"
+                             f"{' (' + e(h['note']) + ')' if h.get('note') else ''} "
+                             f"(~/.lab-keep-awake): never stopped while it's there</div>"
+                             for h in a.get("keep_awake") or []) +
                    f"<div class='small'>GPU: {e(_gpu_line(a))} · disk free "
                    f"{e(a.get('disk_free_gb'))} GB</div>"
                    f"<table><tr><th>Task</th><th>State</th><th>For</th><th>When</th></tr>"
