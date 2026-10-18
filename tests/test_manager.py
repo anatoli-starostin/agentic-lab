@@ -319,7 +319,9 @@ def test_admin_only_actions(monkeypatch):
     # the GPU counts too: a process on it (anyone's), or utilization
     gpu_proc = {"up": True, "queue": {}, "gpu_processes": [{"pid": 7, "name": "python"}]}
     hot = {"up": True, "queue": {}, "gpus": [{"name": "H100", "util": 85}]}
-    cool = {"up": True, "queue": {}, "gpus": [{"name": "H100", "util": 3}], "gpu_processes": []}
+    cool = {"up": True, "queue": {}, "gpus": [{"name": "H100", "util": 0}], "gpu_processes": []}
+    warm = {"up": True, "queue": {}, "gpus": [{"name": "H100", "util": 1}], "gpu_processes": []}
+    assert P.worker_busy("w", warm) == "GPU 1% busy"          # strict: anything above 0%
     for seen, why in ((gpu_proc, "1 process(es) on the GPU (python)"), (hot, "GPU 85% busy"),
                       (cool, None)):
         assert P.busy(lab, "gpu-b", {"agents": {"worker-b": seen}}) == why
@@ -506,3 +508,23 @@ def test_guest_mode(monkeypatch):
     o = clients[-1].options
     assert "lab" in o.mcp_servers and o.env["GH_TOKEN"] == "ghp_x"
     assert "flash-bot" in o.system_prompt["append"]
+
+
+def test_gpu_idle_only_after_several_zero_readings():
+    from agentic_lab.secretary import power as P
+    P._gpu_recent.clear()
+
+    def snap(util):
+        return {"agents": {"worker-b": {"role": "worker", "up": True, "queue": {},
+                                        "gpus": [{"name": "H100", "util": util}]}}}
+    s = snap(40)
+    P.note_gpu(s)
+    assert P.worker_busy("w", s["agents"]["worker-b"]) == "GPU 40% busy"
+    for i in range(P.GPU_IDLE_READINGS - 1):                   # 0% now, but not long enough
+        s = snap(0)
+        P.note_gpu(s)
+        assert P.worker_busy("w", s["agents"]["worker-b"]).startswith("GPU was 40% busy")
+    s = snap(0)
+    P.note_gpu(s)                                              # 0% in 5 readings in a row
+    assert P.worker_busy("w", s["agents"]["worker-b"]) is None
+    P._gpu_recent.clear()
