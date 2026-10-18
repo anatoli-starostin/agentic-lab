@@ -27,7 +27,7 @@ from ..worker.approver import BrokerApprover
 from ..worker.runner import NoChannelApprover
 from ..worker.service import _read_secret
 from ..worker.usage import UsageLog, probe_loop, probe_now
-from .brain import Brain
+from .brain import TURN_BUDGET_S, Brain
 from .followup import finished_prompt, follow
 from .memory import Memory
 from .state import ManagerState
@@ -55,12 +55,17 @@ def compose(lab, msg):
     return "\n\n".join(parts)
 
 
+BUSY = ("Still working on the previous message here; I'll read this right after "
+        "(a few minutes at most).")
+
+
 class Manager:
     def __init__(self, lab, agent_id, slack, brain, workers, broker, state, memory, workdir):
         self.lab, self.agent_id = lab, agent_id
         self.slack, self.brain, self.workers, self.broker = slack, brain, workers, broker
         self.state, self.memory, self.workdir = state, memory, workdir
         self._locks = {}
+        self._told_busy = set()         # conversations told "still working" this busy spell
 
     def may_use(self, human):
         a = self.lab.agents[self.agent_id]
@@ -92,6 +97,7 @@ class Manager:
     async def _turn(self, conv, requester, private, prompt):
         lock = self._locks.setdefault(conv.key, asyncio.Lock())
         async with lock:                # one turn at a time per conversation
+            self._told_busy.discard(conv.key)
             conv.last_requester = requester
             try:
                 return await self.brain.turn(self._ctx(conv, requester, private), prompt)
@@ -103,6 +109,10 @@ class Manager:
         conv = self.state.conversation(msg.channel, msg.thread_ts)
         if msg.mentioned:
             await self.slack.react(msg.channel, msg.ts, "eyes")
+            lock = self._locks.get(conv.key)
+            if lock is not None and lock.locked() and conv.key not in self._told_busy:
+                self._told_busy.add(conv.key)       # once per busy spell, not per message
+                await self.slack.post(conv.channel, conv.thread_ts, BUSY)
         reply = await self._turn(conv, msg.human, msg.private, compose(self.lab, msg))
         if msg.mentioned:
             await self.slack.react(msg.channel, msg.ts, "eyes", add=False)
@@ -156,7 +166,8 @@ async def serve(lab_path, agent_id, host=None, port=None):
 
     brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
                   approver=approver, model=a.get("model"), env=env, usage=usage, events=events,
-                  prompt_extra=GH.instructions(lab, agent_id))
+                  prompt_extra=GH.instructions(lab, agent_id),
+                  turn_budget_s=60 * a.get("turn_budget_min", TURN_BUDGET_S // 60))
     members = {(h or {}).get("slack_user"): hid for hid, h in lab.humans.items()
                if (h or {}).get("slack_user")}
     mgr = Manager(lab, agent_id, None, brain, workers, broker, state, memory, workdir)
@@ -249,7 +260,8 @@ async def ask(lab_path, agent_id, human, text, wait_s=900):
 
     brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
                   approver=approver or NoChannelApprover(), model=a.get("model"), env=env,
-                  prompt_extra=GH.instructions(lab, agent_id))
+                  prompt_extra=GH.instructions(lab, agent_id),
+                  turn_budget_s=60 * a.get("turn_budget_min", TURN_BUDGET_S // 60))
     io = ConsoleIO()
     mgr = Manager(lab, agent_id, io, brain, workers, broker, state, memory, workdir)
     ok, why = mgr.may_use(human)

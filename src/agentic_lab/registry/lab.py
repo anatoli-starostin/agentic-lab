@@ -47,7 +47,8 @@ _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "display_name": (str, False), "compact_percent": (int, False),
           "grants": (list, False),
           "slack_app": (str, False), "max_parallel_gpu_tasks": (int, False),
-          "github": (str, False)}           # its GitHub identity: a bot in github.accounts
+          "github": (str, False),           # its GitHub identity: a bot in github.accounts
+          "turn_budget_min": (int, False)}  # a manager's turns are cut off after this
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
          "preemptible": (bool, False), "power": (str, False), "idle_stop_min": (int, False),
          "restart_by": (str, False), "tailnet_name": (str, False),
@@ -245,6 +246,11 @@ def check(lab: Lab, today: dt.date | None = None):
             E(where, "'max_parallel_gpu_tasks' applies to workers only")
         if role != "manager" and "slack_app" in a:
             E(where, "'slack_app' applies to managers only")
+        if role != "manager" and "turn_budget_min" in a:
+            E(where, "'turn_budget_min' applies to managers only")
+        tb = a.get("turn_budget_min")
+        if isinstance(tb, int) and not isinstance(tb, bool) and not 1 <= tb <= 60:
+            E(where, "turn_budget_min must be between 1 and 60")
         # (slack_app is informational: `lab slack-verify <manager> --write` fills it in)
         if role == "secretary":
             host = lab.hosts.get(a.get("host")) or {}
