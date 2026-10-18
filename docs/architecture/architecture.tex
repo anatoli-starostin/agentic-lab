@@ -7,6 +7,7 @@
 \usepackage{tabularx}
 \usepackage{enumitem}
 \usepackage{xcolor}
+\usepackage{float}
 \usepackage{tikz}
 \usetikzlibrary{positioning,fit,arrows.meta,shapes.geometric,calc}
 \usepackage{hyperref}
@@ -122,7 +123,7 @@ mechanisms that bind them together, and the conventions the framework relies on.
 %=====================================================================
 \section{The big picture}
 
-\begin{figure}[!htbp]
+\begin{figure}[H]
 \centering
 \begin{tikzpicture}[scale=0.88, transform shape,
   box/.style={draw, rounded corners=3pt, align=center, font=\small, inner sep=3pt,
@@ -185,6 +186,7 @@ mechanisms that bind them together, and the conventions the framework relies on.
 \draw[dt] (g1.south) |- (cl.west);
 \draw[dt] (g2.south) |- (cl.east);
 \draw[dt] (mh.south) -- node[n, pos=0.82]{10} (cl.north);
+\draw[dt] (sh.south west) -| (-2.3,-7.4) -| (cl.south);
 \end{tikzpicture}
 
 
