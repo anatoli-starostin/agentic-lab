@@ -46,12 +46,11 @@ _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "gpu": (bool, False), "port": (int, False),
           "display_name": (str, False), "compact_percent": (int, False),
           "grants": (list, False),
-          "slack_app": (str, False), "max_parallel_gpu_tasks": (int, False),
+          "slack_app": (str, False),
           "github": (str, False),           # its GitHub identity: a bot in github.accounts
           "turn_budget_min": (int, False)}  # a manager's turns are cut off after this
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
-         "preemptible": (bool, False), "power": (str, False), "idle_stop_min": (int, False),
-         "restart_by": (str, False), "tailnet_name": (str, False),
+         "power": (str, False), "idle_stop_min": (int, False), "tailnet_name": (str, False),
          "ssh_user": (str, False)}      # who `lab apply` logs in as (default: the admin)
 _GITHUB = {"accounts": (dict, True)}
 # a bot account (a GitHub machine user) an agent acts as
@@ -215,9 +214,6 @@ def check(lab: Lab, today: dt.date | None = None):
             E(where, "a cloud host needs a provider")
         if "power" in h and h["power"] not in POWER:
             E(where, f"power must be one of {POWER}, got {h['power']!r}")
-        rb = h.get("restart_by")
-        if rb is not None and lab.agents.get(rb, {}).get("role") != "secretary":
-            E(where, f"restart_by must name the secretary agent, got {rb!r}")
 
     roles = {}
     for aid, a in lab.agents.items():
@@ -242,8 +238,6 @@ def check(lab: Lab, today: dt.date | None = None):
                 E(where, f"access must be one of {ACCESS}, got {a.get('access')!r}")
         elif "access" in a:
             E(where, "'access' applies to workers and managers only")
-        if role != "worker" and "max_parallel_gpu_tasks" in a:
-            E(where, "'max_parallel_gpu_tasks' applies to workers only")
         if role != "manager" and "slack_app" in a:
             E(where, "'slack_app' applies to managers only")
         if role != "manager" and "turn_budget_min" in a:
