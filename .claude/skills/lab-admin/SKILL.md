@@ -49,19 +49,20 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 | Step | How |
 |---|---|
 | Write the first `lab.yaml` | `lab init ~/lab-config/lab.yaml --name ... --admin ... --admin-name ... --slack-user ... [--manager ...] [--worker id@host ...] --display AGENT=NAME ...` (also writes `framework.lock`) |
-| Validate `lab.yaml` | `lab check lab.yaml` |
-| What would change; missing secrets | `sudo lab --lab lab.yaml plan` |
+| Validate `lab.yaml` | `lab check ~/lab-config/lab.yaml` |
+| What a deploy of `main` would change; missing secrets | `sudo lab --lab ~/lab-config/lab.yaml plan` |
 | Make the hosts match `lab.yaml` on `main` | `sudo lab --lab ~/lab-config/lab.yaml apply [--host H]` (from the framework checkout at the pinned commit; remote hosts over SSH as the admin, who needs passwordless sudo there) |
 | Is this host healthy? | `sudo lab doctor` (on any host; every failure says how to fix it) |
 | A member's Claude token | `sudo -u lab-secretary lab secret request <member> claude-token --url http://<secretary>:8771` → give them the message |
 | A Slack app's tokens / a Nebius service account | `sudo -u lab-secretary lab secret request service:<broker\|secretary\|manager-id> slack-app --url ...` (or `service:secretary nebius-sa`) → a one-time link to paste in a browser |
+| A GitHub bot's token | `sudo -u lab-secretary lab secret request service:github-<bot> github-token --url ...` → a one-time link; then a deploy |
 | Check a Slack app's tokens (and get its App ID) | `sudo lab --lab ~/lab-config/lab.yaml slack-verify <broker\|secretary\|manager-id>` |
 | Open a PR for the current config branch | `lab --lab ~/lab-config/lab.yaml pr-link` (after `git push -u origin <branch>`) |
 | Preview a branch's changes | `sudo lab --lab ~/lab-config/lab.yaml plan --working-tree` |
 | What a host runs | `sudo lab doctor` (config + framework commits, reviewed or not) |
 | Upgrade the framework | `git -C ~/agentic-lab pull` → `lab apply --update-framework` (rewrites `framework.lock` only) → PR |
-| A Slack app manifest | `lab --lab lab.yaml slack-manifest <manager or secretary>` / `slack-manifest approvals` |
-| VM power | after the admin's one Nebius browser login: `sudo lab --lab lab.yaml nebius connect --project <id> [--forget-admin]` |
+| A Slack app manifest | `lab --lab ~/lab-config/lab.yaml slack-manifest <manager or secretary>` / `slack-manifest approvals` |
+| VM power | after the admin's one Nebius browser login: `sudo lab --lab ~/lab-config/lab.yaml nebius connect --project <id> [--forget-admin]` |
 | Talk to an agent without Slack | `sudo -u lab-<id> lab manager ask <id> --as <member> "..."` (or `secretary ask --as <member> "..."`) |
 | An agent's log | web UI `/logs/<agent>` (admins), or `sudo lab logs <agent> [--hours N]` on its host |
 | Talk to an agent in the classic console | `sudo lab debug <agent>` (`--print "q"` for one question) |
@@ -81,15 +82,26 @@ change the secretary can do, do it here anyway (same PR flow), and mention the S
 The full sequence is `docs/install.md`: steps 1–3 by hand, 4–12 guided by you. Follow it
 in order; tell the admin before each step what they will need to do themselves.
 
-## Maintenance recipes
+## Maintenance recipes (from the console; the secretary does the same from Slack)
 
-- **Add an agent:** add it to `lab.yaml` (role, human, host, grants) → `lab check` →
-  create its user on its host (`create-agent-user.sh lab-<id>`) → (M1+) install its service.
-- **Remove an agent:** stop its service (M1+) → remove it from `lab.yaml` → `lab check` →
-  on its host, `sudo userdel -r lab-<id>` (deletes its home and work folder: confirm with
-  the admin first, and offer to archive `~lab-<id>/work`).
-- **Change grants:** edit the agent's `grants:` in `lab.yaml` → `lab check`. Time-limited
-  grants are never written here; humans give those in Slack (M2).
+Every recipe is a `lab.yaml` change through the PR flow above, then a deploy, which creates
+or updates users, secrets and services on every host.
+- **Add a member:** name, Slack member ID (ask) → PR → merge → deploy → their Claude token
+  (`lab secret request <member> claude-token`, or the secretary DMs them).
+- **Add an agent:** its name (ask), role, `human:` (whose seat), `host:` (managers run on
+  any host), `access`, grants → PR → merge → deploy. A manager then needs its Slack app
+  (install step 7) and one more deploy; a GPU host must exist, be on the tailnet and give
+  the admin SSH with passwordless sudo (install step 10).
+- **GitHub for an agent:** the bot account (the admin creates it on GitHub) under
+  `github.accounts`, `github: <bot>` on the agent → PR → merge → deploy → the bot's token
+  (`lab secret request service:github-<bot> github-token`) → deploy again. Remind the admin
+  to protect `main` in the repos (human code owners, no bypass for bots).
+- **Remove an agent:** PR → merge → deploy; then on its host
+  `sudo systemctl disable --now lab-<role>@<id>` and, after the admin confirms (offer to
+  archive `~lab-<id>/work` first), `sudo userdel -r lab-<id>`.
+- **Change grants:** the agent's `grants:` in `lab.yaml` → PR → merge → deploy. Timed grants
+  are never written here; humans give those by answering requests in Slack.
+- **Upgrade the framework:** see the command table (a PR with the new `framework.lock`).
 
 ## Uninstalling
 
@@ -98,8 +110,9 @@ asking before each one. The whole lab, one host, or one agent.
 
 ## Diagnosis
 
-- **See what an agent is doing or did:** the web UI's transcript view (M4); until then,
-  `sudo journalctl -u lab-worker@<id>` for the service, and:
+- **See what an agent is doing or did:** its log in the web UI (`/logs/<agent>`, admins)
+  or `sudo lab logs <agent>` on its host; the service itself: `sudo journalctl -u
+  lab-worker@<id>` (or `lab-manager@<id>`, `lab-secretary`, `lab-broker`, `lab-intake`).
 - **Talk to an agent directly:** `sudo lab debug <agent>`
   stops its service and opens its latest session in the classic Claude Code console, as
   the agent's user with its sandbox; the service restarts on exit. `--print "question"`

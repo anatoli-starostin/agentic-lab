@@ -6,8 +6,8 @@ and the admin approves each step at the console.
 
 There are **two repositories**: this one, the framework (read-only for you: never edit it
 here), and the lab's own private **configuration repository** (`lab.yaml`,
-`framework.lock`), which you create with the admin in install step 4 and push to after
-every change.
+`framework.lock`), which you create with the admin in install step 4. Only what's merged
+to its `main` is ever deployed; every change after the first commit is a pull request.
 
 1. **Clone this repository** to `~/agentic-lab` and work from there. If the clone is
    refused, the repository is private: give this machine read-only access with a deploy
@@ -28,8 +28,8 @@ every change.
 
 Ground rules, in short (the skill has the rest):
 - **Secrets never pass through the chat.** Never ask the admin to paste a token or key
-  into the conversation. Tell them which command to run in their own terminal; it reads
-  the value hidden.
+  into the conversation. `lab secret request ...` gives a one-time link (a web form) or a
+  command for their own terminal; the value goes straight to the lab.
 - **Explain, then act.** Before a step that changes the system (sudo, new users,
   services), say what it does and why.
 - **`lab.yaml` is the source of truth**, in the config repo, and only what's merged to

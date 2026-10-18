@@ -97,6 +97,8 @@ stage's pieces (the GPU wrapper and AppArmor profile help them too) and say so.
   every manager. Their tokens die with them.
 - **Claude tokens**: each member revokes the token they gave the lab (claude.ai settings,
   Claude Code tokens). Uninstalling doesn't revoke them.
+- **GitHub bots**: revoke each bot's token (log in as the bot → Settings → Developer
+  settings → Personal access tokens), and remove or keep the bot accounts.
 - **GitHub**: in the config repo, remove the secretary's deploy key and the admin's;
   archive or delete the repo. In the framework repo (if private), remove this machine's
   deploy key.

@@ -1,6 +1,8 @@
-# A minimal lab: one human, a secretary on an on-prem box, one manager on the shared cloud
-# CPU VM for managers, two cloud GPU workers (one shared, one dedicated). Every agent is attached to a human
-# member in terms of tokens: `human:` is whose Claude seat it runs on.
+# A minimal lab: one human (the admin), a secretary on an on-prem box, one manager on a
+# cloud VM of its own (managers run on any host), two cloud GPU workers (one shared, one
+# dedicated). Every agent is attached to a human member in terms of tokens: `human:` is
+# whose Claude seat it runs on. In a real lab this file lives in the lab's private config
+# repository, and only what's merged to its `main` is deployed.
 # Validate with:  lab check examples/minimal/lab.yaml
 
 lab: example-lab
@@ -11,6 +13,8 @@ humans:
   alice:
     name: Alice
     slack_user: U00000001
+    admin: true                          # may read agents' logs, administer the lab
+    tailscale_login: alice@example.org   # how the web UI recognises her
     channels:
       - {type: slack_dm, timeout_s: 120, on_timeout: deny}   # permissions: Slack DM only (v1)
 
@@ -22,8 +26,7 @@ hosts:
     kind: cloud
     provider: nebius
     instance: mgr-vm-01
-    preemptible: true
-    restart_by: secretary
+    power: always_on
   gpu-a:
     kind: cloud
     provider: nebius
@@ -42,13 +45,15 @@ agents:
     role: secretary
     human: alice
     host: nuc-01
-    model: claude-haiku-5-5
+    display_name: Iris
   mgr-alice:
     role: manager
     human: alice
     host: mgr-vm-01
+    display_name: Flash
     slack_app: A00000001
-    model: claude-sonnet-5-5
+    github: flash-bot          # its GitHub identity: a bot account
+    turn_budget_min: 5         # its turns are cut off after 5 minutes (the default)
     workdir: ~/scratch
     grants:                  # standing grants: this manager may always read the web
       - {tool: WebFetch}
@@ -58,7 +63,6 @@ agents:
     human: alice
     host: gpu-a
     access: shared
-    max_parallel_gpu_tasks: 1
     workdir: ~/work
     grants:
       - {domain: pypi.org}
@@ -69,6 +73,10 @@ agents:
     human: alice
     host: gpu-b
     access: dedicated
+
+github:
+  accounts:
+    flash-bot: {expires: 2027-10-01}     # its token's expiry, for reminders
 
 credentials:
   - {name: slack/mgr-alice, host: mgr-vm-01, agent: mgr-alice, expires: null}

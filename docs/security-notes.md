@@ -9,7 +9,7 @@ Every agent: inside Claude Code's built-in sandbox, Bash is auto-allowed with no
 the tailnet, and writes to its working folder and tmp. Outside the sandbox, internet and
 writes need a human's permission; reads are free. Grants widen the sandbox for a while
 (or permanently, in `lab.yaml`). There is no command parsing anywhere: a parser that
-decides from command text is an arms race. Porting spiky's classifier turned up about ten
+decides from command text is an arms race: an earlier command classifier yielded about ten
 bypasses in one afternoon, and that's why we dropped the approach.
 
 ## Verified on a cloud GPU worker (2026-10-17)
@@ -56,8 +56,8 @@ What it took:
   systemd user manager.
 - **Settings are host-specific.** `~` in generated paths expands on the machine that runs
   the generator, so settings must be generated on the agent's own host.
-- **Real workloads.** Checked so far: `nvidia-smi` and `cuInit`. A full PyTorch training
-  step inside the sandbox comes with the worker runner (M1).
+- **Real workloads**: verified, a worker installed PyTorch from PyPI (a domain grant) and
+  trained a model on the H100 inside the sandbox.
 - **A command that creates a repo and writes its hooks in one go** isn't protected (the
   protection list is built when a command starts). Harmless in our model: git outside the
   sandbox always needs a human's approval, and hooks run by sandboxed git stay sandboxed.
@@ -74,19 +74,21 @@ What it took:
 
 ## Accepted trade-offs
 
-- **Local reads are free**, including the Read tool (which runs outside the sandbox). An
-  agent can read token files on its own host. Fine for small, transparent teams. A token
-  that matters more moves to another Unix user, out of the agent's reach.
+- **Local reads are free**, except `/run` and the agent's service's own secrets and state
+  (`~/.config/agentic-lab`, `~/.local/state/agentic-lab`): the agent's Read tool is denied
+  there and its sandbox hides them; the Claude token is stripped from sandboxed commands.
+  Other agents' files are protected by Unix permissions (one user per agent).
+- **A GitHub bot's token is readable by its agent** (it's in the agent's environment, so
+  git and `gh` work). Safety comes from GitHub: private repositories, a fine-grained token
+  limited to the lab's repos, and branch protection (human code owners, no bypass for
+  bots), so a bot can't approve or merge.
+- **`sudo` on a lab host is admin power**: it reads every agent's files and logs there.
+  Give members SSH without `sudo`.
+- **Admins' devices are the keys to the logs**: the web UI trusts Tailscale's identity of
+  the device (it can't be forged over the tailnet, but a stolen, unlocked admin laptop is
+  an admin).
 - **Tailnet is trusted.** Any sandboxed command can reach any tailnet host (by name). This
   may tighten to per-host lists as the organisation grows.
 - **Allowed domains can carry data out.** A domain grant (say, GitHub) also lets a
   sandboxed command upload there. The docs note domain fronting as a further limit of
   proxy-based filtering.
-
-## Spiky's current gate (not part of this repo)
-
-While porting, we found holes in spiky's live `cage_policy.py` and `sbox`. These include
-command smuggling through the report helper, git options that run programs, write and exec
-forms of "read-only" commands, and `sbox --net tailnet` keeping `CAP_NET_ADMIN`, which
-lets a caged command delete its egress filter and reach the internet. Spiky needs its own
-fix until it moves to the lab.

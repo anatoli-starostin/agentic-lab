@@ -90,8 +90,9 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      manager and the first workers' hosts. Claude runs:
      `lab init ~/lab-config/lab.yaml --name ... --admin ... --admin-name ... --slack-user ... --manager mgr-flash --worker worker-a@gpu-a --display secretary=Iris --display mgr-flash=Flash --display worker-a=Bolt`
    - `lab init` marks the admin `admin: true`, fills in their Tailscale login (for the
-     web UI's logs) from this machine's owner, and writes `framework.lock`. A separate VM
-     for managers: `--manager-host mgr-vm`. Optionally add an `announcements` channel.
+     web UI's logs) from this machine's owner, and writes `framework.lock`. The manager on
+     another host (managers run on any host): `--manager-host <host>`. Optionally add an
+     `announcements` channel.
      `lab check` must pass.
    - Claude commits both files and pushes them **directly to `main`** (the one exception:
      the repo is empty and unprotected). From now on, every change is a PR.
@@ -103,6 +104,11 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      Services whose secrets don't exist yet (the broker's and manager's Slack apps, Claude
      tokens) are installed but held back, and listed; the next steps provide them, and the
      final `lab apply` starts them.
+   - **The secretary's deploy key.** This first deploy also prints a public key for the
+     secretary: the admin adds it to the config repo (Settings → Deploy keys) **with write
+     access** (it pushes branches; branch protection keeps it off `main`). The next deploy
+     clones the config repo for the secretary; from then on the lab can be administered
+     from Slack (see "Afterwards").
 
 7. **Slack apps** (Admin creates them, Claude guides; ~3 minutes each)
    - Two apps at install: **Lab Approvals** (the broker's) and **the secretary**.
@@ -127,6 +133,8 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
         Copy the token (`xapp-…`).
      5. Open the one-time link, paste both tokens, *Send*. Then tell Claude "done".
         **Never paste a token into the chat.**
+   - The secretary's app has **Interactivity** on (its manifest sets it): that's what makes
+     its Deploy button work.
    - Claude checks it at once: `sudo lab slack-verify <broker|secretary|manager id>`
      asks Slack whether both tokens work and prints the app's name, workspace and App ID;
      for a manager, Claude adds `slack_app: <App ID>` to `lab.yaml` in the next PR. If
@@ -150,7 +158,8 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      that may only view, start and stop VMs (`compute.instance-power-operator`), its key
      generated on this host, the secretary's CLI profile; it lists the project's VMs.
    - Claude adds the GPU VMs to `lab.yaml` (`kind: cloud`, `provider: nebius`,
-     `instance: <id>`, `power: on_demand`, `idle_stop_min: 30`, `tailnet_name`).
+     `instance: <id>`, `power: on_demand`, `idle_stop_min: 30`, `tailnet_name`), as a PR
+     for the admin to merge.
    - Fallback, an existing service account: `... secret request service:secretary nebius-sa`
      (a form with the service account id, key id and private key PEM).
 
@@ -167,14 +176,9 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
       secrets and services. The tokens agents use to reach each other are generated and
       never shown.
     - `sudo lab doctor` on each host: every check passes, or says how to fix it.
-    - **The secretary's deploy key.** The first apply prints a public key for the
-      secretary: add it to the config repo (Settings → Deploy keys) **with write access**
-      (it pushes branches; branch protection keeps it from `main`), then `sudo lab apply`
-      once more. From then on the lab is administered from Slack (see "Afterwards").
-    - The secretary's Slack app needs **Interactivity** on (the manifest has it) for the
-      Deploy button.
 
 12. **First task** (Admin)
+    - If the install had no manager yet, add one from Slack first (see "Afterwards").
     - DM the manager: *"Run a quick GPU smoke test on worker-a and show me a loss
       curve."* Progress, the plot and a summary come back in Slack; any approval comes as a
       DM from Lab Approvals. The web UI shows it all.

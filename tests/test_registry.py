@@ -56,7 +56,10 @@ def test_example_agent_settings():
         "*.example.ts.net", "pypi.org", "files.pythonhosted.org"]
     m = lab.agent_settings("mgr-alice")
     assert {"WebFetch", "WebSearch"} <= set(m["permissions"]["allow"])
-    assert m["sandbox"]["network"]["allowedDomains"] == ["*.example.ts.net"]
+    # the manager has a GitHub bot: github.com is reachable from its sandbox
+    assert m["sandbox"]["network"]["allowedDomains"][0] == "github.com"
+    assert m["sandbox"]["network"]["allowedDomains"][-1] == "*.example.ts.net"
+    assert m["env"]["GIT_AUTHOR_NAME"] == "flash-bot"
     assert m["env"]["CLAUDE_AUTOCOMPACT_PCT_OVERRIDE"] == "17"     # managers compact early
     assert "CLAUDE_AUTOCOMPACT_PCT_OVERRIDE" not in w["env"]       # workers: Claude's default
     assert lab.display_name("worker-a") == "worker-a"
