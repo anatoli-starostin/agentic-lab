@@ -83,7 +83,8 @@ def _approvals(state, human_id):
     mine = [r for r in ap.get("pending") or [] if r.get("human") == human_id]
     if not mine:
         return [_context("No approvals waiting for you.")]
-    rows = [f"• *{r['agent']}*: `{r['detail'][:80]}` (until {r['expires'][11:16]} UTC)"
+    rows = [f"• *{r['agent']}*: `{r['detail'][:80]}`"
+            + (f" (until {r['expires'][11:16]} UTC)" if r.get("expires") else "")
             for r in mine]
     return [_section(f"*⏳ {len(mine)} waiting for you* (in your DM from the approvals app)\n"
                      + "\n".join(rows))]

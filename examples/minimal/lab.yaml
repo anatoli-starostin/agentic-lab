@@ -16,7 +16,9 @@ humans:
     admin: true                          # may read agents' logs, administer the lab
     tailscale_login: alice@example.org   # how the web UI recognises her
     channels:
-      - {type: slack_dm, timeout_s: 120, on_timeout: deny}   # permissions: Slack DM only (v1)
+      # permissions: Slack DM only (v1). Requests wait for an answer; add timeout_s: N to
+      # deny unanswered ones after N seconds.
+      - {type: slack_dm, on_timeout: deny}
 
 hosts:
   nuc-01:

@@ -68,7 +68,7 @@ def build(lab_name, tailnet, admin_id, admin_name, slack_user, secretary_host,
     if secretary_name:
         hosts[secretary_host]["tailnet_name"] = secretary_name
     human = {"name": admin_name, "channels": [
-        {"type": "slack_dm", "timeout_s": 120, "on_timeout": "deny"}]}
+        {"type": "slack_dm", "on_timeout": "deny"}]}     # no timeout_s: waits for an answer
     if slack_user:
         human["slack_user"] = slack_user
     human["admin"] = True                 # sees agents' logs in the web UI

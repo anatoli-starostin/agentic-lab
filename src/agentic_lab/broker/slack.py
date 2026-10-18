@@ -23,7 +23,8 @@ from .core import PENDING, Broker, BrokerError, Request
 log = logging.getLogger("agentic_lab.broker.slack")
 
 LABELS = {"once": "✅ allowed once", "hour": "✅ granted for 1 hour",
-          "task": "✅ granted for this task", "deny": "⛔ denied", "timeout": "⌛ timed out (denied)"}
+          "task": "✅ granted for this task", "deny": "⛔ denied", "timeout": "⌛ timed out (denied)",
+          "withdrawn": "↩️ withdrawn (the agent stopped waiting, e.g. its task was cancelled)"}
 
 
 def _grant_text(options):
@@ -34,7 +35,8 @@ def _grant_text(options):
 
 def request_blocks(req: Request):
     """The DM for a pending request."""
-    until = dt.datetime.fromisoformat(req.expires).strftime("%H:%M UTC")
+    until = (dt.datetime.fromisoformat(req.expires).strftime("%H:%M UTC")
+             if req.expires else None)          # None: no timeout, it waits for you
     task = f" (task `{req.task_id}`)" if req.task_id else ""
     blocks = [
         {"type": "section", "text": {"type": "mrkdwn",
@@ -62,7 +64,8 @@ def request_blocks(req: Request):
     blocks += [
         {"type": "actions", "block_id": "decide", "elements": buttons},
         {"type": "context", "elements": [{"type": "mrkdwn", "text":
-         f"Reply in this thread to deny with a note for the agent · auto-deny at {until}"}]},
+         "Reply in this thread to deny with a note for the agent"
+         + (f" · auto-deny at {until}" if until else " · it waits for your answer")}]},
     ]
     return blocks
 

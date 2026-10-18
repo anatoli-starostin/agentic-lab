@@ -244,7 +244,8 @@ def _approvals(state):
         return f"<section><h2>Approvals</h2><p class='muted'>{e(ap['error'])}</p></section>"
     pend = "".join(f"<tr><td>{e(r['agent'])}</td><td><code>{e(r['detail'][:120])}</code></td>"
                    f"<td>{e(r['human'])}</td><td class='muted small'>until "
-                   f"{e(r['expires'][11:16])} UTC</td></tr>" for r in ap.get("pending") or [])
+                   f"{e(r['expires'][11:16]) + ' UTC' if r.get('expires') else 'no timeout'}</td></tr>"
+                   for r in ap.get("pending") or [])
     grants = "".join(f"<tr><td>{e(agent)}</td><td>{e(g['kind'])} <b>{e(g['value'])}</b></td>"
                      f"<td>{e(g.get('granted_by'))}</td><td class='muted small'>until "
                      f"{e(g['expires'][11:16])} UTC</td></tr>"

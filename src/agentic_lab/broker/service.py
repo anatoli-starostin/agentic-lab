@@ -33,7 +33,7 @@ def humans_from_lab(lab):
         h = h or {}
         dm = next((c for c in h.get("channels") or [] if c.get("type") == "slack_dm"), {})
         out[hid] = {"slack_user": h.get("slack_user"),
-                    "timeout_s": dm.get("timeout_s", DEFAULT_TIMEOUT_S)}
+                    "timeout_s": dm.get("timeout_s", DEFAULT_TIMEOUT_S)}   # None: no timeout
     return out
 
 

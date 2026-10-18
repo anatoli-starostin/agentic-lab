@@ -82,6 +82,16 @@ def app(broker: Broker, tokens: dict[str, str]):
             return JSONResponse({"error": str(e)}, status_code=404)
         return JSONResponse(req.view())
 
+    async def withdraw(request: HttpRequest):
+        agent = caller(request)
+        if not agent:
+            return denied()
+        try:
+            req = broker.withdraw(request.path_params["rid"], agent)
+        except BrokerError as e:
+            return JSONResponse({"error": str(e)}, status_code=404)
+        return JSONResponse(req.view())
+
     async def grants(request: HttpRequest):
         agent = caller(request)
         if not agent:
@@ -145,6 +155,7 @@ def app(broker: Broker, tokens: dict[str, str]):
         Route("/v1/requests", submit, methods=["POST"]),
         Route("/v1/requests/{rid}", get, methods=["GET"]),
         Route("/v1/requests/{rid}/context", context, methods=["POST"]),
+        Route("/v1/requests/{rid}/withdraw", withdraw, methods=["POST"]),
         Route("/v1/grants", grants, methods=["GET"]),
         Route("/v1/tasks", register, methods=["POST"]),
         Route("/v1/pending", pending, methods=["GET"]),
