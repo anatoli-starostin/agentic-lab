@@ -4,10 +4,14 @@ A framework for running a scientific lab as a team of **humans and AI agents**:
 
 - **Workers** run experiments on cloud GPU VMs inside a sandbox, without prompts.
 - **Managers** are your team members in Slack. They turn requests into worker tasks and
-  relay every approval request to a human. They never approve anything themselves.
+  relay every approval request to a human. They never approve anything themselves. Anyone
+  can talk to any manager; a dedicated one works only for its own member (others are
+  guests: questions and discussion).
 - A **secretary** keeps the lab running: VM power and idle stops, Claude usage per
   account, token expiry, the lab's web UI; and admins administer the lab through it in
   Slack (it proposes changes as pull requests; only an admin's click deploys).
+- People can still work on lab machines directly: `~/.lab-keep-awake` keeps a machine
+  from being stopped while they need it.
 - The lab is described by one `lab.yaml` in the lab's **private config repository**; only
   what's merged to its `main` is ever deployed.
 
