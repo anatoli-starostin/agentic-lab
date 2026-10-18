@@ -106,7 +106,7 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   the broker's overview, local systemd units, machine power states (Nebius).
 - **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
   (a worker task running, queued or awaiting approval; any process on a GPU, anyone's; a GPU
-  at ≥10% utilization; a manager on it) may be powered off only by an admin, after
+  above 0% in any of its last 5 readings, about 75 s; a manager on it) may be powered off only by an admin, after
   confirming. Idle `on_demand` hosts with only workers are stopped after `idle_stop_min`.
 - **Notices**: daily, credentials and GitHub bot tokens expiring within 14 days; lab-wide
   notices go to an optional `announcements` channel.
@@ -516,7 +516,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-17 | **No spend limits.** Transparency through the web UI instead. |
 | 2026-10-17 | **Agents' logs are for admins only** (`admin: true` + Tailscale identity). |
 | 2026-10-17 | **Usage percentages from a probe** of the seat's rate-limit headers, only while a window is open; "Check now" in the web UI. |
-| 2026-10-17 | **Admin-only actions, checked in code**: powering off a busy machine (after confirming), asking for someone else's token. **Busy** includes any process on a GPU or ≥10% GPU utilization. |
+| 2026-10-17 | **Admin-only actions, checked in code**: powering off a busy machine (after confirming), asking for someone else's token. **Busy** includes any process on a GPU or any GPU utilization (idle only after 0% in several readings in a row). |
 | 2026-10-17 | **Private config repository**: `lab.yaml` + `framework.lock` (the framework pinned by commit). **Only `main` is deployed**; every change is a reviewed PR. |
 | 2026-10-17 | **Administering from Slack**: the secretary proposes PRs and deploys `main` on an admin's click, with one sudo command (`lab apply-main`). The console is for the install and emergencies. |
 | 2026-10-18 | **GitHub for agents**: one bot account per agent (may be shared), its token in the agent's environment; safety from GitHub (private repos, fine-grained tokens, branch protection: bots never approve or merge). |

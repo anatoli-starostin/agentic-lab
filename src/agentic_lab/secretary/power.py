@@ -19,7 +19,8 @@ if not os.path.exists(NEBIUS) and os.path.exists("/usr/local/bin/nebius"):
     NEBIUS = "/usr/local/bin/nebius"
 PROFILE = "lab"
 BUSY = ("running", "queued", "awaiting_approval")
-GPU_BUSY_UTIL = 10              # % utilization at which a GPU counts as in use
+GPU_IDLE_READINGS = 5           # a GPU is idle only at 0% in this many readings in a row
+_gpu_recent = {}                # worker -> its GPUs' highest utilization, last readings
 
 
 class PowerError(RuntimeError):
@@ -80,10 +81,26 @@ async def stop(lab, host):
     await _cli("compute", "instance", "stop", "--id", lab.hosts[host]["instance"])
 
 
+def note_gpu(snapshot):
+    """Remember each worker's GPU utilization over the last readings (one per collection),
+    and write its highest into the snapshot (`gpu_recent_max`): a GPU counts as idle only
+    after 0% in GPU_IDLE_READINGS readings in a row."""
+    from collections import deque
+    for aid, a in (snapshot.get("agents") or {}).items():
+        if a.get("role") != "worker" or not a.get("up"):
+            _gpu_recent.pop(aid, None)
+            continue
+        utils = [g.get("util") or 0 for g in a.get("gpus") or []]
+        hist = _gpu_recent.setdefault(aid, deque(maxlen=GPU_IDLE_READINGS))
+        hist.append(max(utils) if utils else 0)
+        a["gpu_recent_max"] = max(hist)
+        a["gpu_readings"] = len(hist)
+
+
 def worker_busy(name, seen):
     """Why a worker's machine is busy (None if it isn't), from its health readings: tasks
     running, queued or waiting, or the GPUs in use by anything (nvidia-smi: a process on a
-    GPU, the lab's or anyone's, or utilization of GPU_BUSY_UTIL % and more)."""
+    GPU, the lab's or anyone's, or any utilization above 0% in its last readings)."""
     q = seen.get("queue") or {}
     n = {k: q.get(k, 0) for k in BUSY if q.get(k)}
     if n:
@@ -92,9 +109,13 @@ def worker_busy(name, seen):
     if procs:
         names = ", ".join(sorted({p.get("name") or "?" for p in procs}))
         return f"{len(procs)} process(es) on the GPU ({names})"
-    hot = [g for g in seen.get("gpus") or [] if (g.get("util") or 0) >= GPU_BUSY_UTIL]
-    if hot:
-        return f"GPU {max(g['util'] for g in hot)}% busy"
+    now = max([g.get("util") or 0 for g in seen.get("gpus") or []] or [0])
+    recent = max(now, seen.get("gpu_recent_max") or 0)
+    if recent > 0:
+        return (f"GPU {now}% busy" if now > 0 else
+                f"GPU was {recent}% busy in the last {GPU_IDLE_READINGS} readings")
+    if seen.get("gpus") and seen.get("gpu_readings", GPU_IDLE_READINGS) < GPU_IDLE_READINGS:
+        return "GPU not yet 0% for long enough"
     return None
 
 

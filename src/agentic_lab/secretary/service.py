@@ -556,6 +556,7 @@ async def serve(lab_path, host, port):
             try:
                 latest["state"] = await collect(lab, workers, broker, units, managers,
                                                 own=(sec_id, usage))
+                P.note_gpu(latest["state"])     # a GPU is idle only after several 0% readings
                 if rounds["n"] % 4 == 0:
                     await check_power()
                 rounds["n"] += 1

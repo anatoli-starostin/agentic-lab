@@ -429,8 +429,9 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
     (\code{kind: cloud}, \code{provider: nebius}, \code{instance}), with a service account
     that may only view, start and stop VMs. Never its own host.
   \item \textbf{Busy} means: a worker there has a task running, queued or awaiting
-    approval; or any process on a GPU (anyone's, not only the lab's); or a GPU at 10\% or
-    more; or a manager runs there.
+    approval; or any process on a GPU (anyone's, not only the lab's); or a GPU above 0\%
+    in any of its last 5 readings (about 75 s: a GPU counts as idle only after 0\% in
+    several readings in a row); or a manager runs there.
   \item \textbf{Idle stop}: an \code{on\_demand} host with only workers is stopped after
     \code{idle\_stop\_min} minutes of not being busy.
   \item \textbf{Who may power}: any member may power a machine on, or off when idle;
