@@ -420,7 +420,7 @@ a human reviews and merges → deploy. Every host records what it runs
 **After the install, admins work with the secretary in Slack**, with admin-only tools checked
 in code: `propose_lab_change` (a checked branch, pushed; replies with the diff and "here is
 the PR, review and merge it"), `offer_deploy` (a **Deploy** button; only an admin's click
-deploys), `request_slack_app` (with an app icon Claude draws from the agent's name;
+deploys), `request_slack_app` (with an app icon Claude draws from the agent's name, role and the lab's name;
 `redraw_app_icon` for another), `request_github_token`, `check_slack_app`. The secretary's one
 root command is **`lab apply-main`** (a sudoers rule, no arguments): it deploys only `main`,
 as its own systemd unit. Even a misled secretary can only deploy what a human merged.

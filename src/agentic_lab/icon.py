@@ -62,7 +62,8 @@ def png(name, size=SIZE):
 # converted to a PNG with rsvg-convert. Any failure falls back to the pattern above.
 
 PROMPT = """Draw an app icon as one self-contained SVG for an AI agent named "{name}", {role} \
-in a scientific lab. viewBox 0 0 512 512; a solid rounded-square background in a colour \
+in the scientific lab "{lab}" (let the lab's name and field inspire the icon too). \
+viewBox 0 0 512 512; a solid rounded-square background in a colour \
 close to {colour}; one bold, recognizable motif inspired by the name; flat modern style; \
 no text or letters; no external references, images, scripts or fonts. Output ONLY the SVG \
 code."""
@@ -114,7 +115,7 @@ def rasterize(svg, size=SIZE):
     return r.stdout
 
 
-async def claude_svg(name, role="", env=None, model="sonnet", cwd=None):
+async def claude_svg(name, role="", env=None, model="sonnet", cwd=None, lab=""):
     """Ask Claude for the SVG (one turn, no tools)."""
     from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ResultMessage,
                                   TextBlock, query)
@@ -122,7 +123,7 @@ async def claude_svg(name, role="", env=None, model="sonnet", cwd=None):
         allowed_tools=[], max_turns=1, setting_sources=[], model=model, env=env or {},
         cwd=cwd, system_prompt="You draw app icons. You answer with SVG code only.")
     prompt = PROMPT.format(name=name, role=ROLES.get(role, role or "an agent"),
-                           colour=background_hint(name))
+                           lab=lab or "a research lab", colour=background_hint(name))
     text = ""
     async for msg in query(prompt=prompt, options=opts):
         if isinstance(msg, AssistantMessage):
@@ -132,10 +133,11 @@ async def claude_svg(name, role="", env=None, model="sonnet", cwd=None):
     return clean_svg(text)
 
 
-async def drawn(name, role="", env=None, draw=None):
-    """(PNG bytes, how it was made): drawn by Claude, or the pattern if that fails."""
+async def drawn(name, role="", env=None, draw=None, lab=""):
+    """(PNG bytes, how it was made): drawn by Claude, or the pattern if that fails. `lab`:
+    the lab's name (lab.yaml `lab`), so the icon fits the project too."""
     try:
-        svg = await (draw or claude_svg)(name, role, env=env)
+        svg = await (draw or claude_svg)(name, role, env=env, lab=lab)
         return rasterize(svg), "drawn by Claude"
     except Exception as e:
         return png(name), f"a pattern (Claude's drawing failed: {str(e)[:120]})"

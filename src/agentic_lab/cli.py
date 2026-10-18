@@ -438,7 +438,7 @@ def cmd_slack_icon(args):
 
         from .icon import drawn
         role = "approvals" if name == "Lab Approvals" else lab.agents[args.agent].get("role")
-        data, how = asyncio.run(drawn(name, role))
+        data, how = asyncio.run(drawn(name, role, lab=lab.name))
     else:
         data, how = png(name), "a pattern from the name"
     with open(out, "wb") as f:

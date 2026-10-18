@@ -483,7 +483,7 @@ admin's in \code{lab.yaml}):
     newer \code{main} refuses. The result is posted back in the conversation.
   \item[\code{request\_slack\_app}, \code{request\_github\_token}] post the steps (manifest,
     links, clicks) and a one-time link for a new manager's Slack app or a bot's token. With
-    a Slack app comes its icon, drawn by Claude from the agent's name (as SVG, converted to
+    a Slack app comes its icon, drawn by Claude from the agent's name, role and the lab's name (as SVG, converted to
     PNG; a pattern made from the name if that fails); \code{redraw\_app\_icon} draws
     another.
   \item[\code{check\_slack\_app}, \code{read\_lab\_config}] check a Slack app's tokens; read

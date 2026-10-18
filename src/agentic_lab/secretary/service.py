@@ -205,7 +205,8 @@ class Secretary:
         try:
             import tempfile
             from ..icon import drawn
-            data, how = await drawn(name, role, env=getattr(self.brain, "env", None))
+            data, how = await drawn(name, role, env=getattr(self.brain, "env", None),
+                                    lab=self.lab.name)
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
                 f.write(data)
             await self.slack.upload(conv.channel, conv.thread_ts, f.name,

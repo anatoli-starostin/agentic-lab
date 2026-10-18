@@ -63,15 +63,15 @@ def test_drawn_falls_back_to_the_pattern(monkeypatch):
     import asyncio
     from agentic_lab import icon as I
 
-    async def broken(name, role, env=None):
+    async def broken(name, role, env=None, lab=""):
         raise I.IconError("no network")
     data, how = asyncio.run(I.drawn("Flash", "manager", draw=broken))
     assert data == png("Flash") and "pattern" in how and "no network" in how
 
-    async def good(name, role, env=None):
-        assert name == "Flash" and role == "manager"
+    async def good(name, role, env=None, lab=""):
+        assert name == "Flash" and role == "manager" and lab == "deep-lab"
         return '<svg viewBox="0 0 512 512"><rect width="512" height="512"/></svg>'
     monkeypatch.setattr(I, "rasterize", lambda svg: b"\x89PNGfake")
-    data, how = asyncio.run(I.drawn("Flash", "manager", draw=good))
+    data, how = asyncio.run(I.drawn("Flash", "manager", draw=good, lab="deep-lab"))
     assert data == b"\x89PNGfake" and how == "drawn by Claude"
     assert I.background_hint("Flash") != I.background_hint("Iris")   # icons vary in colour
