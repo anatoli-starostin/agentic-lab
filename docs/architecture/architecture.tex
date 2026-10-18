@@ -296,8 +296,11 @@ sandbox violations that explain it.
   \item[How] A DM from the \emph{Lab Approvals} app with buttons: \textbf{Run once},
     \textbf{Allow \emph{X} for 1 hour}, \textbf{Allow \emph{X} for this task}, \textbf{Deny}.
     A reply in the DM's thread denies, with the reply as the reason.
-  \item[Timeout] Unanswered requests are denied (default 120 s per human,
-    \code{timeout\_s}); a timeout never approves.
+  \item[Timeout] On by default: a request nobody answers within 120 seconds (per member:
+    \code{timeout\_s} in \code{lab.yaml}) is closed as \emph{denied}. Silence always counts
+    as ``no'', never as ``yes'' (\code{on\_timeout} can only be \code{deny}). The agent is
+    told it was a timeout, not a refusal, and to find a way inside its sandbox or ask
+    again later.
   \item[Grants] ``For a while'' answers become \emph{grants} that widen the sandbox
     (a domain, a writable path, or a tool) with an expiry; the agent's session restarts
     with the wider sandbox. \emph{Standing} grants are written in \code{lab.yaml}.
@@ -479,7 +482,10 @@ admin's in \code{lab.yaml}):
     is merged but not deployed. Only an admin's click deploys; a button left behind by a
     newer \code{main} refuses. The result is posted back in the conversation.
   \item[\code{request\_slack\_app}, \code{request\_github\_token}] post the steps (manifest,
-    links, clicks) and a one-time link for a new manager's Slack app or a bot's token.
+    links, clicks) and a one-time link for a new manager's Slack app or a bot's token. With
+    a Slack app comes its icon, drawn by Claude from the agent's name, role and the lab's name (as SVG, converted to
+    PNG; a pattern made from the name if that fails); \code{redraw\_app\_icon} draws
+    another.
   \item[\code{check\_slack\_app}, \code{read\_lab\_config}] check a Slack app's tokens; read
     the configuration on \code{main}.
 \end{description}

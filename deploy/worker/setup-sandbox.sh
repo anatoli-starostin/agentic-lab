@@ -17,6 +17,7 @@ here=$(cd "$(dirname "$0")" && pwd)
 echo "== packages"
 apt-get install -y bubblewrap socat >/dev/null
 apt-get install -y gh >/dev/null 2>&1 || echo "   (gh not installed: agents can still use git and the GitHub API)"
+apt-get install -y librsvg2-bin >/dev/null 2>&1 || echo "   (rsvg-convert not installed: Slack app icons fall back to patterns)"
 
 echo "== apparmor"
 if [ "$(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 0)" = "1" ]; then

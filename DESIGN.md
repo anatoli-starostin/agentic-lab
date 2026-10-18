@@ -256,8 +256,10 @@ agent's service ◄── decision ─── broker (its own token, over the tai
   requester — the agent's attached human.
 - Only **Lab Approvals** posts approval requests; only the broker holds its tokens. A
   decision is recorded only after a verified interaction of the asked human.
-- **Timeouts deny** (per human, `timeout_s`, default 120 s); the agent is told it was a
-  timeout and asked to find a way inside the sandbox.
+- **Timeouts deny.** On by default: a request nobody answers within 120 s (per member:
+  `timeout_s`) is closed as denied. Silence always counts as "no", never as "yes"
+  (`on_timeout` can only be `deny`). The agent is told it was a timeout, not a refusal,
+  and asked to find a way inside the sandbox or to ask again later.
 - Grants are created only by the broker, after a verified human answer.
 
 ### 6.4 Secrets
@@ -418,7 +420,8 @@ a human reviews and merges → deploy. Every host records what it runs
 **After the install, admins work with the secretary in Slack**, with admin-only tools checked
 in code: `propose_lab_change` (a checked branch, pushed; replies with the diff and "here is
 the PR, review and merge it"), `offer_deploy` (a **Deploy** button; only an admin's click
-deploys), `request_slack_app`, `request_github_token`, `check_slack_app`. The secretary's one
+deploys), `request_slack_app` (with an app icon Claude draws from the agent's name, role and the lab's name;
+`redraw_app_icon` for another), `request_github_token`, `check_slack_app`. The secretary's one
 root command is **`lab apply-main`** (a sudoers rule, no arguments): it deploys only `main`,
 as its own systemd unit. Even a misled secretary can only deploy what a human merged.
 

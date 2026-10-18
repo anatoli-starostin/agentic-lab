@@ -23,7 +23,8 @@ warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
 
 TOOL_NAMES = ("lab_state", "worker_tasks", "task_result", "ask_member_for_claude_token",
               "announce", "power", "read_lab_config", "propose_lab_change", "offer_deploy",
-              "check_slack_app", "request_slack_app", "request_github_token")
+              "check_slack_app", "request_slack_app", "request_github_token",
+              "redraw_app_icon")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
 
 
@@ -149,6 +150,12 @@ def build_tools(ctx):
     async def offer_deploy(args):
         return text(await ctx.offer_apply(bool(args.get("redeploy"))))
 
+    @tool("redraw_app_icon", "Admins only: draw another icon for an agent's Slack app (or "
+          "'approvals') and post it here, when the admin asks for a different one.",
+          {"agent": str})
+    async def redraw_app_icon(args):
+        return text(await ctx.redraw_app_icon(args["agent"]))
+
     @tool("request_github_token", "Admins only: a one-time link (and the exact steps) for a "
           "GitHub bot account's token. The account must be in the deployed lab.yaml.",
           {"account": str})
@@ -171,7 +178,8 @@ def build_tools(ctx):
     return create_sdk_mcp_server("lab", tools=[lab_state, worker_tasks, task_result,
                                                ask_member, announce, power, read_config,
                                                propose, offer_deploy, check_slack_app,
-                                               request_slack_app, request_github_token])
+                                               request_slack_app, request_github_token,
+                                               redraw_app_icon])
 
 
 class SecretaryBrain:

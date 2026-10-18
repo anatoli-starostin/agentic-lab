@@ -133,6 +133,12 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
         Copy the token (`xapp-…`).
      5. Open the one-time link, paste both tokens, *Send*. Then tell Claude "done".
         **Never paste a token into the chat.**
+     6. Optional, its icon: `lab slack-icon <agent> --claude` has Claude draw one from the
+        agent's name (falling back to a pattern made from the name; without `--claude`,
+        the pattern). The pattern is also at `http://<secretary host>:8774/icon/<agent>.png`
+        once the secretary runs. *Basic Information* → *Display Information* → *App icon*
+        → upload it. (After the install the secretary posts a drawn icon itself, and draws
+        another on request.)
    - The secretary's app has **Interactivity** on (its manifest sets it): that's what makes
      its Deploy button work.
    - Claude checks it at once: `sudo lab slack-verify <broker|secretary|manager id>`
