@@ -423,6 +423,23 @@ def cmd_nebius_connect(args):
     return 0
 
 
+def cmd_slack_icon(args):
+    from .icon import png
+    lab = _load_lab(args.lab)
+    if args.agent in ("approvals", "broker"):
+        name = "Lab Approvals"
+    elif args.agent in lab.agents:
+        name = lab.display_name(args.agent)
+    else:
+        sys.exit(f"lab slack-icon: no agent {args.agent!r} (or 'approvals')")
+    out = args.output or f"{args.agent}-icon.png"
+    with open(out, "wb") as f:
+        f.write(png(name))
+    print(f"wrote {out}: {name}'s icon (512x512). In the app's settings: Basic Information "
+          "→ Display Information → App icon.")
+    return 0
+
+
 def cmd_pr_link(args):
     from . import configrepo as CR
     try:
@@ -617,6 +634,12 @@ def main(argv=None):
                         "(sudo, secretary host)")
     sv.add_argument("owner", help="broker, secretary or a manager's id")
     sv.set_defaults(fn=cmd_slack_verify)
+
+    si = sub.add_parser("slack-icon", help="an icon for an agent's Slack app, generated "
+                        "from its name")
+    si.add_argument("agent", help="a manager, the secretary, or 'approvals'")
+    si.add_argument("-o", "--output", help="the PNG to write (default: <agent>-icon.png)")
+    si.set_defaults(fn=cmd_slack_icon)
 
     pr = sub.add_parser("pr-link", help="the link to open a pull request for the config "
                         "repo's current branch (push it first)")

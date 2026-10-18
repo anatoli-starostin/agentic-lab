@@ -11,7 +11,7 @@ import datetime as dt
 import html
 
 from starlette.applications import Starlette
-from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse
+from starlette.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from starlette.routing import Route
 
 REFRESH_S = 20
@@ -343,6 +343,19 @@ def app(get_state, get_events=None, is_admin=None, check_usage=None):
             await check_usage(request.path_params["human"])
         return RedirectResponse("/", status_code=303)
 
+    async def icon(request):
+        """An agent's generated Slack app icon (or 'approvals'), to download and upload."""
+        from ..icon import png
+        agent = request.path_params["agent"]
+        if agent in ("approvals", "broker"):
+            name = "Lab Approvals"
+        else:
+            name = ((get_state() or {}).get("agents") or {}).get(agent, {}).get("name")
+            if not name:
+                return HTMLResponse("unknown agent", status_code=404, headers=HEADERS)
+        return Response(png(name), media_type="image/png", headers={
+            "Content-Disposition": f'attachment; filename="{agent}-icon.png"'})
+
     async def page(request):
         return HTMLResponse(render(get_state()), headers=HEADERS)
 
@@ -366,4 +379,5 @@ def app(get_state, get_events=None, is_admin=None, check_usage=None):
 
     return Starlette(routes=[Route("/", page), Route("/state.json", state_json),
                              Route("/logs/{agent}", logs),
-                             Route("/usage/check/{human}", check, methods=["POST"])])
+                             Route("/usage/check/{human}", check, methods=["POST"]),
+                             Route("/icon/{agent}.png", icon)])

@@ -157,10 +157,22 @@ class Secretary:
                  "4. *Basic Information* → *App-Level Tokens* → *Generate Token and Scopes* → "
                  "any name → scope `connections:write` → *Generate*. Copy it (xapp-…).\n"
                  f"5. Paste both here (never in Slack): {form_url(code, self.intake_url)}\n"
+                 "6. Optional, its icon: *Basic Information* → *Display Information* → *App "
+                 "icon*: upload the image I post below.\n"
                  "Then tell me \"done\": I check the tokens and offer the deploy that starts it.")
         await self.slack.post(conv.channel, conv.thread_ts, steps)
         await self.slack.post(conv.channel, conv.thread_ts,
                               f"```{M.render(manifest)}```")
+        try:                            # its icon, generated from its name
+            import tempfile
+            from ..icon import png
+            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
+                f.write(png(name))
+            await self.slack.upload(conv.channel, conv.thread_ts, f.name,
+                                    f"{name}-icon.png", "The app icon (step 6).")
+            os.unlink(f.name)
+        except Exception:
+            log.exception("posting the app icon failed")
         return (f"posted the steps, the manifest and the one-time link for {name}'s app. "
                 "When the admin says done: check_slack_app, then offer_deploy with redeploy.")
 
