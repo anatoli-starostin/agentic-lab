@@ -123,6 +123,20 @@ mechanisms that bind them together, and the conventions the framework relies on.
 %=====================================================================
 \section{The big picture}
 
+A typical piece of work:
+\begin{enumerate}
+  \item A member DMs their manager: \emph{``train the baseline on worker-a and show me the
+    loss curve''}.
+  \item The manager submits a task to the worker over MCP, naming the member as the
+    requester, and registers it with the broker.
+  \item The worker runs the task in its sandbox, reporting progress. If it needs something
+    outside the sandbox (say, a dataset from the internet) it asks; the broker DMs
+    \emph{the requester} with buttons via the \emph{Lab Approvals} Slack app; the answer
+    comes back to the worker.
+  \item The manager follows the task and posts progress, the plot and a summary in the
+    member's thread. The secretary's web UI shows it all as it happens.
+\end{enumerate}
+
 \begin{figure}[H]
 \centering
 \begin{tikzpicture}[scale=0.88, transform shape,
@@ -138,10 +152,13 @@ mechanisms that bind them together, and the conventions the framework relies on.
   dt/.style={-{Stealth[length=2mm]}, thick, dotted}
 ]
 % ---- secretary host
-\node[box, fill=agt] (sec) at (0,2) {Secretary\\\scriptsize + web UI :8774};
+\node[box, fill=agt] (sec) at (0,2) {Secretary\\\scriptsize agent};
+\node[box, fill=svc] (web) at (0,3.45) {Web UI :8774\\\scriptsize monitoring;\\[-2pt]
+      \scriptsize logs: admins only};
 \node[box, fill=svc] (bro) at (2.9,2) {Broker\\\scriptsize :8772};
 \node[box, fill=svc] (int) at (5.8,2) {Intake\\\scriptsize :8771};
-\node[host, fit=(sec)(bro)(int), label={[hl, anchor=north east]south east:secretary host}] (sh) {};
+\node[host, fit=(sec)(web)(bro)(int), label={[hl, anchor=north east]south east:secretary host}] (sh) {};
+\draw[-{Stealth[length=1.6mm]}, gray] (sec.north) -- node[hl, right]{serves} (web.south);
 % ---- managers (on their own host, or on the secretary host)
 \node[box, fill=agt] (mgr) at (1.45,-0.9) {Managers\\\scriptsize status :8773\\[-1pt]
       \tiny\itshape on any host};
@@ -152,7 +169,7 @@ mechanisms that bind them together, and the conventions the framework relies on.
 \node[box, fill=agt] (w2) at (3.6,-3.9) {Worker\\\scriptsize MCP :8770};
 \node[host, fit=(w2), label={[hl]below:GPU VM}] (g2) {};
 % ---- people and outside services
-\node[box, fill=hum] (hum) at (-4.6,3.5) {Members\\\scriptsize Slack, browser};
+\node[box, fill=hum] (hum) at (-4.6,4.9) {Members\\\scriptsize Slack, browser};
 \node[box, fill=ext] (slack) at (-4.6,0.6) {Slack\\\scriptsize one app per agent,\\\scriptsize + Lab Approvals};
 \node[box, fill=ext] (gh) at (9.7,2.4) {GitHub\\\scriptsize config repo,\\\scriptsize project repos};
 \node[box, fill=ext] (neb) at (9.7,0.0) {Nebius API\\\scriptsize starts, stops\\\scriptsize GPU VMs};
@@ -164,8 +181,8 @@ mechanisms that bind them together, and the conventions the framework relies on.
 \draw[ar] (-2.6,0.6) |- (mh.west);
 \node[n] at (-2.6,0.6) {2};
 % ---- 3 members' browsers and laptops: web UI, intake
-\draw[ar] (hum.east) -- (5.8,3.5) -- node[n, pos=0.4]{3} (int.north);
-\draw[ar] (0,3.5) -- node[n, pos=0.4]{3} (sec.north);
+\draw[ar] (hum.east) -- (5.8,4.9) -- node[n, pos=0.3]{3} (int.north);
+\draw[ar] (0,4.9) -- node[n, pos=0.4]{3} (web.north);
 % ---- 4 tasks and files
 \draw[ar] (mh.south) ++(-0.6,0) -- node[n]{4} (w1.north);
 \draw[ar] (mh.south) ++(0.6,0) -- node[n]{4} (w2.north);
@@ -201,8 +218,9 @@ services, never by sandboxed agent commands, except GitHub for an agent with a b
 1 & Members talk to agents and answer approvals in Slack (DMs, threads, buttons). \\
 2 & Each Slack-facing agent has its own Slack app (the secretary, every manager), the broker
     has \emph{Lab Approvals}; all connect \emph{out} to Slack (Socket Mode, no public URL). \\
-3 & Over the tailnet: members' browsers open the web UI (served by the secretary); their
-    laptops hand secrets to the intake (one-time links and codes). \\
+3 & Over the tailnet: members' browsers open the web UI (served by the secretary;
+    monitoring only, agents' logs for admins only); their laptops hand secrets to the
+    intake (one-time links and codes). \\
 4 & Managers give workers tasks and exchange files with them (MCP, a token per pair). \\
 5 & Every worker and every manager sends its permission requests to the broker, which asks
     the human the action is for (2, 1). \\
@@ -215,20 +233,6 @@ services, never by sandboxed agent commands, except GitHub for an agent with a b
 \end{tabularx}
 \normalsize
 
-
-A typical piece of work:
-\begin{enumerate}
-  \item A member DMs their manager: \emph{``train the baseline on worker-a and show me the
-    loss curve''}.
-  \item The manager submits a task to the worker over MCP, naming the member as the
-    requester, and registers it with the broker.
-  \item The worker runs the task in its sandbox, reporting progress. If it needs something
-    outside the sandbox (say, a dataset from the internet) it asks; the broker DMs
-    \emph{the requester} with buttons via the \emph{Lab Approvals} Slack app; the answer
-    comes back to the worker.
-  \item The manager follows the task and posts progress, the plot and a summary in the
-    member's thread. The secretary's web UI shows it all as it happens.
-\end{enumerate}
 
 %=====================================================================
 \section{Identity, users and tokens}
