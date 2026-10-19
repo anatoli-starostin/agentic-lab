@@ -78,10 +78,12 @@ What it took:
   (`~/.config/agentic-lab`, `~/.local/state/agentic-lab`): the agent's Read tool is denied
   there and its sandbox hides them; the Claude token is stripped from sandboxed commands.
   Other agents' files are protected by Unix permissions (one user per agent).
-- **A GitHub bot's token is readable by its agent** (it's in the agent's environment, so
-  git and `gh` work). Safety comes from GitHub: private repositories, a fine-grained token
-  limited to the lab's repos, and branch protection (human code owners, no bypass for
-  bots), so a bot can't approve or merge.
+- **An agent can read its current GitHub token** (so git and `gh` work). For a bot account
+  that's its fine-grained token; for a GitHub App, an installation token that expires
+  within the hour (the app's private key stays with the agent's service, out of the
+  agent's reach). Safety comes from GitHub: private repositories, permissions limited to
+  the lab's repos, and branch protection (human code owners, no bypass for bots or apps),
+  so neither can approve or merge.
 - **Guests run on the owner's seat**: a member talking to someone else's dedicated manager
   uses that manager's member's Claude seat. Guests get no tools and 2-minute turns (enforced
   in code), so it stays small.
