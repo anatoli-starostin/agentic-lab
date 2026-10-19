@@ -442,7 +442,10 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
     it awake. A root timer on every lab host lists these files each minute (home folders
     are private, so the lab's services can't look themselves).
   \item \textbf{Idle stop}: an \code{on\_demand} host with only workers is stopped after
-    \code{idle\_stop\_min} minutes of not being busy.
+    \code{idle\_stop\_min} minutes of not being busy. A manager on a host keeps it busy
+    (its own work isn't measured), unless the host has
+    \code{idle\_stop\_with\_managers: true}: then it's judged by its workers alone, and
+    stopping it takes the manager offline in Slack until the host is powered on.
   \item \textbf{Who may power}: any member may power a machine on, or off when idle;
     powering off a busy machine is for admins only, after confirming (\code{force\_off}).
 \end{itemize}
@@ -469,7 +472,7 @@ Section & Contents \\
   workers yes), \code{port} (workers, managers), \code{compact\_percent},
   \code{slack\_app}, \code{turn\_budget\_min} (managers). \\
 \code{hosts} & \code{kind} (onprem/cloud), \code{provider}, \code{instance},
-  \code{power}, \code{idle\_stop\_min}, \code{tailnet\_name}, \code{ssh\_user}. \\
+  \code{power}, \code{idle\_stop\_min}, \code{tailnet\_name}, \code{ssh\_user}, \code{idle\_stop\_with\_managers}. \\
 \code{github} & \code{accounts}: the agents' identities: bot accounts (commit
   \code{email}, token \code{expires}) and GitHub Apps (\code{app\_id}, \code{email}, and
   \code{installation\_id} when the app is installed in several places). \\

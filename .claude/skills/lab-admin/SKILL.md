@@ -140,7 +140,10 @@ asking before each one. The whole lab, one host, or one agent.
   *busy*. The secretary says why: a worker task running, queued or awaiting approval; a
   process on a GPU (anyone's); a GPU above 0% in its last 5 readings (~75 s); someone's
   `~/.lab-keep-awake` (the web UI shows who); or a manager runs there. Ask the person, or
-  an admin powers it off anyway (`force_off`, after confirming).
+  an admin powers it off anyway (`force_off`, after confirming). If the manager is the
+  only reason and it may go offline with the host (e.g. a member's manager beside its
+  worker on an on-demand GPU VM), add `idle_stop_with_managers: true` to the host in
+  `lab.yaml` (PR → merge → deploy): the host is then judged by its workers alone.
 - **A host can't be reached from the sandbox:** use its tailnet name, not its IP; raw IPs
   are refused.
 - Known limits and what was verified: `docs/security-notes.md`.
