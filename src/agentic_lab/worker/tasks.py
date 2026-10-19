@@ -4,9 +4,11 @@ One JSON file per task in a directory, written atomically, so tasks survive rest
 both the worker service and the agent. Tasks run first come, first served, one at a time.
 
     queued -> running -> done | failed | cancelled
-                 ^  |
-                 |  v
-          awaiting_approval          (M2: a permission request is with a human)
+      ^          ^  |  \
+      |          |  v   \
+      |   awaiting_approval   waiting   (a human decides; its long runs go on, runs.py)
+      +-----------------------'          woken (queued again) when a run ends or at a
+                                         check-in time, the session resumes
 """
 import datetime as dt
 import json
@@ -16,14 +18,15 @@ import tempfile
 import threading
 from dataclasses import asdict, dataclass, field
 
-QUEUED, RUNNING, AWAITING, DONE, FAILED, CANCELLED = (
-    "queued", "running", "awaiting_approval", "done", "failed", "cancelled")
-STATES = (QUEUED, RUNNING, AWAITING, DONE, FAILED, CANCELLED)
+QUEUED, RUNNING, AWAITING, WAITING, DONE, FAILED, CANCELLED = (
+    "queued", "running", "awaiting_approval", "waiting", "done", "failed", "cancelled")
+STATES = (QUEUED, RUNNING, AWAITING, WAITING, DONE, FAILED, CANCELLED)
 TERMINAL = (DONE, FAILED, CANCELLED)
 _NEXT = {
     QUEUED: {RUNNING, CANCELLED},
-    RUNNING: {AWAITING, DONE, FAILED, CANCELLED, QUEUED},   # QUEUED: requeued after a crash
+    RUNNING: {AWAITING, WAITING, DONE, FAILED, CANCELLED, QUEUED},  # QUEUED: after a crash
     AWAITING: {RUNNING, FAILED, CANCELLED},
+    WAITING: {QUEUED, CANCELLED},
 }
 MAX_PROGRESS = 200      # progress lines kept per task
 
@@ -52,6 +55,8 @@ class Task:
     error: str | None = None
     session_id: str | None = None   # the agent session, for resume and `lab debug`
     cancel_requested: bool = False
+    waiting: dict | None = None     # parked on its runs: {note, runs, since, wake_at}
+    wake: str | None = None         # why a parked task was woken (for its resumed session)
 
     def view(self, with_progress=True):
         d = asdict(self)
@@ -143,7 +148,8 @@ class TaskStore:
             return task
 
     def request_cancel(self, task_id) -> Task:
-        """Queued tasks are cancelled at once; a running task is asked to stop."""
+        """Queued tasks are cancelled at once; a running or waiting task is asked to stop
+        (a waiting one by the task loop, which stops its runs)."""
         with self._lock:
             task = self.get(task_id)
             if task.state == QUEUED:

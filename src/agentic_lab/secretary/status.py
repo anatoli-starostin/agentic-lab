@@ -100,7 +100,7 @@ async def collect(lab, workers: Workers, broker=None, local_units=None, managers
             tasks = await workers.call(w, "list_tasks", retries=0)
             agents[w].update(up=True, gpu=h.get("gpu"), gpus=h.get("gpus"),
                              gpu_processes=h.get("gpu_processes"), queue=h.get("tasks"),
-                             keep_awake=h.get("keep_awake"),
+                             keep_awake=h.get("keep_awake"), runs=h.get("runs"),
                              usage=h.get("usage"), disk_free_gb=h.get("disk_free_gb"),
                              recent=[{k: t.get(k) for k in ("id", "state", "requester",
                                                             "manager", "created", "finished",

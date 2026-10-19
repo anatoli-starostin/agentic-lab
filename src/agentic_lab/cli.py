@@ -103,6 +103,21 @@ def cmd_worker_serve(args):
     return 0
 
 
+def cmd_worker_run_exec(args):
+    """A long run's unit (lab-run-<agent>@<run>.service): run it, as the agent's user."""
+    import os
+
+    from .registry import load
+    from .worker.runs import RunStore, run_exec
+    lab = load(args.lab)
+    a = lab.agents.get(args.agent) or {}
+    if a.get("role") != "worker":
+        raise SystemExit(f"{args.agent!r} is not a worker")
+    workdir = os.path.expanduser(a.get("workdir", "~/work"))
+    return run_exec(RunStore(os.path.expanduser(f"{STATE}/runs"), workdir, args.agent),
+                    args.run)
+
+
 STATE = "~/.local/state/agentic-lab"
 
 
@@ -561,6 +576,10 @@ def main(argv=None):
                     "worker, e.g. its tailnet name (besides --host)")
     ws.add_argument("--model", help="override the agent's model from lab.yaml")
     ws.set_defaults(fn=cmd_worker_serve)
+    wr = wsub.add_parser("run-exec", help=argparse.SUPPRESS)    # the unit of a long run
+    wr.add_argument("agent")
+    wr.add_argument("run")
+    wr.set_defaults(fn=cmd_worker_run_exec)
 
     sc = sub.add_parser("secret", help="secrets from humans")
     ssub = sc.add_subparsers(dest="scmd", required=True)

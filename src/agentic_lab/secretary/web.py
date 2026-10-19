@@ -61,6 +61,7 @@ color:var(--fg);cursor:pointer}.check button:hover{border-color:var(--meter)}
 LIMIT_NAMES = {"five_hour": "5-hour window", "seven_day": "weekly", "seven_day_opus":
                "weekly (Opus)", "seven_day_sonnet": "weekly (Sonnet)", "overage": "overage"}
 STATE_CLASS = {"done": "ok", "running": "", "queued": "muted", "awaiting_approval": "warn",
+               "waiting": "",
                "failed": "bad", "cancelled": "muted"}
 
 
@@ -220,7 +221,7 @@ def _workers(state):
                        f"<p class='muted small'>{e(a.get('error'))}</p>")
             continue
         q = a.get("queue") or {}
-        busy = q.get("running", 0) + q.get("awaiting_approval", 0)
+        busy = q.get("running", 0) + q.get("awaiting_approval", 0) + q.get("waiting", 0)
         status = ("<span class='pill warn'>busy</span>" if busy else
                   "<span class='pill ok'>idle</span>")
         rows = "".join(
@@ -235,6 +236,10 @@ def _workers(state):
                              f"{' (' + e(h['note']) + ')' if h.get('note') else ''} "
                              f"(~/.lab-keep-awake): never stopped while it's there</div>"
                              for h in a.get("keep_awake") or []) +
+                   "".join(f"<div class='small'>long run <code>{e(r.get('id'))}</code> "
+                           f"{e(r.get('name'))} for task <code>{e(r.get('task'))}</code>, "
+                           f"since {e(ago(r.get('started')) if r.get('started') else '…')}</div>"
+                           for r in a.get("runs") or []) +
                    f"<div class='small'>GPU: {e(_gpu_line(a))} · disk free "
                    f"{e(a.get('disk_free_gb'))} GB</div>"
                    f"<table><tr><th>Task</th><th>State</th><th>For</th><th>When</th></tr>"

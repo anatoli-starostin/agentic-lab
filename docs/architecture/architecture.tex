@@ -324,11 +324,20 @@ sandbox violations that explain it.
   \item Its tools:\\ \code{submit\_task}, \code{task\_status}, \code{task\_result},
     \code{cancel\_task}, \code{list\_tasks}, \code{get\_guardrails}, \code{read\_file}
     and \code{write\_file} (its working folder, up to 20 MB), \code{health\_check}
-    (queue, GPU and its processes, disk, usage), \code{check\_usage}, and
+    (queue, long runs, GPU and its processes, disk, usage), \code{check\_usage}, and
     \code{recent\_events} (its log: \emph{the secretary's token only}).
   \item Tasks run one at a time, first come first served; a restart requeues a running
     task and resumes its Claude session. No fixed results contract: a result is a summary
     plus whatever artifacts fit (files, commits, links).
+  \item \textbf{Long runs} (training for hours): nothing the agent starts in its session
+    outlives it (a sandboxed command's processes die when it returns, the rest with the
+    session or a service restart). So the agent calls \code{start\_run}; a human approves
+    \emph{each} run, since it runs outside the sandbox, as the agent's user, as its own
+    unit \code{lab-run-<agent>@<id>}, with its output in a log in the working folder. With
+    \code{wait\_for\_runs} the task becomes \code{waiting}: still in progress, parked, and
+    the worker takes other tasks meanwhile. It resumes when a run ends or at a check-in
+    time, with the runs' state and log tails; cancelling it stops its runs. Runs survive
+    deploys and worker restarts.
 \end{itemize}
 
 \subsection{Managers}
@@ -428,8 +437,8 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
   \item \textbf{Power}: the secretary starts and stops Nebius VMs listed in \code{lab.yaml}
     (\code{kind: cloud}, \code{provider: nebius}, \code{instance}), with a service account
     that may only view, start and stop VMs. Never its own host.
-  \item \textbf{Busy} means: a worker there has a task running, queued or awaiting
-    approval; or any process on a GPU (anyone's, not only the lab's); or a GPU above 0\%
+  \item \textbf{Busy} means: a worker there has a task running, queued, awaiting
+    approval or waiting on its long runs, or a long run going (even CPU-only); or any process on a GPU (anyone's, not only the lab's); or a GPU above 0\%
     in any of its last 5 readings (about 75 s: a GPU counts as idle only after 0\% in
     several readings in a row); or someone keeps it awake with a \code{\textasciitilde/.lab-keep-awake}
     file (below); or a manager runs there.

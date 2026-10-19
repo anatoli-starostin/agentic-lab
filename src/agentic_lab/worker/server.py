@@ -4,7 +4,9 @@ One process, run as the agent's own Unix user by a system service. It:
   - serves MCP (streamable HTTP) on the worker's tailnet address. Every call carries a
     manager's bearer token; the token, not anything the caller says, decides who is
     calling. A dedicated worker accepts only its own human's manager.
-  - runs queued tasks one at a time, first come, first served, through an AgentRunner.
+  - runs queued tasks one at a time, first come, first served, through an AgentRunner;
+    a task waiting on its long runs (runs.py) is queued again when one ends or at its
+    check-in time, and resumes its session.
 """
 import asyncio
 import base64
@@ -20,10 +22,13 @@ from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.mcpserver.exceptions import ToolError
 from mcp.server.transport_security import TransportSecuritySettings
 
+from . import runs as R
 from . import tasks as T
 
 log = logging.getLogger("agentic_lab.worker")
 IDLE_POLL_S = 1.0
+WAKE_CHECK_S = 15.0         # how often waiting tasks are checked against their runs
+RUN_TAIL = 20               # log lines of each run in task_result
 MAX_FILE_BYTES = 20 * 1024 * 1024       # read_file: enough for plots, reports, logs
 
 
@@ -99,9 +104,9 @@ def write_inbox_file(workdir, name, b64):
 
 
 def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=None,
-              usage=None, workdir=None, events=None, check=None):
+              usage=None, workdir=None, events=None, check=None, runs=None):
     """The worker's MCP server. `guardrails()` returns its current settings and grants;
-    `check()` probes the seat's limits now."""
+    `check()` probes the seat's limits now; `runs`: its RunStore (long runs)."""
     mcp = MCPServer(name=f"agentic-lab worker {agent_id}",
                     instructions="Submit tasks to this worker and follow them.")
 
@@ -131,18 +136,28 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         except T.TaskError as e:
             raise ToolError(str(e)) from None
 
-    @mcp.tool(description="A task's state, its latest progress line and timestamps.")
+    def with_runs(view, tail=0):
+        if runs is not None:
+            rs = runs.all(view["id"])
+            if rs:
+                view["runs"] = [runs.view(r["id"], tail=tail) for r in rs]
+        return view
+
+    @mcp.tool(description="A task's state, its latest progress line and timestamps. A task "
+              "`waiting` is in progress: parked while its long runs go on (`waiting.note` "
+              "says on what), and resumed when one ends; `runs` lists them.")
     def task_status(task_id: str, ctx: Context) -> dict:
         who(ctx)
-        return task(task_id).view(with_progress=False)
+        return with_runs(task(task_id).view(with_progress=False))
 
-    @mcp.tool(description="A task in full: all progress lines and, when finished, the result.")
+    @mcp.tool(description="A task in full: all progress lines, its long runs with the tail "
+              "of their logs, and, when finished, the result.")
     def task_result(task_id: str, ctx: Context) -> dict:
         who(ctx)
-        return task(task_id).view()
+        return with_runs(task(task_id).view(), tail=RUN_TAIL)
 
     @mcp.tool(description="Cancel a task: a queued task at once, a running one as soon as "
-              "the agent can stop.")
+              "the agent can stop, a waiting one with its runs (stopped).")
     def cancel_task(task_id: str, ctx: Context) -> dict:
         who(ctx, writes=True)
         task(task_id)
@@ -196,6 +211,9 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         who(ctx)
         # nvidia-smi can take seconds: not in the event loop serving the other calls
         h = await asyncio.to_thread(health or default_health, agent_id, store)
+        if runs is not None:
+            h["runs"] = [{k: r.get(k) for k in ("id", "name", "task", "state", "started")}
+                         for r in await asyncio.to_thread(runs.active)]
         if usage is not None:
             h["usage"] = usage.load()
         return h
@@ -294,11 +312,61 @@ def _num(s):
         return None
 
 
-async def run_tasks(store: T.TaskStore, runner, stop: asyncio.Event):
-    """The task loop: recover after a restart, then run queued tasks one at a time."""
+def wake_waiting(store: T.TaskStore, runs, now=None):
+    """Waiting tasks: queue again those whose run ended or whose check-in time came;
+    cancel (stopping their runs) those a manager cancelled. Returns the tasks woken."""
+    import datetime as dt
+    now = now or dt.datetime.now(dt.timezone.utc)
+    woken = []
+    for t in store.all():
+        if t.state != T.WAITING:
+            continue
+        if t.cancel_requested:
+            stop_runs(runs, t.id)
+            store.update(t.id, state=T.CANCELLED)
+            continue
+        w = t.waiting or {}
+        ended = []
+        for rid in w.get("runs") or []:
+            try:
+                st = runs.view(rid)["state"] if runs else "lost"
+            except R.RunError:
+                st = "lost"
+            if st not in R.ACTIVE:
+                ended.append(f"{rid} {st}")
+        if ended:
+            reason = "run " + ", ".join(ended)
+        elif w.get("wake_at") and now >= dt.datetime.fromisoformat(w["wake_at"]):
+            reason = "check-in time (its runs are still going)"
+        else:
+            continue
+        woken.append(store.update(t.id, state=T.QUEUED, wake=reason))
+    return woken
+
+
+def stop_runs(runs, task_id):
+    for r in (runs.active(task_id) if runs else []):
+        try:
+            runs.stop(r["id"])
+        except (R.RunError, OSError, subprocess.SubprocessError) as e:
+            log.warning("couldn't stop run %s: %s", r["id"], e)
+
+
+async def run_tasks(store: T.TaskStore, runner, stop: asyncio.Event, runs=None):
+    """The task loop: recover after a restart, then run queued tasks one at a time, and
+    wake waiting tasks when their runs need them."""
     for t in store.recover():
         log.info("requeued %s after restart", t.id)
+    loop = asyncio.get_running_loop()
+    last_wake = 0.0
     while not stop.is_set():
+        if loop.time() - last_wake >= WAKE_CHECK_S:
+            last_wake = loop.time()
+            try:
+                for t in await asyncio.to_thread(wake_waiting, store, runs):
+                    log.info("woke %s: %s", t.id, t.wake)
+            except Exception:
+                log.exception("checking waiting tasks failed")
         task = store.next_queued()
         if task is None:
             try:
@@ -314,4 +382,6 @@ async def run_tasks(store: T.TaskStore, runner, stop: asyncio.Event):
             log.exception("runner failed on %s", task.id)
             if store.get(task.id).state not in T.TERMINAL:
                 store.update(task.id, state=T.FAILED, error=f"{type(e).__name__}: {e}")
+        if store.get(task.id).state == T.CANCELLED:
+            await asyncio.to_thread(stop_runs, runs, task.id)
         log.info("%s -> %s", task.id, store.get(task.id).state)

@@ -22,6 +22,7 @@ from ..registry import load as load_lab
 from . import tasks as T
 from .approver import BrokerApprover
 from .runner import NoChannelApprover, SdkRunner
+from .runs import RunStore
 from .server import Access, Caller, build_mcp, http_app, run_tasks
 from ..eventlog import EventLog
 from .usage import UsageLog, probe_loop, probe_now
@@ -89,9 +90,10 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
         return lab.agent_settings(agent_id, extra_grants=grants,
                                   now=dt.datetime.now(dt.timezone.utc))
 
+    runs = RunStore(os.path.expanduser(f"{STATE}/runs"), workdir, agent_id)
     runner = SdkRunner(agent_id, workdir, settings_for, approver=approver,
                        model=model or a.get("model"), env=env, usage=usage, events=events,
-                       prompt_extra=GH.instructions(lab, agent_id))
+                       prompt_extra=GH.instructions(lab, agent_id), runs=runs)
 
     async def guardrails():
         active = await approver.active_grants()
@@ -99,7 +101,7 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
                 "standing_grants": a.get("grants") or [], "active_grants": active}
 
     mcp = build_mcp(agent_id, store, access, guardrails=guardrails, usage=usage,
-                    workdir=workdir, events=events,
+                    workdir=workdir, events=events, runs=runs,
                     check=(lambda: probe_now(usage, seat_token)) if seat_token else None)
     # the names managers may use to reach us: the bind address, and e.g. the tailnet name
     allowed = [f"{h}:{port}" for h in (host, *names)]
@@ -111,7 +113,7 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
 
     log.info("worker %s: %d manager(s), serving on %s:%d", agent_id,
              len(access._tokens), host, port)
-    tasks = asyncio.create_task(run_tasks(store, runner, stop))
+    tasks = asyncio.create_task(run_tasks(store, runner, stop, runs))
     GH.start(lab, agent_id, stop)       # a GitHub App identity: keep its token fresh
     prober = asyncio.create_task(probe_loop(usage, seat_token, stop))
     await server.serve()

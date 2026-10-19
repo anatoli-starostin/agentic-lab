@@ -136,8 +136,15 @@ asking before each one. The whole lab, one host, or one agent.
   `sandbox.bwrapPath` at `/usr/local/libexec/agentic-lab/bwrap-gpu`.
 - **`cuInit` returns 304 inside the sandbox:** the agent's settings lack
   `allowAllUnixSockets` (set automatically for agents with `gpu: true`).
+- **A long run** (a worker's job that outlives its session, approved by a human each time):
+  `systemctl list-units 'lab-run-*'` on the host; its log is in the worker's
+  `~/work/runs/<name>-<id>/log` (`sudo cat`); stop one with
+  `sudo systemctl stop lab-run-<agent>@<id>` (or cancel its task: that stops its runs).
+  A run that won't start: `lab doctor` (its unit template and sudo rule come from
+  `lab apply`).
 - **A machine wasn't stopped when idle** (or the secretary refuses to power it off): it's
-  *busy*. The secretary says why: a worker task running, queued or awaiting approval; a
+  *busy*. The secretary says why: a worker task running, queued, awaiting approval or
+  waiting on its long runs; a long run going; a
   process on a GPU (anyone's); a GPU above 0% in its last 5 readings (~75 s); someone's
   `~/.lab-keep-awake` (the web UI shows who); or a manager runs there and the host has
   `idle_stop_with_managers: false`. Ask the person, or

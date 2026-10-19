@@ -105,7 +105,8 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 - **State**: workers over MCP (a read-only monitoring token), managers' status endpoints,
   the broker's overview, local systemd units, machine power states (Nebius).
 - **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
-  (a worker task running, queued or awaiting approval; any process on a GPU, anyone's; a GPU
+  (a worker task running, queued, awaiting approval or waiting on its long runs; a long
+  run going, even CPU-only; any process on a GPU, anyone's; a GPU
   above 0% in any of its last 5 readings, about 75 s; someone's `~/.lab-keep-awake`; a
   manager on it, if the host has `idle_stop_with_managers: false`) may be powered off only by an admin, after confirming. Idle hosts with workers are stopped after their `idle_stop_min` minutes (required on every cloud host, the only switch; `0` means never).
   Managers on a host don't keep it on: it's judged by its workers alone (e.g. a member's
@@ -132,6 +133,20 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   `dedicated` (only its member's managers may submit tasks) or `shared` (any manager).
 - **No fixed results contract**: a result is a summary plus whatever artifacts fit (files,
   commits, links). The worker follows the project's conventions.
+- **Long runs** (training for hours, big evaluations). Nothing the agent starts in its
+  session outlives it: a sandboxed command's processes die when it returns (the sandbox is
+  a PID namespace), background commands when the session ends (`--die-with-parent`), and
+  anything under the worker service when it restarts (its cgroup). So the agent asks for a
+  **run** (`start_run`): a human approves **each** run (it's outside the sandbox; never
+  granted for a while), and the worker service starts it as its own unit,
+  `lab-run-<agent>@<run-id>.service`, as the agent's user, output to a log in its working
+  folder. The agent then calls `wait_for_runs`: the task becomes `waiting` (in progress,
+  parked) and the queue moves on, so the worker can do other tasks meanwhile. The task is
+  queued again when one of its runs ends, or at a check-in time the agent chose, and its
+  session resumes with the runs' state and log tails. `finish_task` waits until its runs
+  are over; cancelling the task stops them. Runs survive deploys and worker restarts, not
+  a powered-off machine (they show as `lost`). The worker's service starts and stops only
+  its own runs, through one sudo rule for `lab-run-ctl`; a run has `NoNewPrivileges`.
 - **Watching and debugging** (the same for every agent): the agent's own **event log**
   (messages, tool calls, results, approvals, task events), shown to admins in the web UI;
   `sudo lab debug <agent>` stops its service and opens **the same session** in the classic
@@ -202,18 +217,19 @@ accepts only its member's managers), plus the secretary's **read-only** monitori
 | Tool | Purpose |
 |---|---|
 | `submit_task(instruction, requester, project?)` | Queue a task (first come, first served). The manager also registers the task with the broker, so the requester is known for approvals. |
-| `task_status(task_id)` | `queued \| running \| awaiting_approval \| done \| failed \| cancelled`, plus the latest progress line. |
-| `task_result(task_id)` | All progress lines and, when finished, the result (summary + artifacts). |
-| `cancel_task(task_id)` | A queued task at once; a running one as soon as the agent can stop. |
+| `task_status(task_id)` | `queued \| running \| awaiting_approval \| waiting \| done \| failed \| cancelled`, plus the latest progress line and its long runs (`waiting`: in progress, parked on them, §4.2). |
+| `task_result(task_id)` | All progress lines, its runs with their log tails, and, when finished, the result (summary + artifacts). |
+| `cancel_task(task_id)` | A queued task at once; a running one as soon as the agent can stop; a waiting one with its runs. |
 | `list_tasks(state?)` | The queue. |
 | `get_guardrails()` | The worker's sandbox settings, standing and active grants. |
 | `read_file(path)`, `write_file(name, data)` | Files in its working folder (up to 20 MB): results out, attachments in. |
-| `health_check()` | Queue, GPUs and the processes on them, disk, usage. |
+| `health_check()` | Queue, long runs going, GPUs and the processes on them, disk, usage. |
 | `check_usage()` | Read its seat's limits now (the web UI's "Check now"). |
 | `recent_events(hours)` | Its event log: **the secretary's monitoring token only** (the admins' log viewer). |
 
 Managers follow tasks by polling. The queue is durable on disk; after a restart a running
-task is requeued and its Claude session resumed. One task runs at a time per worker.
+task is requeued and its Claude session resumed. One task runs at a time per worker; a
+task waiting on its long runs doesn't count (§4.2).
 
 ---
 
@@ -258,7 +274,8 @@ When a human answers a request, they choose how far the answer reaches:
 - **Deny**, or a typed reply: "no, do it this way" (the reply goes back to the agent).
 
 A grant always widens the **sandbox**; it never means "trust unsandboxed commands for an
-hour". **Standing grants** are in `lab.yaml` per agent (changed by a reviewed PR):
+hour". A long run (§4.2) is the one action that can only ever be approved once: no grant
+is offered for it, and `lab check` refuses one in `lab.yaml`. **Standing grants** are in `lab.yaml` per agent (changed by a reviewed PR):
 ```yaml
 agents:
   worker-a:
@@ -559,6 +576,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-18 | **`~/.lab-keep-awake`**: anyone working on a lab machine directly keeps it from being stopped. |
 | 2026-10-19 | **Several GitHub identities per agent, picked by repository** (e.g. a lab identity by default, an open-source project's bot for that project). |
 | 2026-10-19 | **GitHub Apps as agents' identities**, alongside full bot accounts: `<slug>[bot]`, nothing to create but the app; the service mints its hourly tokens. |
+| 2026-10-19 | **Long runs**: jobs that outlive the session run as their own units, outside the sandbox, approved one at a time by a human; the task waits (parked) and the worker takes other tasks meanwhile. Not a second sandbox runtime (`srt` would mean Node and another versioned copy of the sandbox to maintain). |
 | 2026-10-18 | **Approval requests have no timeout by default** (a member may set `timeout_s`); a request the agent stops waiting for is withdrawn. |
 
 ## 14. Open questions

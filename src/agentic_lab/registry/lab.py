@@ -306,6 +306,9 @@ def check(lab: Lab, today: dt.date | None = None):
             except G.GrantError as e:
                 E(f"{where}.grants[{j}]", str(e))
                 continue
+            if g.kind == "tool" and g.value == "mcp__lab__start_run":
+                E(f"{where}.grants[{j}]", "long runs are approved one at a time; start_run "
+                                          "can't be granted")
             if g.expires is not None:
                 E(f"{where}.grants[{j}]", "standing grants in lab.yaml don't expire; "
                                           "timed grants are given by a human through the broker")
