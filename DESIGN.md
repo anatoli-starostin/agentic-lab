@@ -85,7 +85,7 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   the intake and the web UI; deploys run from here.
 - **Managers**: on any host — the secretary host, a VM of their own, or a GPU VM next to
   their workers (`host:` per manager).
-- **Workers**: GPU VMs, `on_demand` (stopped once idle for `idle_stop_min` minutes, if set) or `always_on`.
+- **Workers**: GPU VMs, stopped once idle for `idle_stop_min` minutes (required on every cloud host; `0`: never).
 - Several agents on one host each have their own Unix user (§10).
 
 ---
@@ -107,7 +107,12 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 - **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
   (a worker task running, queued or awaiting approval; any process on a GPU, anyone's; a GPU
   above 0% in any of its last 5 readings, about 75 s; someone's `~/.lab-keep-awake`; a
-  manager on it) may be powered off only by an admin, after confirming. Idle `on_demand` hosts with only workers are stopped after `idle_stop_min`.
+  manager on it, if the host has `idle_stop_with_managers: false`) may be powered off only by an admin, after confirming. Idle hosts with workers are stopped after their `idle_stop_min` minutes (required on every cloud host, the only switch; `0` means never).
+  Managers on a host don't keep it on: it's judged by its workers alone (e.g. a member's
+  manager beside its only worker on an on-demand GPU VM). Stopping it only takes the manager
+  offline in Slack until someone asks the secretary to power the host on. A manager's own
+  work (a turn, following a task on another host) isn't measured, so a host where that
+  matters sets `idle_stop_with_managers: false`: any manager there then counts as busy.
 - **Keep-awake**: someone working on a machine directly (not through agents, e.g. a
   CPU-only job) creates `~/.lab-keep-awake` in their home (first line, optional: why); while
   it's there the machine is busy, and the web UI shows who keeps it awake. A root timer
@@ -366,9 +371,11 @@ agents:
     grants:                              # standing grants (§6.2)
       - {domain: pypi.org}
 hosts:
-  sec-01: {kind: onprem, power: always_on}
-  gpu-a:  {kind: cloud, provider: nebius, instance: computeinstance-..., power: on_demand,
+  sec-01: {kind: onprem}
+  gpu-a:  {kind: cloud, provider: nebius, instance: computeinstance-...,
            idle_stop_min: 30, tailnet_name: gpu-a.example.ts.net}
+                                   # + idle_stop_with_managers: false, if a manager
+                                   #   there should keep it on (§4.1)
 github:
   accounts:
     flash-bot: {expires: 2027-10-01}     # its token's expiry, for reminders

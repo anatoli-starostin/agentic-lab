@@ -539,3 +539,88 @@ def test_system_prompts_render():
     assert "{app_id, email}" in SB.system_prompt("Iris", "lab")
     assert "Flash" in MB.system_prompt("Flash", "lab")
     assert "Bob" in MB.guest_prompt("Alice", "Bob")
+
+
+def test_idle_stop_with_managers():
+    """A host is judged by its workers alone (tasks, GPU, keep-awake), managers on it or not;
+    with idle_stop_with_managers: false a manager keeps it busy."""
+    import datetime as dt
+    from agentic_lab.secretary import power as P
+    lab = registry.load(EXAMPLE)
+    lab.agents["mgr-alice"]["host"] = "gpu-a"
+    t0 = dt.datetime(2026, 10, 17, 12, tzinfo=dt.timezone.utc)
+    later = t0 + dt.timedelta(minutes=31)
+    cool = {"up": True, "queue": {}, "gpus": [{"name": "H100", "util": 0}],
+            "gpu_processes": [], "gpu_readings": P.GPU_IDLE_READINGS}
+    idle = {"agents": {"worker-a": cool, "mgr-alice": {"up": True}}}
+
+    def stoppable(snap):
+        w = P.IdleWatch()
+        w.candidates(lab, snap, now=t0)
+        return "gpu-a" in w.candidates(lab, snap, now=later)
+    # (a) opted out: busy, never idle-stopped
+    lab.hosts["gpu-a"]["idle_stop_with_managers"] = False
+    assert "(manager)" in P.busy(lab, "gpu-a", idle) and "idle_stop_with_managers: false" in \
+        P.busy(lab, "gpu-a", idle)
+    assert not stoppable(idle)
+    # (b) by default: idle worker -> eligible
+    del lab.hosts["gpu-a"]["idle_stop_with_managers"]
+    assert P.busy(lab, "gpu-a", idle) is None
+    assert stoppable(idle)
+    # ...but a busy worker, a warm GPU or a keep-awake file still block it
+    for extra, why in (({"queue": {"queued": 1}}, "worker-a has 1 queued"),
+                       ({"gpus": [{"name": "H100", "util": 3}]}, "GPU 3% busy"),
+                       ({"keep_awake": [{"user": "alice", "note": ""}]}, "kept awake by alice")):
+        snap = {"agents": {"worker-a": {**cool, **extra}, "mgr-alice": {"up": True}}}
+        assert P.busy(lab, "gpu-a", snap).startswith(why)
+        assert not stoppable(snap)
+    # a host with only a manager has nothing to measure: never idle-stopped
+    lab.agents["worker-a"]["host"] = "gpu-b"
+    assert not stoppable(idle)
+
+
+def test_idle_stop_with_managers_check():
+    import yaml
+    d = yaml.safe_load(EXAMPLE.read_text())
+    d["hosts"]["mgr-vm-01"]["idle_stop_with_managers"] = True     # the default anyway
+    d["hosts"]["gpu-a"]["idle_stop_with_managers"] = False
+    import tempfile
+    with tempfile.TemporaryDirectory() as t:
+        p = Path(t) / "lab.yaml"
+        p.write_text(yaml.safe_dump(d))
+        warns = [str(i) for i in registry.check(registry.load(p)) if i.level == "warning"]
+    assert any("mgr-vm-01" in w and "idle_stop_with_managers" in w for w in warns)
+    assert not any("gpu-a" in w and "idle_stop_with_managers" in w for w in warns)
+
+
+def test_idle_stop_min_required():
+    """A cloud host must say idle_stop_min (the only switch); 0 means never."""
+    import datetime as dt
+    import tempfile
+
+    import yaml
+    from agentic_lab.secretary import power as P
+
+    def check(mutate):
+        d = yaml.safe_load(EXAMPLE.read_text())
+        mutate(d["hosts"])
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t) / "lab.yaml"
+            p.write_text(yaml.safe_dump(d))
+            lab = registry.load(p)
+            return lab, [str(i) for i in registry.check(lab)]
+    _, issues = check(lambda h: h["gpu-a"].pop("idle_stop_min"))
+    assert any("gpu-a" in i and "needs idle_stop_min" in i for i in issues)
+    _, issues = check(lambda h: h["nuc-01"].update(idle_stop_min=5))   # the secretary's
+    assert any("secretary's host is never stopped" in i for i in issues)
+    _, issues = check(lambda h: h["gpu-a"].update(idle_stop_min=-1))
+    assert any("0 (never) or more" in i for i in issues)
+    lab, issues = check(lambda h: h.update(lab={"kind": "onprem", "idle_stop_min": 10}))
+    assert any("hosts.lab" in i and "only applies to cloud hosts" in i for i in issues)
+    lab, issues = check(lambda h: h["gpu-a"].update(idle_stop_min=0))
+    assert not any("gpu-a" in i for i in issues)
+    w, t0 = P.IdleWatch(), dt.datetime(2026, 10, 17, 12, tzinfo=dt.timezone.utc)
+    snap = {"agents": {"worker-a": {"up": True, "queue": {}},
+                       "worker-b": {"up": True, "queue": {}}}}
+    w.candidates(lab, snap, now=t0)
+    assert w.candidates(lab, snap, now=t0 + dt.timedelta(days=3)) == ["gpu-b"]   # 0: never

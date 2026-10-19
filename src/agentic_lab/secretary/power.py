@@ -4,10 +4,16 @@ Nebius, through its CLI, authenticated as a service account (only the secretary 
 key). A host can be powered if lab.yaml gives it `kind: cloud`, `provider: nebius` and its
 `instance` id. The secretary's own host is never powered off by it.
 
-Idle stop: a host whose `power` is `on_demand` and that runs only workers is stopped once all
+Idle stop: a host with `idle_stop_min` above 0 that runs workers is stopped once all
 its workers have had nothing running, queued or waiting, and its GPUs nothing on them
-(nvidia-smi, via the workers' health checks), for `idle_stop_min` minutes. The same "busy"
+(nvidia-smi, via the workers' health checks), for `idle_stop_min` minutes (required on
+cloud hosts; 0: never). The same "busy"
 decides who may power a host off (only admins, when busy).
+
+Managers on a host don't keep it busy: it's judged by its workers alone, and stopping it
+only takes its managers offline in Slack until it's powered on again. A manager's own work
+(a turn, following a task elsewhere) isn't measured, so a host can say
+`idle_stop_with_managers: false` to count any manager on it as busy.
 """
 import asyncio
 import datetime as dt
@@ -124,13 +130,25 @@ def worker_busy(name, seen):
     return None
 
 
+def counts_busy(lab, host, aid):
+    """Does a non-worker agent on `host` make it busy by being there?"""
+    a = lab.agents[aid]
+    return not (a.get("role") == "manager"
+                and (lab.hosts.get(host) or {}).get("idle_stop_with_managers", True))
+
+
 def busy(lab, host, snapshot):
     """Why powering `host` off would interrupt work (None if it wouldn't): a worker busy
-    (see worker_busy), or a manager there."""
+    (see worker_busy), or a manager there if the host has idle_stop_with_managers: false."""
     for aid, a in lab.agents.items():
         if a.get("host") != host:
             continue
         if a.get("role") != "worker":
+            if not counts_busy(lab, host, aid):
+                continue                # judged by the host's workers alone
+            if a.get("role") == "manager":
+                return (f"it runs {lab.display_name(aid)} (manager), whose own work isn't "
+                        "measured (the host has idle_stop_with_managers: false)")
             return f"it runs {lab.display_name(aid)} ({a.get('role')})"
         s = (snapshot or {}).get("agents", {}).get(aid, {})
         if not s.get("up"):
@@ -148,15 +166,17 @@ class IdleWatch:
         self.idle_since = {}
 
     def candidates(self, lab, snapshot, now=None):
-        """Hosts to stop now: on demand, only workers, all idle for idle_stop_min."""
+        """Hosts to stop now: idle_stop_min above 0, with workers (and managers, unless
+        idle_stop_with_managers: false), all workers idle for idle_stop_min."""
         now = now or dt.datetime.now(dt.timezone.utc)
         out = []
         for host, h in lab.hosts.items():
             h = h or {}
-            if h.get("power") != "on_demand" or not h.get("idle_stop_min"):
+            if not h.get("idle_stop_min"):
                 continue
-            agents = [a for a, x in lab.agents.items() if x.get("host") == host]
-            if not agents or any(lab.agents[a].get("role") != "worker" for a in agents):
+            here = [a for a, x in lab.agents.items() if x.get("host") == host]
+            agents = [a for a in here if lab.agents[a].get("role") == "worker"]
+            if not agents or any(counts_busy(lab, host, a) for a in here if a not in agents):
                 continue
             seen = [snapshot["agents"].get(a, {}) for a in agents]
             if not all(s.get("up") for s in seen):

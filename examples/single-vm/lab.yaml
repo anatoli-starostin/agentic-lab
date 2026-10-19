@@ -22,7 +22,7 @@ hosts:
     kind: cloud
     provider: nebius
     instance: dev-vm
-    power: always_on
+    idle_stop_min: 0                # runs the secretary: never stopped
 
 agents:
   secretary:

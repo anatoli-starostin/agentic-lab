@@ -269,7 +269,7 @@ def _hosts(state):
     cls = {"RUNNING": "ok", "STOPPED": "muted", "STOPPING": "warn", "STARTING": "warn"}
     rows = "".join(
         f"<tr><td><b>{e(h)}</b></td><td class='{cls.get(v.get('state'), 'muted')}'>"
-        f"{e((v.get('state') or '—').lower())}</td><td class='small'>{e(v.get('power') or '')}"
+        f"{e((v.get('state') or '—').lower())}</td><td class='small'>{e(f"idle stop {v['idle_stop_min']} min" if v.get('idle_stop_min') else 'no idle stop')}"
         + (f"<div class='muted small'>idle since {e(ago(v['idle_since']))}</div>"
            if v.get("idle_since") else "")
         + f"</td><td class='muted small'>{e(ago(v.get('at')) if v.get('at') else '')}</td></tr>"

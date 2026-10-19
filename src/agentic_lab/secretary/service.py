@@ -643,7 +643,7 @@ async def serve(lab_path, host, port):
                     for user in list(sec.home_viewers):
                         await sec.publish_home(user)
                 latest["state"]["hosts"] = {
-                    h: {**(hosts_power.get(h) or {}), "power": (lab.hosts[h] or {}).get("power"),
+                    h: {**(hosts_power.get(h) or {}), "idle_stop_min": (lab.hosts[h] or {}).get("idle_stop_min"),
                         "idle_since": (idle.idle_since.get(h).isoformat(timespec="seconds")
                                        if idle.idle_since.get(h) else None)}
                     for h in lab.hosts}
