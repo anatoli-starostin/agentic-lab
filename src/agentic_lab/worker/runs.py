@@ -45,8 +45,11 @@ def unit(agent_id, run_id):
     return f"lab-run-{agent_id}@{run_id}.service"
 
 
-def unit_template(agent_id, user, lab_path="/etc/agentic-lab/lab.yaml"):
-    """/etc/systemd/system/lab-run-<agent>@.service: one run of this worker."""
+def unit_template(agent_id, user, lab_path="/etc/agentic-lab/lab.yaml", home=None):
+    """/etc/systemd/system/lab-run-<agent>@.service: one run of this worker. The run can't
+    see the agent's lab secrets (its member's Claude seat token, lab tokens): it needs only
+    its state folder. The real home path: in a system unit %h is root's, even with User=."""
+    home = home or f"/home/{user}"
     return f"""# A long run of worker {agent_id} (worker/runs.py). Started and stopped by the worker
 # service only (lab-run-ctl, /etc/sudoers.d/agentic-lab-runs); never enabled.
 [Unit]
@@ -60,6 +63,7 @@ WorkingDirectory=~
 ExecStart=/opt/agentic-lab/venv/bin/lab --lab {lab_path} worker run-exec {agent_id} %i
 NoNewPrivileges=yes
 PrivateTmp=yes
+InaccessiblePaths=-{home}/.config/agentic-lab
 KillMode=control-group
 TimeoutStopSec=60
 """

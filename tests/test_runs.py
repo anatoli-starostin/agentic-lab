@@ -233,3 +233,9 @@ def test_run_ctl_only_starts_and_stops_own_runs(tmp_path, args, ok):
     r = subprocess.run(["sh", str(fake), "start", "r-0123456789ab"], capture_output=True,
                        env={"SUDO_USER": "root", "PATH": "/usr/bin:/bin"})
     assert r.returncode != 0                      # only an agent's service
+
+
+def test_a_run_cant_see_the_agents_lab_secrets():
+    unit = R.unit_template("worker-a", "lab-worker-a")
+    assert "InaccessiblePaths=-/home/lab-worker-a/.config/agentic-lab" in unit
+    assert "%h" not in unit                     # %h is root's home in a system unit

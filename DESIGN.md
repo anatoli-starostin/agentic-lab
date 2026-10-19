@@ -117,6 +117,8 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   offline in Slack until someone asks the secretary to power the host on. A manager's own
   work (a turn, following a task on another host) isn't measured, so a host where that
   matters sets `idle_stop_with_managers: false`: any manager there then counts as busy.
+  A host with managers and **no worker** counts as busy: nothing measures it, so only an
+  admin may power it off (it's never idle-stopped either).
 - **Keep-awake**: someone working on a machine directly (not through agents, e.g. a
   CPU-only job) creates `~/.lab-keep-awake` in their home (first line, optional: why); while
   it's there the machine is busy, and the web UI shows who keeps it awake. A root timer
@@ -149,7 +151,9 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   session resumes with the runs' state and log tails. `finish_task` waits until its runs
   are over; cancelling the task stops them. Runs survive deploys and worker restarts, not
   a powered-off machine (they show as `lost`). The worker's service starts and stops only
-  its own runs, through one sudo rule for `lab-run-ctl`; a run has `NoNewPrivileges`.
+  its own runs, through one sudo rule for `lab-run-ctl`; a run has `NoNewPrivileges` and
+  can't see the agent's lab secrets (`~/.config/agentic-lab`: its member's Claude seat
+  token, lab tokens).
 - **Watching and debugging** (the same for every agent): the agent's own **event log**
   (messages, tool calls, results, approvals, task events), shown to admins in the web UI;
   `sudo lab debug <agent>` stops its service and opens **the same session** in the classic

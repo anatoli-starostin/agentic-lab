@@ -453,7 +453,8 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
     \code{idle\_stop\_min} minutes (if above 0) of not being busy. It's judged by its workers alone: a
     manager there goes offline in Slack until the host is powered on. A manager's own work
     isn't measured, so \code{idle\_stop\_with\_managers: false} makes managers keep the
-    host busy.
+    host busy A host with managers and no worker counts as busy (only an admin
+    powers it off).
   \item \textbf{Who may power}: any member may power a machine on, or off when idle;
     powering off a busy machine is for admins only, after confirming (\code{force\_off}).
 \end{itemize}

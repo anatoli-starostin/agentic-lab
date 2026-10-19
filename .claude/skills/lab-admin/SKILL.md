@@ -156,7 +156,7 @@ asking before each one. The whole lab, one host, or one agent.
   waiting on its long runs; a long run going; a
   process on a GPU (anyone's); a GPU above 0% in its last 5 readings (~75 s); someone's
   `~/.lab-keep-awake` (the web UI shows who); or a manager runs there and the host has
-  `idle_stop_with_managers: false`. Ask the person, or
+  `idle_stop_with_managers: false` or no worker. Ask the person, or
   an admin powers it off anyway (`force_off`, after confirming). Managers don't keep a
   host on by default (it's judged by its workers alone; a manager there goes offline with
   it); remove `idle_stop_with_managers: false` from the host in `lab.yaml` (PR → merge →
