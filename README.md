@@ -57,7 +57,7 @@ src/agentic_lab/
   slackio.py  what an agent sees in Slack, and how it answers
   apply.py    `lab plan` / `lab apply`; configrepo.py (deploy only `main`), lock.py
               (framework pin), selfadmin.py (administering from Slack, `lab apply-main`)
-  github.py   agents' GitHub bot identities
+  github.py, github_app.py   agents' GitHub identities: bot accounts or GitHub Apps
   doctor.py, init.py, debug.py, nebius_connect.py, slack_verify.py, slack_manifest.py
 client/       lab-member.py: the one file a member ever runs
 deploy/       host setup (sandbox, GPU, AppArmor), systemd units

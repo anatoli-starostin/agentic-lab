@@ -23,7 +23,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-NAMES = ("claude-token", "slack-app", "nebius-sa", "github-token")
+NAMES = ("claude-token", "slack-app", "nebius-sa", "github-token", "github-app")
 # what each secret is made of, for the web form: (field, label, required prefix)
 FIELDS = {
     "claude-token": [("value", "Claude token (sk-ant-…)", "sk-ant-")],
@@ -32,6 +32,9 @@ FIELDS = {
     # a Nebius service account's key, for VM power (the secretary's only)
     # a GitHub bot account's token (owner service:github-<login>): fine-grained or classic
     "github-token": [("value", "GitHub token (github_pat_… or ghp_…)", "")],
+    # a GitHub App's private key (the .pem GitHub downloads), owner service:github-<slug>
+    "github-app": [("private_key", "The app's private key (the .pem file's contents)",
+                    "-----BEGIN")],
     "nebius-sa": [("service_account_id", "Service account id (serviceaccount-…)", "serviceaccount-"),
                   ("public_key_id", "Public key id (publickey-…)", "publickey-"),
                   ("private_key", "Private key (PEM)", "-----BEGIN")],
@@ -229,6 +232,10 @@ def check_value(name, value):
         if not v.startswith(prefix) or len(v) < 20:
             raise IntakeError(f"that doesn't look like a {label}")
         out[key] = v
+    if name == "github-app":
+        if "PRIVATE KEY-----" not in out["private_key"]:
+            raise IntakeError("that doesn't look like a PEM private key")
+        return out["private_key"]
     if name == "github-token" and not out["value"].startswith(("github_pat_", "ghp_")):
         raise IntakeError("that doesn't look like a GitHub token (github_pat_… or ghp_…)")
     if name == "claude-token" and len(out["value"]) < 40:

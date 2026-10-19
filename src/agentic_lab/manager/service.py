@@ -191,6 +191,7 @@ async def serve(lab_path, agent_id, host=None, port=None):
     log.info("manager %s (%s): %d worker(s), broker=%s, %d member(s) known",
              agent_id, lab.display_name(agent_id), len(workers.known()), bool(broker),
              len(members))
+    GH.start(lab, agent_id, stop)       # a GitHub App identity: keep its token fresh
     follower = asyncio.create_task(follow(state, workers, mgr.post, mgr.finished, stop,
                                           mention=mgr.mention))
     status_server = None
@@ -276,6 +277,7 @@ async def ask(lab_path, agent_id, human, text, wait_s=900):
         raise SystemExit(why)
     await mgr.on_message(Incoming("cli", None, "0", None, human, text, True, True))
     stop = asyncio.Event()
+    GH.start(lab, agent_id, stop)       # a GitHub App identity: keep its token fresh
     follower = asyncio.create_task(follow(state, workers, mgr.post, mgr.finished, stop,
                                           mention=lambda h: h))
     loop = asyncio.get_running_loop()

@@ -112,6 +112,7 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
     log.info("worker %s: %d manager(s), serving on %s:%d", agent_id,
              len(access._tokens), host, port)
     tasks = asyncio.create_task(run_tasks(store, runner, stop))
+    GH.start(lab, agent_id, stop)       # a GitHub App identity: keep its token fresh
     prober = asyncio.create_task(probe_loop(usage, seat_token, stop))
     await server.serve()
     stop.set()
