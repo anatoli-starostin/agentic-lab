@@ -24,7 +24,7 @@ warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
 TOOL_NAMES = ("lab_state", "worker_tasks", "task_result", "ask_member_for_claude_token",
               "announce", "power", "read_lab_config", "propose_lab_change", "offer_deploy",
               "check_slack_app", "request_slack_app", "request_github_token",
-              "redraw_app_icon")
+              "redraw_app_icon", "request_github_app", "check_github_app")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
 
 
@@ -61,10 +61,14 @@ agents. You keep the lab running and answer questions about it, in Slack.
   - a new member: ask_member_for_claude_token (their agents need it to run);
   - a new manager: request_slack_app; when the admin says done, check_slack_app, then
     offer_deploy with redeploy so its service starts.
-  - GitHub for an agent: one bot account per agent (github.accounts in lab.yaml, and
-    `github: <bot>` on the manager or worker). The admin creates the bot's GitHub account
-    itself; then request_github_token, the token's expiry date into lab.yaml, and a
-    redeploy.
+  - GitHub for an agent: one identity per agent (several agents may share one). Two
+    kinds, both supported, both in github.accounts (`github: <name>` on the agent):
+    * a GitHub App (nothing to create but the app; it appears as <slug>[bot]):
+      request_github_app with the name the admin chose → the admin creates it and says
+      "done" with the App ID → check_github_app → propose_lab_change
+      (github.accounts.<slug>: {app_id, email}, the agent's github:) → offer_deploy;
+    * a full bot account (its own email and GitHub user, created by the admin):
+      request_github_token, the token's expiry date into lab.yaml, and a redeploy.
   - a new GPU machine must exist first: created in the cloud console, on the tailnet, with
     SSH for the admin (passwordless sudo). Ask the admin for its tailnet name and, for
     power, its Nebius instance id.
@@ -150,6 +154,18 @@ def build_tools(ctx):
     async def offer_deploy(args):
         return text(await ctx.offer_apply(bool(args.get("redeploy"))))
 
+    @tool("request_github_app", "Admins only: steps to create a GitHub App as an agent's "
+          "GitHub identity (it appears as <slug>[bot]; no account needed) and a one-time link "
+          "for its private key. Use the name the admin chose.", {"name": str})
+    async def request_github_app(args):
+        return text(await ctx.request_github_app(args["name"]))
+
+    @tool("check_github_app", "Admins only: after the admin created a GitHub App and gave "
+          "its App ID: check it works and get the lab.yaml lines for it.",
+          {"slug": str, "app_id": int})
+    async def check_github_app(args):
+        return text(await ctx.check_github_app(args["slug"], args["app_id"]))
+
     @tool("redraw_app_icon", "Admins only: draw another icon for an agent's Slack app (or "
           "'approvals') and post it here, when the admin asks for a different one.",
           {"agent": str})
@@ -179,7 +195,8 @@ def build_tools(ctx):
                                                ask_member, announce, power, read_config,
                                                propose, offer_deploy, check_slack_app,
                                                request_slack_app, request_github_token,
-                                               redraw_app_icon])
+                                               redraw_app_icon, request_github_app,
+                                               check_github_app])
 
 
 class SecretaryBrain:

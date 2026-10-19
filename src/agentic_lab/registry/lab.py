@@ -54,8 +54,11 @@ _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False)
          "ssh_user": (str, False)}      # who `lab apply` logs in as (default: the admin)
 _GITHUB = {"accounts": (dict, True)}
 # a bot account (a GitHub machine user) an agent acts as
+# a GitHub identity: a bot account (a machine user, with a fine-grained token), or a GitHub
+# App (app_id; named by its slug, it appears as <slug>[bot]; its private key via the intake)
 _GH_ACCOUNT = {"email": (str, False),                       # default: its noreply address
-               "expires": ((dt.date, type(None)), False)}   # its token's expiry date
+               "expires": ((dt.date, type(None)), False),   # a bot account's token expiry
+               "app_id": (int, False), "installation_id": (int, False)}
 _GH_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 _CRED = {"name": (str, True), "host": (str, True), "expires": ((dt.date, type(None)), True),
          "scope": (str, False), "agent": (str, False)}
@@ -134,7 +137,7 @@ class Lab:
             gpu=a.get("gpu", a.get("role") == "worker"),
             compact_percent=a.get("compact_percent",
                                   DEFAULT_COMPACT_PERCENT.get(a.get("role"))),
-            git_identity=((a["github"], self.github_email(a["github"]))
+            git_identity=((self.github_login(a["github"]), self.github_email(a["github"]))
                           if a.get("github") else None),
             domains=github.DOMAINS if a.get("github") else ())
 
@@ -142,10 +145,18 @@ class Lab:
     def github_accounts(self):
         return (self.data.get("github") or {}).get("accounts") or {}
 
+    def github_is_app(self, account):
+        return bool((self.github_accounts.get(account) or {}).get("app_id"))
+
+    def github_login(self, account):
+        """How the identity appears on GitHub: an app as `<slug>[bot]`."""
+        return f"{account}[bot]" if self.github_is_app(account) else account
+
     def github_email(self, account):
-        """The commit email of a bot account (its noreply address unless lab.yaml says)."""
+        """The commit email (its noreply address unless lab.yaml says; for an app,
+        `lab github-app-check` prints the exact one, with the bot's id)."""
         a = self.github_accounts.get(account) or {}
-        return a.get("email") or f"{account}@users.noreply.github.com"
+        return a.get("email") or f"{self.github_login(account)}@users.noreply.github.com"
 
     def display_name(self, agent_id):
         """How humans see the agent (Slack, web UI, how it introduces itself)."""

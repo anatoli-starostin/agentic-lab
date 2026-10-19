@@ -159,10 +159,17 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 
 ### 4.4 GitHub for agents
 
-A manager or worker may have **one GitHub identity**: a bot account (a machine user) named
-in `lab.yaml` (`github: <bot>`; several agents may share a bot). The bot's token is in the
-agent's environment (`GH_TOKEN`; git and `gh` set up; commits carry the bot's name and
-email), and `github.com` is reachable from its sandbox. The agent can read that token: the
+A manager or worker may have **one GitHub identity**, named in `lab.yaml` (`github: <name>`;
+several agents may share one). Two kinds, side by side:
+- **A GitHub App** (`app_id`): appears as `<slug>[bot]`, no account or email to create, so
+  every agent can easily have its own. Tokens last an hour: the agent's service holds the
+  app's private key (unreadable by the agent), mints a token, keeps a fresh one where git
+  and `gh` read it (`github_app.py`), and mints the next before it expires.
+- **A full bot account** (a GitHub user with its own email): a fine-grained token in the
+  agent's environment (`GH_TOKEN`), its expiry tracked.
+
+Either way git and `gh` are set up, commits carry the identity's name and email, and
+`github.com` is reachable from the sandbox. The agent can read its current token: the
 safety is GitHub's — private repositories, a fine-grained token limited to the lab's repos
 (contents, pull requests, issues), and **branch protection** on `main` (pull requests,
 reviews by human code owners, no bypass for bots). Bots push branches and open pull
@@ -531,6 +538,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-18 | **A worker's event log goes only to the secretary's monitoring token.** |
 | 2026-10-18 | **Anyone in the lab may talk to any manager.** On a dedicated manager, other members are guests: conversation only, no tools, no work, no memory, 2-minute turns. |
 | 2026-10-18 | **`~/.lab-keep-awake`**: anyone working on a lab machine directly keeps it from being stopped. |
+| 2026-10-19 | **GitHub Apps as agents' identities**, alongside full bot accounts: `<slug>[bot]`, nothing to create but the app; the service mints its hourly tokens. |
 | 2026-10-18 | **Approval requests have no timeout by default** (a member may set `timeout_s`); a request the agent stops waiting for is withdrawn. |
 
 ## 14. Open questions

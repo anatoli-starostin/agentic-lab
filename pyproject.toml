@@ -12,6 +12,8 @@ dependencies = [
     "uvicorn>=0.31",
     "slack_sdk>=3.33",
     "aiohttp>=3.10",
+    "pyjwt>=2.8",               # GitHub Apps: the app's JWT (RS256)
+    "cryptography>=42",
 ]
 
 [project.optional-dependencies]

@@ -448,6 +448,25 @@ def cmd_slack_icon(args):
     return 0
 
 
+def cmd_github_app_check(args):
+    from . import github_app as GA
+    from .apply import intake_secret
+    key = intake_secret(f"service:github-{args.slug.lower()}", "github-app")
+    if key is None:
+        sys.exit(f"lab github-app-check: no private key for {args.slug} yet "
+                 f"(lab secret request service:github-{args.slug.lower()} github-app)")
+    try:
+        info = GA.check(args.app_id, key)
+    except Exception as e:
+        sys.exit(f"lab github-app-check: the app doesn't work yet: {e}")
+    print(f"{info['bot']}: installed on " + (", ".join(
+        f"{i['account']} (id {i['id']}, {i['repositories']} repositories)"
+        for i in info["installations"]) or "nothing yet (Install App → the lab's repos)"))
+    print(f"for lab.yaml:\n  github:\n    accounts:\n      {info['slug']}: "
+          f"{{app_id: {args.app_id}, email: \"{info['email']}\"}}")
+    return 0 if info["installations"] else 1
+
+
 def cmd_pr_link(args):
     from . import configrepo as CR
     try:
@@ -650,6 +669,12 @@ def main(argv=None):
     si.add_argument("--claude", action="store_true",
                     help="have Claude draw it (falls back to the pattern if that fails)")
     si.set_defaults(fn=cmd_slack_icon)
+
+    ga = sub.add_parser("github-app-check", help="check a GitHub App identity works and print "
+                        "its lab.yaml lines (sudo, secretary host)")
+    ga.add_argument("slug", help="the app's slug (its name, lowercase, '-' for spaces)")
+    ga.add_argument("--app-id", type=int, required=True)
+    ga.set_defaults(fn=cmd_github_app_check)
 
     pr = sub.add_parser("pr-link", help="the link to open a pull request for the config "
                         "repo's current branch (push it first)")

@@ -567,17 +567,26 @@ an agent asked to recite a token refuses.
 \section{GitHub for agents}\label{sec:github}
 
 \begin{itemize}
-  \item A manager or worker may have \textbf{one GitHub identity}: a bot account (a GitHub
-    machine user) named in \code{lab.yaml} (\code{github: <bot>} on the agent, the bot in
-    \code{github.accounts}). Several agents may share one bot.
-  \item The bot's token is in the agent's environment (\code{GH\_TOKEN}) for all its work;
-    git authenticates through a credential helper and commits carry the bot's name and
-    email; \code{gh} is installed; \code{github.com} is reachable from its sandbox.
-  \item The agent \emph{can} read that token. What keeps this safe is GitHub: private
+  \item A manager or worker may have \textbf{one GitHub identity}, named in \code{lab.yaml}
+    (\code{github: <name>} on the agent, the identity in \code{github.accounts}); several
+    agents may share one. Two kinds, side by side in one lab:
+    \begin{itemize}
+      \item \textbf{A GitHub App} (\code{app\_id}): appears as \code{<slug>[bot]}, with no
+        account or email to create, which makes it easy to give each agent one. Its tokens
+        last an hour: the agent's service holds the app's private key (the agent can't
+        read it), mints a token, keeps a fresh one where the agent's git and \code{gh}
+        read it, and mints the next before it expires.
+      \item \textbf{A full bot account} (a GitHub user with its own email): a fine-grained
+        token in the agent's environment (\code{GH\_TOKEN}), its expiry date tracked.
+    \end{itemize}
+  \item Either way git authenticates through a credential helper, commits carry the
+    identity's name and email, \code{gh} is installed, and \code{github.com} is reachable
+    from the agent's sandbox.
+  \item The agent \emph{can} read its current token. What keeps this safe is GitHub: private
     repositories, a fine-grained token limited to the lab's repositories (contents, pull
     requests, issues), and \textbf{branch protection} on \code{main} (pull requests only,
-    reviews by human code owners, no bypass for bots). Bots push branches and open pull
-    requests, issues and comments; their approval never counts and they can't merge.
+    reviews by human code owners, no bypass for bots or apps). Bots push branches and open
+    pull requests, issues and comments; their approval never counts and they can't merge.
 \end{itemize}
 
 %=====================================================================

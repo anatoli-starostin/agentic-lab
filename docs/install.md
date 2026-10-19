@@ -213,13 +213,21 @@ deployed, and the secretary checks in code that the person asking is an admin.
 - **Add a GPU worker:** first create the VM (Nebius console, Ubuntu with NVIDIA drivers),
   join it to the tailnet and give the admin SSH with passwordless sudo (step 10); then tell
   the secretary its tailnet name (and Nebius instance id for power) → PR → merge → deploy.
-- **GitHub for an agent:** each manager or worker may have one GitHub identity, a bot
-  account (a machine user you create, e.g. `flash-bot`, added to the org with access to
-  the lab's private repos only). Tell the secretary: it adds the bot to `lab.yaml`
-  (`github.accounts`, and `github: <bot>` on the agent) → PR → merge → deploy; then it
-  posts how to make the bot's fine-grained token (contents, pull requests and issues of
-  those repos) and a one-time link for it; then a redeploy. The agent then uses git and
-  `gh` as that bot. **Protect `main`** in each repo (pull requests only, reviews by human
+- **GitHub for an agent:** each manager or worker may have one GitHub identity, of either
+  kind (both can be used in one lab):
+  - **A GitHub App** (simplest: nothing to create but the app; it appears as
+    `<name>[bot]`): tell the secretary the app's name → it posts the steps (create the app
+    in the organisation's settings, permissions, install it on the lab's repos) and a
+    one-time link for its private key → you say "done" with the App ID → it checks the
+    app and proposes the `lab.yaml` change → merge → deploy. Console:
+    `lab secret request service:github-<slug> github-app`, `sudo lab github-app-check
+    <slug> --app-id N` (prints the `lab.yaml` lines).
+  - **A full bot account** (a GitHub user with its own email, e.g. `flash-bot`, added to
+    the org with access to the lab's repos only): the secretary adds it to `lab.yaml` →
+    PR → merge → deploy; then it posts how to make the bot's fine-grained token (contents,
+    pull requests and issues of those repos) and a one-time link for it; then a redeploy.
+
+  The agent then uses git and `gh` as that identity. **Protect `main`** in each repo (pull requests only, reviews by human
   code owners, no bypass for bots): that is what keeps bots from approving or merging.
 - **People working on a lab machine directly** (not through agents): tell them to create
   `~/.lab-keep-awake` while they need the machine (`echo "CPU sweep until Friday" >

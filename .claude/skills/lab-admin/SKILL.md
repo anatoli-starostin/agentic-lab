@@ -92,10 +92,19 @@ or updates users, secrets and services on every host.
   any host), `access`, grants → PR → merge → deploy. A manager then needs its Slack app
   (install step 7) and one more deploy; a GPU host must exist, be on the tailnet and give
   the admin SSH with passwordless sudo (install step 10).
-- **GitHub for an agent:** the bot account (the admin creates it on GitHub) under
-  `github.accounts`, `github: <bot>` on the agent → PR → merge → deploy → the bot's token
-  (`lab secret request service:github-<bot> github-token`) → deploy again. Remind the admin
-  to protect `main` in the repos (human code owners, no bypass for bots).
+- **GitHub for an agent** (two kinds; both may be used in one lab):
+  - *A GitHub App*: the admin picks its name; `lab secret request service:github-<slug>
+    github-app` (a one-time link for its private key); guide the admin through creating the
+    app (organisation Settings → Developer settings → GitHub Apps → New: no webhook;
+    Contents, Pull requests, Issues read and write; generate a private key; install on the
+    lab's repos); then `sudo lab github-app-check <slug> --app-id N` prints the `lab.yaml`
+    lines (`github.accounts.<slug>: {app_id, email}`) → with `github: <slug>` on the agent
+    → PR → merge → deploy.
+  - *A full bot account* (the admin creates the GitHub user): under `github.accounts`,
+    `github: <bot>` on the agent → PR → merge → deploy → its token (`lab secret request
+    service:github-<bot> github-token`) → deploy again.
+  Remind the admin to protect `main` in the repos (human code owners, no bypass for bots or
+  apps).
 - **Remove an agent:** PR → merge → deploy; then on its host
   `sudo systemctl disable --now lab-<role>@<id>` and, after the admin confirms (offer to
   archive `~lab-<id>/work` first), `sudo userdel -r lab-<id>`.

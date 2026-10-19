@@ -12,6 +12,7 @@ announcements channel. Secrets, readable by this service only:
 """
 import asyncio
 import json
+import re
 import logging
 import os
 import tempfile
@@ -89,7 +90,11 @@ class Secretary:
                                                                conv=conv),
             slack_verify=lambda owner: self.slack_verify(owner, asked_by=human),
             request_github_token=lambda account: self.request_github_token(
-                account, asked_by=human, conv=conv))
+                account, asked_by=human, conv=conv),
+            request_github_app=lambda name: self.request_github_app(name, asked_by=human,
+                                                                    conv=conv),
+            check_github_app=lambda slug, app_id: self.check_github_app(slug, app_id,
+                                                                        asked_by=human))
 
     # ── administering the lab from Slack (selfadmin.py) ──────────────────────
 
@@ -199,6 +204,67 @@ class Secretary:
             "code owners (people only), and don't let bots bypass it."))
         return (f"posted how to make {account}'s token and the one-time link. Then: the "
                 "expiry date into lab.yaml (a PR), and offer_deploy with redeploy.")
+
+    async def request_github_app(self, name, asked_by=None, conv=None):
+        """Steps to create a GitHub App as an agent's GitHub identity, and a one-time link
+        for its private key. lab.yaml can name the app only once it exists (its App ID):
+        after "done", check_github_app, then propose the change."""
+        refused = self._admin_only(asked_by, "set up GitHub identities")
+        if refused:
+            return refused
+        slug = re.sub(r"[^a-z0-9]+", "-", name.strip().lower()).strip("-")
+        if not slug:
+            return "give the app a name (letters, digits, '-')"
+        if self.slack is None or conv is None:
+            return ("this needs Slack; from the console: lab secret request "
+                    f"service:github-{slug} github-app")
+        code = self.intake.request(f"service:github-{slug}", "github-app")
+        await self.slack.post(conv.channel, conv.thread_ts, (
+            f"*A GitHub App for an agent: {name}* (it will appear on GitHub as "
+            f"`{slug}[bot]`; one-time link valid 24 h)\n"
+            "1. GitHub: your organisation → *Settings* → *Developer settings* → *GitHub Apps* "
+            "→ *New GitHub App* (https://github.com/organizations/<org>/settings/apps/new).\n"
+            f"2. *GitHub App name*: `{name}`. *Homepage URL*: anything (e.g. the lab's repo).\n"
+            "3. *Webhook*: untick *Active*.\n"
+            "4. *Repository permissions*: *Contents* read and write, *Pull requests* read and "
+            "write, *Issues* read and write (Metadata read comes with them). Nothing else.\n"
+            "5. *Only on this account* → *Create GitHub App*.\n"
+            "6. On the app's page: note the *App ID*; *Generate a private key* (a .pem file "
+            f"downloads): paste its whole contents here (never in Slack): "
+            f"{form_url(code, self.intake_url)}\n"
+            "7. *Install App* → your organisation → *Only select repositories*: the lab's repos.\n"
+            "Then tell me \"done\" and the App ID: I check the app and propose the lab.yaml "
+            "change.\n"
+            "On GitHub, protect each repo's main: require a pull request with a review from "
+            "code owners (people only), and don't let apps or bots bypass it."))
+        return (f"posted the steps for the app {slug}[bot] and the one-time link for its key. "
+                "When the admin says done with the App ID: check_github_app, then "
+                "propose_lab_change (github.accounts, the agent's github:), then offer_deploy.")
+
+    async def check_github_app(self, slug, app_id, asked_by=None):
+        refused = self._admin_only(asked_by, "set up GitHub identities")
+        if refused:
+            return refused
+        key = self.intake.load(f"service:github-{slug.lower()}", "github-app")
+        if key is None:
+            return f"no private key for {slug} yet: the one-time link hasn't been used"
+        from .. import github_app as GA
+        try:
+            info = await asyncio.to_thread(GA.check, int(app_id), key)
+        except Exception as e:
+            return f"the app doesn't work yet: {e}"
+        if info["slug"] != slug:
+            return (f"that App ID is the app {info['slug']!r}, not {slug!r}: the key and the "
+                    "App ID must be the same app's")
+        if not info["installations"]:
+            return "the app works but isn't installed: step 7 (Install App → the lab's repos)"
+        return (f"the app works: {info['bot']}, installed on "
+                + ", ".join(f"{i['account']} ({i['repositories']} repositories)"
+                            for i in info["installations"])
+                + f". For lab.yaml: github.accounts.{slug}: {{app_id: {app_id}, email: "
+                f"\"{info['email']}\"}}" + (" (and installation_id, since it's installed in "
+                "several places: " + ", ".join(str(i["id"]) for i in info["installations"])
+                + ")" if len(info["installations"]) > 1 else ""))
 
     async def post_icon(self, name, role, conv, comment):
         """Draw an app icon (Claude, or a pattern if that fails) and post it in `conv`."""
