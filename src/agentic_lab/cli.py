@@ -566,7 +566,8 @@ def main(argv=None):
     ssub = sc.add_subparsers(dest="scmd", required=True)
     sr = ssub.add_parser("request", help="ask a human for a secret (one-time code + message)")
     sr.add_argument("human", help="the owner: a human id, or service:<name> (e.g. service:broker)")
-    sr.add_argument("name", choices=["claude-token", "slack-app", "nebius-sa"])
+    from .secrets.intake import NAMES as SECRET_NAMES
+    sr.add_argument("name", choices=list(SECRET_NAMES))
     sr.add_argument("--form", action="store_true",
                     help="print a one-time web-form link instead of the client command")
     sr.add_argument("--url", required=True, help="the intake's address as members reach it, "

@@ -10,8 +10,15 @@ tmp=$(mktemp "$(dirname "$out")/.keep-awake.XXXXXX")
 while IFS=: read -r user _ uid _ _ home _; do
     [ "$uid" -ge 1000 ] 2>/dev/null || continue
     f="$home/.lab-keep-awake"
-    [ -f "$f" ] || continue
-    printf '%s %s\n' "$user" "$(head -c 200 "$f" | head -n 1 | tr -d '\r')" >> "$tmp"
+    # a regular file, not a link (root mustn't read what it points to), read AS the user:
+    # someone linking it to a root-only file gets nothing out of it
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    if [ "$(id -u)" -eq 0 ]; then
+        note=$(runuser -u "$user" -- head -c 200 -- "$f" 2>/dev/null | head -n 1 | tr -d '\r')
+    else
+        note=$(head -c 200 -- "$f" 2>/dev/null | head -n 1 | tr -d '\r')   # (tests)
+    fi
+    printf '%s %s\n' "$user" "$note" >> "$tmp"
 done < "$passwd"
 chmod 644 "$tmp"
 mv "$tmp" "$out"

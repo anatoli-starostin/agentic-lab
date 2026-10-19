@@ -50,10 +50,11 @@ What it took:
 ## Still open
 
 - **Sockets outside `/run`.** With Unix sockets allowed, any socket the agent's user can
-  reach outside `/run` is reachable from the sandbox, for example a tmux socket in `/tmp`
-  (whose `send-keys` would run commands outside it). Worker hosts must not run tmux or
-  other socket servers as the agent's user, and the agent's user should have no lingering
-  systemd user manager.
+  reach outside `/run` is reachable from the sandbox. The services run with a private
+  `/tmp` (`PrivateTmp=yes`), so the host's `/tmp` sockets (a tmux server, say) aren't
+  visible; sockets elsewhere would be. Never run tmux or other socket servers as an
+  agent's user, and keep its user without a lingering systemd user manager (the lab
+  creates them that way).
 - **Settings are host-specific.** `~` in generated paths expands on the machine that runs
   the generator, so settings must be generated on the agent's own host.
 - **Real workloads**: verified, a worker installed PyTorch from PyPI (a domain grant) and

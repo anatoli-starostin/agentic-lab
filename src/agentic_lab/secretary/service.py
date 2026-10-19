@@ -245,7 +245,11 @@ class Secretary:
         refused = self._admin_only(asked_by, "set up GitHub identities")
         if refused:
             return refused
-        key = self.intake.load(f"service:github-{slug.lower()}", "github-app")
+        slug = re.sub(r"[^a-z0-9]+", "-", str(slug).strip().lower()).strip("-")
+        try:
+            key = self.intake.load(f"service:github-{slug}", "github-app")
+        except Exception as e:
+            return f"not a usable app name ({e})"
         if key is None:
             return f"no private key for {slug} yet: the one-time link hasn't been used"
         from .. import github_app as GA
@@ -512,7 +516,12 @@ class Secretary:
         """Once a day: credentials expiring within 14 days, announced (and the owner of a
         Claude token gets a DM with a fresh one-time command)."""
         today = dt.date.today().isoformat()
-        done = getattr(self.state, "noticed", None) or {}
+        path = os.path.expanduser(f"{STATE}/noticed.json")   # survives restarts (deploys)
+        try:
+            with open(path) as f:
+                done = {k: v for k, v in json.load(f).items() if k.endswith(today)}
+        except (OSError, ValueError):
+            done = {}
         for cred, left in expiry_notices(self.lab):
             key = f"{cred['name']}:{today}"
             if done.get(key):
@@ -520,7 +529,11 @@ class Secretary:
             when = "expired" if left < 0 else f"expires in {left} days"
             await self.announce(f":hourglass: *{cred['name']}* {when} ({cred['expires']}).")
             done[key] = True
-        self.state.noticed = done
+        try:
+            with open(path, "w") as f:
+                json.dump(done, f)
+        except OSError:
+            log.exception("remembering today's notices failed")
 
 
 async def serve(lab_path, host, port):
@@ -741,7 +754,9 @@ async def ask(lab_path, human, text):
     from ..slackio import Incoming
     lab = load_lab(lab_path)
     mon = yaml.safe_load(_read_secret(f"{CONFIG}/monitor.yaml") or "") or {}
-    workers = Workers({w: lab.worker_url(w) for w in mon if w in lab.agents}, mon, timeout=15)
+    role = lambda a: lab.agents.get(a, {}).get("role")     # noqa: E731
+    workers = Workers({w: lab.worker_url(w) for w in mon if role(w) == "worker"},
+                      {w: t for w, t in mon.items() if role(w) == "worker"}, timeout=15)
     try:
         with open(os.path.expanduser(f"{STATE}/lab-state.json")) as f:
             latest = {"state": json.load(f)}

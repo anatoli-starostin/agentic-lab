@@ -6,6 +6,7 @@ account (each member's Claude seat): the seat's limit windows are shared by all 
 agents, so the freshest reading wins, and every number keeps when and from which agent it
 came.
 """
+import asyncio
 import datetime as dt
 import subprocess
 
@@ -108,7 +109,7 @@ async def collect(lab, workers: Workers, broker=None, local_units=None, managers
         except WorkerError as e:
             agents[w].update(up=False, error=str(e))
     for aid, unit in (local_units or {}).items():
-        agents.setdefault(aid, {})["service"] = _unit_state(unit)
+        agents.setdefault(aid, {})["service"] = await asyncio.to_thread(_unit_state, unit)
 
     accounts = {}
     for hid, h in lab.humans.items():

@@ -74,7 +74,7 @@ GUEST_TURN_BUDGET_S = 120   # a guest's turn (someone else's dedicated manager):
 BUILTIN_TOOLS = ["Bash", "BashOutput", "KillShell", "Read", "Write", "Edit", "MultiEdit",
                  "Glob", "Grep", "NotebookEdit", "WebFetch", "WebSearch", "Task",
                  "TodoWrite", "SlashCommand", "ExitPlanMode"]
-GIT_ENV = ("GH_TOKEN", "GIT_CONFIG_COUNT", "GIT_CONFIG_KEY_0", "GIT_CONFIG_VALUE_0")
+GIT_ENV = ("GIT_CONFIG_GLOBAL", "GH_CONFIG_DIR", "LAB_GITHUB_DIR", "GH_TOKEN")   # github.prepare
 
 
 def guest_prompt(owner, guest):

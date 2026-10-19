@@ -77,7 +77,7 @@ def build(ctx):
            "required": ["worker", "instruction"]})
     async def submit_task(args):
         try:
-            t = await ctx.workers.call(args["worker"], "submit_task", {
+            t = await ctx.workers.call(args["worker"], "submit_task", retries=0, args={
                 "instruction": args["instruction"], "requester": ctx.requester,
                 **({"project": args["project"]} if args.get("project") else {})})
             if ctx.broker is not None:

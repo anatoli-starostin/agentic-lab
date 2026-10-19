@@ -34,3 +34,18 @@ def test_keep_awake_makes_the_machine_busy():
     assert P.worker_busy("w", seen) == "kept awake by alice (CPU sweep) (~/.lab-keep-awake)"
     seen["keep_awake"] = []
     assert P.worker_busy("w", seen) is None
+
+
+def test_scanner_never_follows_links(tmp_path):
+    """A link to a root-only file must not leak it into the world-readable list."""
+    home = tmp_path / "home" / "mallory"
+    home.mkdir(parents=True)
+    secret = tmp_path / "shadow"
+    secret.write_text("root:$6$hash:...\n")
+    (home / ".lab-keep-awake").symlink_to(secret)
+    passwd = tmp_path / "passwd"
+    passwd.write_text(f"mallory:x:1003:1003::{home}:/bin/bash\n")
+    out = tmp_path / "lib" / "keep-awake"
+    subprocess.run(["bash", str(SCRIPT)], check=True, env={
+        **os.environ, "LAB_PASSWD": str(passwd), "LAB_KEEP_AWAKE_OUT": str(out)})
+    assert "hash" not in out.read_text() and keep_awake(str(out)) == []
