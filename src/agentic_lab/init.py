@@ -64,7 +64,7 @@ def parse_worker(spec, tailnet):
 def build(lab_name, tailnet, admin_id, admin_name, slack_user, secretary_host,
           secretary_name, manager=None, workers=(), provider="nebius", admin_login=None,
           manager_host=None):
-    hosts = {secretary_host: {"kind": "onprem", "power": "always_on"}}
+    hosts = {secretary_host: {"kind": "onprem"}}
     if secretary_name:
         hosts[secretary_host]["tailnet_name"] = secretary_name
     human = {"name": admin_name, "channels": [
@@ -79,7 +79,7 @@ def build(lab_name, tailnet, admin_id, admin_name, slack_user, secretary_host,
     if manager:
         mhost, mname = manager_host or (secretary_host, None)
         if mhost not in hosts:
-            hosts[mhost] = {"kind": "cloud", "provider": provider, "power": "always_on"}
+            hosts[mhost] = {"kind": "cloud", "provider": provider, "idle_stop_min": 0}
             if mname:
                 hosts[mhost]["tailnet_name"] = mname
         agents[manager] = {"role": "manager", "human": admin_id, "host": mhost,
@@ -87,8 +87,7 @@ def build(lab_name, tailnet, admin_id, admin_name, slack_user, secretary_host,
                            "grants": [{"tool": "WebFetch"}, {"tool": "WebSearch"}]}
     for wid, host, name in workers:
         if host not in hosts:
-            hosts[host] = {"kind": "cloud", "provider": provider, "power": "on_demand",
-                           "idle_stop_min": 30}
+            hosts[host] = {"kind": "cloud", "provider": provider, "idle_stop_min": 30}
             if name:
                 hosts[host]["tailnet_name"] = name
         agents[wid] = {"role": "worker", "human": admin_id, "host": host, "access": "shared",

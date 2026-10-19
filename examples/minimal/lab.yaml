@@ -23,23 +23,20 @@ humans:
 hosts:
   nuc-01:
     kind: onprem
-    power: always_on
   mgr-vm-01:
     kind: cloud
     provider: nebius
     instance: mgr-vm-01
-    power: always_on
+    idle_stop_min: 0                # never stopped
   gpu-a:
     kind: cloud
     provider: nebius
     instance: gpu-a
-    power: on_demand
     idle_stop_min: 30
   gpu-b:
     kind: cloud
     provider: nebius
     instance: gpu-b
-    power: on_demand
     idle_stop_min: 30
 
 agents:

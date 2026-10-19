@@ -28,7 +28,6 @@ _AGENT_ID = re.compile(r"^[a-z][a-z0-9-]*$")
 CHANNEL_TYPES = ("slack_dm",)   # first version: Slack DM only (DESIGN.md §7)
 ACCESS = ("shared", "dedicated")
 HOST_KINDS = ("onprem", "cloud")
-POWER = ("always_on", "on_demand")
 EXPIRY_WARN_DAYS = 14
 
 # key -> (type, required). Types are checked; unknown keys are errors.
@@ -51,7 +50,8 @@ _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "github": ((str, dict), False),
           "turn_budget_min": (int, False)}  # a manager's turns are cut off after this
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
-         "power": (str, False), "idle_stop_min": (int, False), "tailnet_name": (str, False),
+         # minutes idle before the secretary stops it (cloud hosts: required; 0: never)
+         "idle_stop_min": (int, False), "tailnet_name": (str, False),
          "ssh_user": (str, False),      # who `lab apply` logs in as (default: the admin)
          "idle_stop_with_managers": (bool, False)}  # default true; false: managers keep it busy
 _GITHUB = {"accounts": (dict, True)}
@@ -234,21 +234,25 @@ def check(lab: Lab, today: dt.date | None = None):
 
     for hid, h in lab.hosts.items():
         where = f"hosts.{hid}"
+        if "power" in (h or {}):            # before 2026-10-19: power: always_on | on_demand
+            E(where, "'power' was removed: idle_stop_min decides (above 0: stopped when idle "
+                     "that long; 0: never)")
+            h = {k: v for k, v in h.items() if k != "power"}
         if not _fields(h or {}, _HOST, where, issues):
             continue
         if h.get("kind") not in HOST_KINDS:
             E(where, f"kind must be one of {HOST_KINDS}, got {h.get('kind')!r}")
         if h.get("kind") == "cloud" and not h.get("provider"):
             E(where, "a cloud host needs a provider")
-        if "power" in h and h["power"] not in POWER:
-            E(where, f"power must be one of {POWER}, got {h['power']!r}")
-        if h.get("power") == "on_demand" and "idle_stop_min" not in h:
-            E(where, "an on_demand host needs idle_stop_min: minutes idle before the secretary "
+        stop = h.get("idle_stop_min")
+        if h.get("kind") == "cloud" and stop is None:
+            E(where, "a cloud host needs idle_stop_min: minutes idle before the secretary "
                      "stops it (0: never)")
-        if isinstance(h.get("idle_stop_min"), int) and h["idle_stop_min"] < 0:
+        if isinstance(stop, int) and stop < 0:
             E(where, "idle_stop_min must be 0 (never) or more")
-        if "idle_stop_min" in h and h.get("power") != "on_demand":
-            W(where, "idle_stop_min only applies to power: on_demand hosts")
+        if h.get("kind") != "cloud" and stop:
+            W(where, "idle_stop_min only applies to cloud hosts (the secretary can't power "
+                     "this one)")
         if h.get("idle_stop_with_managers") is True:
             W(where, "idle_stop_with_managers: true is the default (managers never keep a "
                      "host on); only false changes anything")
@@ -288,6 +292,8 @@ def check(lab: Lab, today: dt.date | None = None):
             host = lab.hosts.get(a.get("host")) or {}
             if host.get("kind") == "cloud":
                 W(where, "the secretary is meant to run on an always-on on-prem host")
+            if host.get("idle_stop_min"):
+                E(where, "the secretary's host is never stopped: give it idle_stop_min: 0")
         cp = a.get("compact_percent")
         if isinstance(cp, int) and not isinstance(cp, bool) and not 1 <= cp <= 100:
             E(where, "compact_percent must be between 1 and 100")

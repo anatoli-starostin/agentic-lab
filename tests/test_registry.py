@@ -119,7 +119,7 @@ def test_every_agent_needs_a_human(lab_dir):
      "a timeout never approves"),
     (lambda d: d["humans"]["alice"]["channels"][0].update(timeout_s=0), "must be positive"),
     (lambda d: d["hosts"]["gpu-a"].pop("provider"), "needs a provider"),
-    (lambda d: d["hosts"]["gpu-a"].update(power="sometimes"), "power must be one of"),
+    (lambda d: d["hosts"]["gpu-a"].update(power="on_demand"), "'power' was removed"),
     (lambda d: d["hosts"]["mgr-vm-01"].update(restart_by="secretary"), "unknown key"),
     (lambda d: d["credentials"][0].update(host="nowhere"), "is not in hosts"),
     (lambda d: d["credentials"][0].update(agent="ghost"), "agent 'ghost' is not in agents"),

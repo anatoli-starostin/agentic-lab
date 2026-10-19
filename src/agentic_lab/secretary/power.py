@@ -4,10 +4,10 @@ Nebius, through its CLI, authenticated as a service account (only the secretary 
 key). A host can be powered if lab.yaml gives it `kind: cloud`, `provider: nebius` and its
 `instance` id. The secretary's own host is never powered off by it.
 
-Idle stop: a host whose `power` is `on_demand` and that runs workers is stopped once all
+Idle stop: a host with `idle_stop_min` above 0 that runs workers is stopped once all
 its workers have had nothing running, queued or waiting, and its GPUs nothing on them
 (nvidia-smi, via the workers' health checks), for `idle_stop_min` minutes (required on
-on-demand hosts; 0: never). The same "busy"
+cloud hosts; 0: never). The same "busy"
 decides who may power a host off (only admins, when busy).
 
 Managers on a host don't keep it busy: it's judged by its workers alone, and stopping it
@@ -166,13 +166,13 @@ class IdleWatch:
         self.idle_since = {}
 
     def candidates(self, lab, snapshot, now=None):
-        """Hosts to stop now: on demand, with workers (and managers, unless
+        """Hosts to stop now: idle_stop_min above 0, with workers (and managers, unless
         idle_stop_with_managers: false), all workers idle for idle_stop_min."""
         now = now or dt.datetime.now(dt.timezone.utc)
         out = []
         for host, h in lab.hosts.items():
             h = h or {}
-            if h.get("power") != "on_demand" or not h.get("idle_stop_min"):
+            if not h.get("idle_stop_min"):
                 continue
             here = [a for a, x in lab.agents.items() if x.get("host") == host]
             agents = [a for a in here if lab.agents[a].get("role") == "worker"]

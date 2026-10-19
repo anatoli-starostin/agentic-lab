@@ -114,9 +114,8 @@ mechanisms that bind them together, and the conventions the framework relies on.
   \item \textbf{Managers} run on any host: the secretary host, a CPU VM of their own, or a
     GPU VM next to the workers they use. Each manager's \code{host:} in \code{lab.yaml}
     says where; several agents on one host still each have their own Unix user.
-  \item \textbf{GPU hosts}: cloud VMs (Nebius in this version), \code{power: on\_demand} or
-    \code{always\_on}; an \code{on\_demand} one is stopped once idle for
-    \code{idle\_stop\_min} minutes (required; 0: never).
+  \item \textbf{GPU hosts}: cloud VMs (Nebius in this version), stopped once idle for
+    \code{idle\_stop\_min} minutes (required on cloud hosts; 0: never).
   \item All hosts are on one \textbf{Tailscale tailnet}; services talk to each other only
     over it.
 \end{itemize}
@@ -441,8 +440,8 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
     why). While any such file exists the machine counts as busy; the web UI shows who keeps
     it awake. A root timer on every lab host lists these files each minute (home folders
     are private, so the lab's services can't look themselves).
-  \item \textbf{Idle stop}: an \code{on\_demand} host with workers is stopped after
-    \code{idle\_stop\_min} minutes of not being busy. It's judged by its workers alone: a
+  \item \textbf{Idle stop}: a host with workers is stopped after its
+    \code{idle\_stop\_min} minutes (if above 0) of not being busy. It's judged by its workers alone: a
     manager there goes offline in Slack until the host is powered on. A manager's own work
     isn't measured, so \code{idle\_stop\_with\_managers: false} makes managers keep the
     host busy.
@@ -472,7 +471,7 @@ Section & Contents \\
   workers yes), \code{port} (workers, managers), \code{compact\_percent},
   \code{slack\_app}, \code{turn\_budget\_min} (managers). \\
 \code{hosts} & \code{kind} (onprem/cloud), \code{provider}, \code{instance},
-  \code{power}, \code{idle\_stop\_min} (required with \code{on\_demand}; 0: never), \code{tailnet\_name}, \code{ssh\_user}, \code{idle\_stop\_with\_managers}. \\
+  \code{idle\_stop\_min} (required on cloud hosts; 0: never), \code{tailnet\_name}, \code{ssh\_user}, \code{idle\_stop\_with\_managers}. \\
 \code{github} & \code{accounts}: the agents' identities: bot accounts (commit
   \code{email}, token \code{expires}) and GitHub Apps (\code{app\_id}, \code{email}, and
   \code{installation\_id} when the app is installed in several places). \\

@@ -594,7 +594,7 @@ def test_idle_stop_with_managers_check():
 
 
 def test_idle_stop_min_required():
-    """An on_demand host must say idle_stop_min; 0 means never."""
+    """A cloud host must say idle_stop_min (the only switch); 0 means never."""
     import datetime as dt
     import tempfile
 
@@ -611,10 +611,12 @@ def test_idle_stop_min_required():
             return lab, [str(i) for i in registry.check(lab)]
     _, issues = check(lambda h: h["gpu-a"].pop("idle_stop_min"))
     assert any("gpu-a" in i and "needs idle_stop_min" in i for i in issues)
+    _, issues = check(lambda h: h["nuc-01"].update(idle_stop_min=5))   # the secretary's
+    assert any("secretary's host is never stopped" in i for i in issues)
     _, issues = check(lambda h: h["gpu-a"].update(idle_stop_min=-1))
     assert any("0 (never) or more" in i for i in issues)
-    _, issues = check(lambda h: h["nuc-01"].update(idle_stop_min=10))
-    assert any("nuc-01" in i and "only applies" in i for i in issues)
+    lab, issues = check(lambda h: h.update(lab={"kind": "onprem", "idle_stop_min": 10}))
+    assert any("hosts.lab" in i and "only applies to cloud hosts" in i for i in issues)
     lab, issues = check(lambda h: h["gpu-a"].update(idle_stop_min=0))
     assert not any("gpu-a" in i for i in issues)
     w, t0 = P.IdleWatch(), dt.datetime(2026, 10, 17, 12, tzinfo=dt.timezone.utc)
