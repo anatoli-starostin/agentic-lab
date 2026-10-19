@@ -95,6 +95,11 @@ def connect(admin, secretary_user, project, forget_admin=False, say=print):
     say(f"   group {GROUP_NAME} with role {ROLE}: {group}")
 
     say("2. the secretary's key (generated here) and CLI profile")
+    try:
+        _nebius_bin(secretary_user)
+    except ConnectError:               # its own CLI, as lab apply installs it
+        run_as(secretary_user, "bash", "-c", "curl -sSL https://artifacts.nebius.cloud/cli/"
+               "install.sh | SHELL=/bin/sh bash >/dev/null")
     home = pwd.getpwnam(secretary_user).pw_dir
     key = os.path.join(home, ".nebius", "lab-key.pem")
     pub = key.replace(".pem", ".pub.pem")

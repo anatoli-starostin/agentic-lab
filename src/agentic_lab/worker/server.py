@@ -192,9 +192,10 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         return {"events": events.read(since=_dt.timedelta(hours=hours), limit=min(limit, 2000))}
 
     @mcp.tool(description="Liveness and state of this worker: queue, GPU, disk, versions.")
-    def health_check(ctx: Context) -> dict:
+    async def health_check(ctx: Context) -> dict:
         who(ctx)
-        h = (health or default_health)(agent_id, store)
+        # nvidia-smi can take seconds: not in the event loop serving the other calls
+        h = await asyncio.to_thread(health or default_health, agent_id, store)
         if usage is not None:
             h["usage"] = usage.load()
         return h

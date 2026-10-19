@@ -272,7 +272,7 @@ def check(lab: Lab, today: dt.date | None = None):
         tb = a.get("turn_budget_min")
         if isinstance(tb, int) and not isinstance(tb, bool) and not 1 <= tb <= 60:
             E(where, "turn_budget_min must be between 1 and 60")
-        # (slack_app is informational: `lab slack-verify <manager> --write` fills it in)
+        # (slack_app is informational: `lab slack-verify <manager>` prints the line for it)
         if role == "secretary":
             host = lab.hosts.get(a.get("host")) or {}
             if host.get("kind") == "cloud":
@@ -338,6 +338,9 @@ def check(lab: Lab, today: dt.date | None = None):
     secretaries = roles.get("secretary", [])
     if len(secretaries) != 1:
         E("agents", f"a lab has exactly one secretary, found {len(secretaries)}")
+    elif secretaries != ["secretary"]:
+        E(f"agents.{secretaries[0]}", "the secretary's id must be `secretary` (its services "
+                                      "run as lab-secretary); give it any display_name")
     for hid, h in lab.humans.items():
         mine = [aid for aid in roles.get("manager", []) if lab.agents[aid].get("human") == hid]
         if mine and not (h or {}).get("channels"):

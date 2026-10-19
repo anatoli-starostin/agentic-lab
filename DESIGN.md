@@ -85,7 +85,7 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   the intake and the web UI; deploys run from here.
 - **Managers**: on any host — the secretary host, a VM of their own, or a GPU VM next to
   their workers (`host:` per manager).
-- **Workers**: GPU VMs, `on_demand` (stopped when idle) or `always_on`.
+- **Workers**: GPU VMs, `on_demand` (stopped once idle for `idle_stop_min` minutes, if set) or `always_on`.
 - Several agents on one host each have their own Unix user (§10).
 
 ---
@@ -171,7 +171,8 @@ git's conditional config for the commit author; the service writes the agent's g
 `GIT_CONFIG_GLOBAL`); for `gh` on a mapped repository the agent passes that identity's token.
 Several agents may share an identity. Identities live in `github.accounts`; two kinds, side
 by side:
-- **A GitHub App** (`app_id`): appears as `<slug>[bot]`, no account or email to create, so
+- **A GitHub App** (`app_id`; `installation_id` too if the app is installed in several
+  places): appears as `<slug>[bot]`, no account or email to create, so
   every agent can easily have its own. Tokens last an hour: the agent's service holds the
   app's private key (unreadable by the agent), mints a token, keeps a fresh one where git
   and `gh` read it (`github_app.py`), and mints the next before it expires.
@@ -451,7 +452,8 @@ a human reviews and merges → deploy. Every host records what it runs
 in code: `propose_lab_change` (a checked branch, pushed; replies with the diff and "here is
 the PR, review and merge it"), `offer_deploy` (a **Deploy** button; only an admin's click
 deploys), `request_slack_app` (with an app icon Claude draws from the agent's name, role and the lab's name;
-`redraw_app_icon` for another), `request_github_token`, `check_slack_app`. The secretary's one
+`redraw_app_icon` for another), `request_github_token`, `request_github_app` and `check_github_app` (a GitHub App as an
+agent's identity), `check_slack_app`. The secretary's one
 root command is **`lab apply-main`** (a sudoers rule, no arguments): it deploys only `main`,
 as its own systemd unit. Even a misled secretary can only deploy what a human merged.
 

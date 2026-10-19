@@ -45,6 +45,13 @@ def find_source():
     package was installed from, else the copy `lab apply` keeps in /opt/agentic-lab/src."""
     if _is_source(os.getcwd()):
         return os.getcwd()
+    try:                               # the checkout lab apply used last (apply-main.yaml)
+        with open("/etc/agentic-lab/apply-main.yaml") as f:
+            src = (yaml.safe_load(f) or {}).get("framework_source")
+        if src and _is_source(src) and os.path.exists(os.path.join(src, ".git")):
+            return src
+    except (OSError, ValueError):
+        pass
     d = os.path.dirname(os.path.abspath(__file__))
     for _ in range(4):
         d = os.path.dirname(d)
@@ -192,6 +199,8 @@ def host_plan(lab, host, tokens, intake=intake_secret):
                     "service-account-id": sa["service_account_id"],
                     "public-key-id": sa["public_key_id"], "private-key-file-path": key}}}))
             nebius_cli = sec_user
+        if any((h or {}).get("provider") == "nebius" for h in lab.hosts.values()):
+            nebius_cli = sec_user      # VM power: the CLI the secretary (and nebius connect) use
         users += ["lab-broker"]
         agents = [aid for aid, a in lab.agents.items()
                   if a.get("role") in ("worker", "manager", "secretary")]
@@ -224,7 +233,7 @@ SCRIPT_HEAD = r"""#!/bin/bash
 set -euo pipefail
 B=$(cd "$(dirname "$0")" && pwd)
 say() {{ echo "== $*"; }}
-TIP=$(tailscale ip -4 2>/dev/null | head -1)
+TIP=$(tailscale ip -4 2>/dev/null | head -1 || true)
 [ -n "$TIP" ] || {{ echo "this host isn't on the tailnet"; exit 1; }}
 
 say "framework -> /opt/agentic-lab"
@@ -233,6 +242,8 @@ mkdir -p /opt/agentic-lab /etc/agentic-lab
 rm -rf /opt/agentic-lab/src.new && mkdir /opt/agentic-lab/src.new
 tar xzf "$B/source.tgz" -C /opt/agentic-lab/src.new
 rm -rf /opt/agentic-lab/src && mv /opt/agentic-lab/src.new /opt/agentic-lab/src
+# a Python uv downloads (none 3.12 on the host) must be readable by the lab's users
+export UV_PYTHON_INSTALL_DIR=/opt/agentic-lab/python
 uv venv -q --allow-existing /opt/agentic-lab/venv -p 3.12
 uv pip install -q -p /opt/agentic-lab/venv --reinstall-package agentic-lab /opt/agentic-lab/src
 install -d /opt/agentic-lab/client

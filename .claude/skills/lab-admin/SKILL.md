@@ -98,7 +98,8 @@ or updates users, secrets and services on every host.
     app (organisation Settings → Developer settings → GitHub Apps → New: no webhook;
     Contents, Pull requests, Issues read and write; generate a private key; install on the
     lab's repos); then `sudo lab github-app-check <slug> --app-id N` prints the `lab.yaml`
-    lines (`github.accounts.<slug>: {app_id, email}`) → with `github: <slug>` on the agent
+    lines (`github.accounts.<slug>: {app_id, email}`; add `installation_id` if the app is
+    installed in several places) → with `github: <slug>` on the agent
     → PR → merge → deploy.
   - *A full bot account* (the admin creates the GitHub user): under `github.accounts`,
     `github: <bot>` on the agent → PR → merge → deploy → its token (`lab secret request

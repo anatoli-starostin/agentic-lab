@@ -15,6 +15,7 @@ set -euo pipefail
 here=$(cd "$(dirname "$0")" && pwd)
 
 echo "== packages"
+ls /var/lib/apt/lists/*_Packages >/dev/null 2>&1 || apt-get update -qq   # a fresh image
 apt-get install -y bubblewrap socat >/dev/null
 apt-get install -y gh >/dev/null 2>&1 || echo "   (gh not installed: agents can still use git and the GitHub API)"
 apt-get install -y librsvg2-bin >/dev/null 2>&1 || echo "   (rsvg-convert not installed: Slack app icons fall back to patterns)"

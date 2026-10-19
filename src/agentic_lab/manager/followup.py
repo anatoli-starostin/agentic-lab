@@ -15,9 +15,22 @@ POLL_S = 8
 TERMINAL = ("done", "failed", "cancelled")
 
 
-async def check_once(state, workers, post, finished, mention=lambda human: human):
+_wrapups = set()                # wrap-ups running in the background (kept referenced)
+
+
+async def _wrapup(finished, conv, t, view):
+    try:
+        await finished(conv, t, view)
+    except Exception:
+        log.exception("wrapping up %s failed", t.task_id)
+
+
+async def check_once(state, workers, post, finished, mention=lambda human: human,
+                     background=False):
     """One round. `post(conv, text)` posts in a conversation; `finished(conv, task, view)`
-    hands a finished task to the agent; `mention(human)` renders a human for Slack."""
+    hands a finished task to the agent; `mention(human)` renders a human for Slack.
+    `background`: run each wrap-up (a whole agent turn) on its own, so a long one never
+    holds up the other tasks' progress."""
     for t in state.open_tasks():
         try:
             view = await workers.call(t.worker, "task_result", {"task_id": t.task_id})
@@ -43,7 +56,12 @@ async def check_once(state, workers, post, finished, mention=lambda human: human
         if st in TERMINAL:
             t.done = True
             state.save()
-            await finished(conv, t, view)
+            if background:
+                task = asyncio.create_task(_wrapup(finished, conv, t, view))
+                _wrapups.add(task)
+                task.add_done_callback(_wrapups.discard)
+            else:
+                await finished(conv, t, view)
         state.save()
 
 
@@ -51,7 +69,7 @@ async def follow(state, workers, post, finished, stop: asyncio.Event, mention=No
     while not stop.is_set():
         try:
             await check_once(state, workers, post, finished,
-                             mention or (lambda human: human))
+                             mention or (lambda human: human), background=True)
         except Exception:
             log.exception("follow-up round failed")
         try:

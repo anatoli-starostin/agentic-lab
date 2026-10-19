@@ -40,6 +40,9 @@ def git(source, *args):
 
 def current(source):
     """(repo URL, commit, dirty?) of a framework checkout."""
+    if not os.path.exists(os.path.join(source, ".git")):     # (a worktree: a file)
+        raise LockError(f"{source} isn't a git checkout of the framework: run lab apply from "
+                        "it (cd ~/agentic-lab), or pass --source ~/agentic-lab")
     try:
         url = git(source, "remote", "get-url", "origin")
     except LockError:

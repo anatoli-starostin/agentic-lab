@@ -33,7 +33,10 @@ On the secretary host the framework is checked out in `~/agentic-lab` (set up wi
 **Always run `lab plan` / `lab apply` from the checkout, on the config repo's lab.yaml**,
 so they ship the pinned code:
 `cd ~/agentic-lab && sudo .venv/bin/lab --lab ~/lab-config/lab.yaml plan`.
-Below, `lab` is short for that.
+Below, `lab` is short for `~/agentic-lab/.venv/bin/lab --lab ~/lab-config/lab.yaml`, run
+from `~/agentic-lab`. Only the commands that read the lab's secrets or change hosts need
+`sudo`: `plan`, `apply`, `doctor`, `slack-verify`, `github-app-check`, `nebius connect`.
+Run `lab init` and `lab check` **without** sudo, so the files in `~/lab-config` stay yours.
 
 **Only reviewed configuration is deployed.** `lab apply` fetches the config repo and
 deploys `lab.yaml` and `framework.lock` **as they are on `main`**, never the working copy.
@@ -45,9 +48,11 @@ web UI). Break glass: `sudo lab apply --unreviewed` deploys the working copy, an
 records it as unreviewed until a reviewed apply replaces it.
 
 **Framework pinning.** `lab apply` ships the framework checkout only if it is clean and at
-the commit in `framework.lock` on `main`. To upgrade: `git -C ~/agentic-lab pull`, then
-`lab apply --update-framework` (it only rewrites `framework.lock` in the working copy),
-then a PR as above.
+the commit in `framework.lock` on `main`. To upgrade:
+`git -C ~/agentic-lab fetch origin && git -C ~/agentic-lab checkout --detach origin/main`
+(a deploy from Slack leaves the checkout at the pinned commit, not on a branch, so `git
+pull` won't do), then `lab apply --update-framework` (it only rewrites `framework.lock` in
+the working copy), then a PR as above.
 
 **Claude Code's auto mode** may refuse `sudo lab apply` (it changes the system) until the
 admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected.
@@ -86,24 +91,28 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      `mgr-flash`); the admin may also pick ids. Avoid naming an agent "Admin" (people
      confuse it with the human admin) or after a Slack built-in ("Slackbot").
    - Then: the lab's name, the admin's member id and name, their Slack member id (Slack:
-     profile → ⋯ → Copy member ID), and (optional, else later from Slack) the admin's
-     manager and the first workers' hosts. Claude runs:
-     `lab init ~/lab-config/lab.yaml --name ... --admin ... --admin-name ... --slack-user ... --manager mgr-flash --worker worker-a@gpu-a --display secretary=Iris --display mgr-flash=Flash --display worker-a=Bolt`
+     profile → ⋯ → Copy member ID). Claude runs (the minimal lab: managers and workers
+     are added afterwards, from Slack):
+     `lab init ~/lab-config/lab.yaml --name ... --admin ... --admin-name ... --slack-user ... --display secretary=Iris`
+     (To create the admin's manager and first workers right away, add
+     `--manager mgr-flash --worker worker-a@gpu-a --display mgr-flash=Flash --display
+     worker-a=Bolt`; their machines must then exist before step 11.)
    - `lab init` marks the admin `admin: true`, fills in their Tailscale login (for the
      web UI's logs) from this machine's owner, and writes `framework.lock`. The manager on
      another host (managers run on any host): `--manager-host <host>`. Optionally add an
      `announcements` channel.
      `lab check` must pass.
-   - Claude commits both files and pushes them **directly to `main`** (the one exception:
-     the repo is empty and unprotected). From now on, every change is a PR.
+   - Claude commits both files and pushes them **directly to `main`**
+     (`git push -u origin HEAD:main`; the one exception: the repo is empty and
+     unprotected). From now on, every change is a PR.
 
 6. **The secretary's own services** (Claude)
    - `sudo lab apply --host <secretary host> --allow-missing`: installs the framework in
      `/opt/agentic-lab`, creates the users `lab-secretary` and `lab-broker`, starts the
      secret intake and the secretary (state + web UI on `http://<secretary host>:8774/`).
-     Services whose secrets don't exist yet (the broker's and manager's Slack apps, Claude
-     tokens) are installed but held back, and listed; the next steps provide them, and the
-     final `lab apply` starts them.
+     Services whose Slack app doesn't exist yet (the broker's, a manager's) are installed
+     but held back, and listed; other missing secrets (Claude tokens) are listed too. The
+     next steps provide them, and the final `lab apply` starts everything.
    - **The secretary's deploy key.** This first deploy also prints a public key for the
      secretary: the admin adds it to the config repo (Settings → Deploy keys) **with write
      access** (it pushes branches; branch protection keeps it off `main`). The next deploy

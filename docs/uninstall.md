@@ -42,7 +42,13 @@ with passwordless sudo, as `lab apply` does.
 ## B. Stop the services (every host)
 
 ```
-sudo systemctl disable --now 'lab-worker@*' 'lab-manager@*' lab-secretary lab-broker lab-intake 2>/dev/null
+sudo systemctl stop 'lab-*'                       # stop takes patterns; disable doesn't
+for u in $(systemctl list-unit-files 'lab-*' --no-legend | awk '{print $1}'); do
+    sudo systemctl disable "$u" 2>/dev/null
+done
+for u in $(systemctl list-units 'lab-*' --all --plain --no-legend | awk '{print $1}'); do
+    sudo systemctl disable "$u" 2>/dev/null       # instances, e.g. lab-worker@worker-a
+done
 systemctl list-units 'lab-*' --all --no-legend    # nothing should be left running
 ```
 Stop the secretary host **last** (its services hold the approvals and Slack).
@@ -90,8 +96,8 @@ stage's pieces (the GPU wrapper and AppArmor profile help them too) and say so.
   sudo rm -f /etc/apparmor.d/disable/bwrap-userns-restrict
   sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict 2>/dev/null
   ```
-- Leave the `bubblewrap` and `socat` packages (harmless, maybe used) and `uv` unless the
-  admin asks.
+- Leave the packages the lab installed (`bubblewrap`, `socat`, `gh`, `librsvg2-bin`) and
+  `/usr/local/bin/uv` unless the admin asks; they're harmless and may be used.
 
 ## F. Outside the hosts (the admin, in their browsers; Claude lists it)
 
@@ -112,7 +118,7 @@ stage's pieces (the GPU wrapper and AppArmor profile help them too) and say so.
   longer needed.
 - **The admin's own files** on the secretary host, if they want: `~/agentic-lab`,
   `~/lab-config`, `~/.ssh/agentic_lab_deploy*`, `~/.ssh/lab_config_deploy*`, and the
-  Nebius profile `lab-admin`.
+  Nebius CLI's profile `lab-admin` (or all of `~/.nebius`).
 - Tailscale is the lab's network but not the lab's: leave the machines on the tailnet
   unless the admin says otherwise.
 
