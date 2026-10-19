@@ -6,7 +6,8 @@ key). A host can be powered if lab.yaml gives it `kind: cloud`, `provider: nebiu
 
 Idle stop: a host whose `power` is `on_demand` and that runs workers is stopped once all
 its workers have had nothing running, queued or waiting, and its GPUs nothing on them
-(nvidia-smi, via the workers' health checks), for `idle_stop_min` minutes. The same "busy"
+(nvidia-smi, via the workers' health checks), for `idle_stop_min` minutes (required on
+on-demand hosts; 0: never). The same "busy"
 decides who may power a host off (only admins, when busy).
 
 Managers on a host don't keep it busy: it's judged by its workers alone, and stopping it

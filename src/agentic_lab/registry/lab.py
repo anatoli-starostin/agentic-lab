@@ -242,6 +242,13 @@ def check(lab: Lab, today: dt.date | None = None):
             E(where, "a cloud host needs a provider")
         if "power" in h and h["power"] not in POWER:
             E(where, f"power must be one of {POWER}, got {h['power']!r}")
+        if h.get("power") == "on_demand" and "idle_stop_min" not in h:
+            E(where, "an on_demand host needs idle_stop_min: minutes idle before the secretary "
+                     "stops it (0: never)")
+        if isinstance(h.get("idle_stop_min"), int) and h["idle_stop_min"] < 0:
+            E(where, "idle_stop_min must be 0 (never) or more")
+        if "idle_stop_min" in h and h.get("power") != "on_demand":
+            W(where, "idle_stop_min only applies to power: on_demand hosts")
         if h.get("idle_stop_with_managers") is True:
             W(where, "idle_stop_with_managers: true is the default (managers never keep a "
                      "host on); only false changes anything")

@@ -85,7 +85,7 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   the intake and the web UI; deploys run from here.
 - **Managers**: on any host — the secretary host, a VM of their own, or a GPU VM next to
   their workers (`host:` per manager).
-- **Workers**: GPU VMs, `on_demand` (stopped once idle for `idle_stop_min` minutes, if set) or `always_on`.
+- **Workers**: GPU VMs, `on_demand` (stopped once idle for `idle_stop_min` minutes, required for them; `0`: never) or `always_on`.
 - Several agents on one host each have their own Unix user (§10).
 
 ---
@@ -107,7 +107,7 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 - **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
   (a worker task running, queued or awaiting approval; any process on a GPU, anyone's; a GPU
   above 0% in any of its last 5 readings, about 75 s; someone's `~/.lab-keep-awake`; a
-  manager on it, if the host has `idle_stop_with_managers: false`) may be powered off only by an admin, after confirming. Idle `on_demand` hosts with workers are stopped after `idle_stop_min`.
+  manager on it, if the host has `idle_stop_with_managers: false`) may be powered off only by an admin, after confirming. Idle `on_demand` hosts with workers are stopped after `idle_stop_min` minutes (required on every `on_demand` host; `0` means never).
   Managers on a host don't keep it on: it's judged by its workers alone (e.g. a member's
   manager beside its only worker on an on-demand GPU VM). Stopping it only takes the manager
   offline in Slack until someone asks the secretary to power the host on. A manager's own

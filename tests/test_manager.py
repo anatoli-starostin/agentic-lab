@@ -591,3 +591,34 @@ def test_idle_stop_with_managers_check():
         warns = [str(i) for i in registry.check(registry.load(p)) if i.level == "warning"]
     assert any("mgr-vm-01" in w and "idle_stop_with_managers" in w for w in warns)
     assert not any("gpu-a" in w and "idle_stop_with_managers" in w for w in warns)
+
+
+def test_idle_stop_min_required():
+    """An on_demand host must say idle_stop_min; 0 means never."""
+    import datetime as dt
+    import tempfile
+
+    import yaml
+    from agentic_lab.secretary import power as P
+
+    def check(mutate):
+        d = yaml.safe_load(EXAMPLE.read_text())
+        mutate(d["hosts"])
+        with tempfile.TemporaryDirectory() as t:
+            p = Path(t) / "lab.yaml"
+            p.write_text(yaml.safe_dump(d))
+            lab = registry.load(p)
+            return lab, [str(i) for i in registry.check(lab)]
+    _, issues = check(lambda h: h["gpu-a"].pop("idle_stop_min"))
+    assert any("gpu-a" in i and "needs idle_stop_min" in i for i in issues)
+    _, issues = check(lambda h: h["gpu-a"].update(idle_stop_min=-1))
+    assert any("0 (never) or more" in i for i in issues)
+    _, issues = check(lambda h: h["nuc-01"].update(idle_stop_min=10))
+    assert any("nuc-01" in i and "only applies" in i for i in issues)
+    lab, issues = check(lambda h: h["gpu-a"].update(idle_stop_min=0))
+    assert not any("gpu-a" in i for i in issues)
+    w, t0 = P.IdleWatch(), dt.datetime(2026, 10, 17, 12, tzinfo=dt.timezone.utc)
+    snap = {"agents": {"worker-a": {"up": True, "queue": {}},
+                       "worker-b": {"up": True, "queue": {}}}}
+    w.candidates(lab, snap, now=t0)
+    assert w.candidates(lab, snap, now=t0 + dt.timedelta(days=3)) == ["gpu-b"]   # 0: never
