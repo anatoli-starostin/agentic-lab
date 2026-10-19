@@ -66,10 +66,12 @@ def _workers(state, human_id):
             blocks.append(_section(f"🔴 *{a['name']}*  down"))
             continue
         q = a.get("queue") or {}
-        busy = q.get("running", 0) + q.get("awaiting_approval", 0)
+        busy = q.get("running", 0) + q.get("awaiting_approval", 0) + q.get("waiting", 0)
         head = f"{'🟡' if busy else '🟢'} *{a['name']}*  {'busy' if busy else 'idle'}"
         if q.get("queued"):
             head += f"  ·  {q['queued']} queued"
+        if a.get("runs"):
+            head += f"  ·  {len(a['runs'])} long run(s)"
         recent = sorted(a.get("recent") or [], key=lambda t: t.get("requester") != human_id)
         rows = [f"`{t['state']}`  {(t.get('instruction') or '')[:70]}"
                 f"  _({t.get('requester')}, {ago(t.get('finished') or t.get('created'))})_"

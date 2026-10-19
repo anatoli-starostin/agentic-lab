@@ -11,6 +11,9 @@
     writable folder) restarts the session with the new settings, and the agent resumes
     where it was (a running session doesn't pick up new sandbox settings).
   - a task's session id is saved, so after a restart the task resumes its session.
+  - long jobs are runs (runs.py): `start_run` always goes to a human (a run is outside the
+    sandbox and outlives the session); `wait_for_runs` parks the task, and the session
+    resumes when a run ends or at the agent's check-in time.
 
 `AgentRunner` is the interface the worker service uses, so a different runner (or a fake,
 in tests) can stand in.
@@ -23,19 +26,30 @@ from dataclasses import dataclass, field
 from typing import Callable, Protocol
 
 from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKClient,
-                              PermissionResultAllow, PermissionResultDeny, RateLimitEvent,
+                              HookMatcher, PermissionResultAllow, PermissionResultDeny, RateLimitEvent,
                               ResultMessage, SystemMessage, TextBlock, ToolResultBlock,
                               ToolUseBlock, UserMessage, create_sdk_mcp_server, tool)
 
 from ..eventlog import tool_summary
 
 from ..policy.grants import Grant
+from . import runs as R
 from . import tasks as T
 
 CANCEL_POLL_S = 2.0
 MAX_SESSION_RESTARTS = 8        # grants applied within one task
 
-LAB_TOOLS = ("mcp__lab__report_progress", "mcp__lab__finish_task")
+LAB_TOOLS = ("mcp__lab__report_progress", "mcp__lab__finish_task", "mcp__lab__run_status",
+             "mcp__lab__stop_run", "mcp__lab__wait_for_runs")
+# a human approves each one, whatever grants say: a run is outside the sandbox
+ALWAYS_ASK = ("mcp__lab__start_run",)
+RUN_LOG_LINES = 30          # log lines a resumed session sees per run
+# commands that try to outlive themselves: in the sandbox they can't (runs.py)
+_DETACH = re.compile(r"\bnohup\b|\bsetsid\b|\bdisown\b|\bscreen\s+-d|\btmux\s+new|"
+                     r"(?<![&>|<])&(?![&>|])")      # a lone & (not &&, 2>&1, &>, |&)
+DETACH_HINT = ("Note: a process left running by this command is killed when the command "
+               "returns (the sandbox), and anything else you start ends with this task's "
+               "session. For a long job, use start_run.")
 _VIOLATIONS = re.compile(r"<sandbox_violations>(.*?)</sandbox_violations>", re.S)
 
 
@@ -113,6 +127,21 @@ How you work here:
   every command).
 - When the task is done (or can't be done), call finish_task exactly once: a summary for
   the human, and the artifacts (file paths, commit ids, URLs) worth keeping.
+
+Long jobs (training, big evaluations, anything over ~10 minutes):
+- Start them with start_run, never with nohup, &, setsid, screen or tmux: whatever you start
+  in a command is killed when the command returns, and everything else when this task's
+  session ends. A run goes on by itself (worker restarts don't stop it), outside the
+  sandbox, so a human approves each run: give it a clear name and a command that says what
+  it does (e.g. `python train.py --config big.yaml`).
+- First try a short version inside the sandbox (a few steps), then start_run the real one,
+  report_progress what you started, and call wait_for_runs: your session ends and the task
+  waits (it stays in progress). You're woken when one of its runs ends, or at the check-in
+  time you set (e.g. every 120 minutes, to look at the loss). Its output goes to a log in
+  your working folder; run_status shows its tail.
+- While a task waits, you may get other tasks. Before using the GPU, check run_status:
+  don't start GPU work that would compete with a running run unless the task says so.
+- finish_task only once the task's runs are over (stop_run the ones you don't need).
 """
 
 
@@ -125,9 +154,10 @@ def _grant_line(g):
 class SdkRunner:
     def __init__(self, agent_id, workdir, settings_for: Callable[[list], dict],
                  approver: Approver = None, model=None, env=None, cli_path=None, usage=None,
-                 events=None, prompt_extra=""):
+                 events=None, prompt_extra="", runs=None):
         """`settings_for(grants)` returns the agent's settings given its active Grants;
-        `prompt_extra` is added to its system prompt (e.g. its GitHub identity)."""
+        `prompt_extra` is added to its system prompt (e.g. its GitHub identity); `runs`: the
+        worker's RunStore (long runs; None: no run tools)."""
         self.agent_id = agent_id
         self.workdir = workdir
         self.settings_for = settings_for
@@ -138,6 +168,7 @@ class SdkRunner:
         self.usage = usage          # a UsageLog, or None
         self.events = events        # an EventLog, or None
         self.prompt_extra = prompt_extra
+        self.runs = runs
 
     def _log(self, kind, text="", **meta):
         if self.events is not None:
@@ -158,12 +189,88 @@ class SdkRunner:
                               "success": {"type": "boolean"}},
                "required": ["summary"]})
         async def finish_task(args):
+            busy = self.runs.active(task.id) if self.runs else []
+            if busy:
+                return _text("Not finished: this task's runs are still going ("
+                             + ", ".join(f"{r['id']} {r['name']}" for r in busy)
+                             + "). wait_for_runs, or stop_run the ones you don't need.", True)
             outcome["result"] = {"summary": args["summary"],
                                  "artifacts": list(args.get("artifacts") or [])}
             outcome["success"] = bool(args.get("success", True))
             return {"content": [{"type": "text", "text": "task finished; stop here"}]}
 
-        return create_sdk_mcp_server("lab", tools=[report_progress, finish_task])
+        tools = [report_progress, finish_task]
+        if self.runs is not None:
+            tools += self._run_tools(task, store, outcome)
+        return create_sdk_mcp_server("lab", tools=tools)
+
+    def _run_tools(self, task, store, outcome):
+        runs = self.runs
+
+        @tool("start_run", "Start a long job (training, a big evaluation...) as a run: it goes "
+              "on by itself after this command and after this task's session, until it ends "
+              "or is stopped. It runs as you but OUTSIDE the sandbox, so a human approves "
+              "each run. Its output (stdout and stderr) goes to a log in your working folder. "
+              "`cwd`: a folder in your working folder (default: the working folder).",
+              {"type": "object",
+               "properties": {"name": {"type": "string"}, "command": {"type": "string"},
+                              "cwd": {"type": "string"}},
+               "required": ["name", "command"]})
+        async def start_run(args):
+            try:
+                r = runs.start(task.id, args.get("name"), args["command"], args.get("cwd"))
+            except R.RunError as e:
+                return _text(str(e), True)
+            store.add_progress(task.id, f"started run {r['id']} ({r['name']}): {r['command']}")
+            self._log("run", f"started {r['id']} {r['name']}: {r['command']}", task=task.id)
+            return _text(json.dumps(r) + "\nNext: report_progress, then wait_for_runs.")
+
+        @tool("run_status", "Your runs (all of this worker's, any task): state (starting, "
+              "running, exited with its exit code, failed, stopped, lost), started/ended, log "
+              "path. With `run_id`: that run, with the last `tail_lines` lines of its log.",
+              {"type": "object",
+               "properties": {"run_id": {"type": "string"}, "tail_lines": {"type": "integer"}}})
+        async def run_status(args):
+            try:
+                if args.get("run_id"):
+                    return _text(json.dumps(runs.view(args["run_id"],
+                                                      tail=min(args.get("tail_lines") or 40, 400))))
+                return _text(json.dumps(runs.all()[-30:]))
+            except R.RunError as e:
+                return _text(str(e), True)
+
+        @tool("stop_run", "Stop one of this task's runs.", {"run_id": str})
+        async def stop_run(args):
+            try:
+                r = runs.get(args["run_id"])
+                if r["task"] != task.id:
+                    return _text(f"{args['run_id']} belongs to another task", True)
+                r = runs.stop(args["run_id"])
+            except (R.RunError, OSError, ValueError) as e:
+                return _text(f"couldn't stop it: {e}", True)
+            self._log("run", f"stopped {r['id']}", task=task.id)
+            return _text(json.dumps(r))
+
+        @tool("wait_for_runs", "Park this task until one of its runs ends, or until "
+              "`check_in_minutes` pass (0: only when a run ends). The task stays in progress; "
+              "your session ends now and resumes then, with the runs' state and log tails. "
+              "`note`: what you're waiting for, for the humans following the task.",
+              {"type": "object",
+               "properties": {"note": {"type": "string"},
+                              "check_in_minutes": {"type": "integer"}},
+               "required": ["note"]})
+        async def wait_for_runs(args):
+            active = runs.active(task.id)
+            if not active:
+                return _text("This task has no run going: nothing to wait for.", True)
+            mins = max(0, int(args.get("check_in_minutes") or 0))
+            wake_at = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=max(mins, 5))
+                       ).isoformat(timespec="seconds") if mins else None
+            outcome["wait"] = {"note": args["note"], "runs": [r["id"] for r in active],
+                               "since": T._now(), "wake_at": wake_at}
+            return _text("The task waits now. End your turn here (no more tool calls).")
+
+        return [start_run, run_status, stop_run, wait_for_runs]
 
     async def _grants_for(self, task):
         """Active grants that apply to this task (task-bound grants of other tasks don't)."""
@@ -177,7 +284,8 @@ class SdkRunner:
         tool_grants = {g["value"] for g in grants if g["kind"] == "tool"}
 
         async def can_use_tool(tool_name, tool_input, context):
-            if allowed_without_asking(tool_name, tool_input) or tool_name in tool_grants:
+            if allowed_without_asking(tool_name, tool_input) or (
+                    tool_name in tool_grants and tool_name not in ALWAYS_ASK):
                 return PermissionResultAllow()
             if store.get(task.id).cancel_requested:
                 return PermissionResultDeny(message="The task was cancelled.", interrupt=True)
@@ -196,6 +304,8 @@ class SdkRunner:
                 return PermissionResultAllow()
             if d.kind == "grant":
                 if all(g["kind"] == "tool" for g in d.grants):
+                    if tool_name in ALWAYS_ASK:     # approved this once, never as a grant
+                        return PermissionResultAllow()
                     tool_grants.update(g["value"] for g in d.grants)
                     return PermissionResultAllow()
                 session["restart_for"] = d.grants
@@ -221,15 +331,21 @@ class SdkRunner:
             env=self.env,
             cli_path=self.cli_path,
             resume=store.get(task.id).session_id,
+            hooks={"PostToolUse": [HookMatcher(matcher="Bash", hooks=[_detach_hint])]},
         )
 
     async def run(self, task, store):
         self._log("task", f"started for {task.requester} via {task.manager}: {task.instruction}",
                   task=task.id)
         outcome = {}
-        prompt = task.instruction if task.session_id is None else (
-            "The worker restarted while you were on this task. Continue it from where you "
-            "were; check the state of your working folder first.")
+        if task.wake:
+            prompt = self._wake_prompt(task)
+            task = store.update(task.id, wake=None, waiting=None)
+        elif task.session_id is None:
+            prompt = task.instruction
+        else:
+            prompt = ("The worker restarted while you were on this task. Continue it from where "
+                      "you were; check the state of your working folder (and run_status) first.")
         result_msg, last_text = None, None
         for _ in range(MAX_SESSION_RESTARTS + 1):
             session = {"violations": [], "restart_for": None}
@@ -238,7 +354,15 @@ class SdkRunner:
                 result_msg, last_text = await self._session(
                     task, store, outcome, session, grants, prompt)
             except Exception as e:   # the agent process failed: record it, keep the worker up
-                store.update(task.id, state=T.FAILED, error=f"{type(e).__name__}: {e}")
+                err = f"{type(e).__name__}: {e}"
+                if self.runs and self.runs.active(task.id):     # its runs go on: wait for them
+                    store.add_progress(task.id, f"session failed ({err[:200]}); waiting for "
+                                       "its runs")
+                    store.update(task.id, state=T.WAITING, waiting={
+                        "note": "its runs (the session failed)", "since": T._now(),
+                        "runs": [r["id"] for r in self.runs.active(task.id)]})
+                else:
+                    store.update(task.id, state=T.FAILED, error=err)
                 return
             if session["restart_for"] and "result" not in outcome \
                     and not store.get(task.id).cancel_requested:
@@ -295,12 +419,35 @@ class SdkRunner:
                 watcher.cancel()
         return result_msg, last_text
 
+    def _wake_prompt(self, task):
+        lines = [f"You're back on this task: {task.wake}."]
+        if task.waiting:
+            lines.append(f"You were waiting for: {task.waiting.get('note')}")
+        for r in (self.runs.all(task.id) if self.runs else []):
+            r = self.runs.view(r["id"], tail=RUN_LOG_LINES)
+            how = f"exit code {r.get('exit_code')}" if r["state"] == "exited" else r["state"]
+            lines.append(f"\nRun {r['id']} ({r['name']}): {how}; log {r['log']}\n"
+                         f"--- last lines ---\n{r.get('log_tail') or '(empty)'}")
+        lines.append("\nCheck the results. Then finish_task, start another run, or "
+                     "wait_for_runs again.")
+        return "\n".join(lines)
+
     def _finish(self, task, store, outcome, result_msg, last_text):
         if store.get(task.id).cancel_requested:
             store.update(task.id, state=T.CANCELLED)
+        elif "wait" in outcome and "result" not in outcome:     # woken by the task loop
+            w = outcome["wait"]
+            store.add_progress(task.id, f"waiting: {w['note']}")
+            store.update(task.id, state=T.WAITING, waiting=w)
         elif "result" in outcome:
             state = T.DONE if outcome.get("success", True) else T.FAILED
             store.update(task.id, state=state, result=outcome["result"])
+        elif self.runs and self.runs.active(task.id):
+            # it stopped without finishing or waiting, its runs going: they decide
+            store.add_progress(task.id, "waiting for its runs")
+            store.update(task.id, state=T.WAITING, waiting={
+                "note": "its runs", "since": T._now(),
+                "runs": [r["id"] for r in self.runs.active(task.id)]})
         elif result_msg is not None and not result_msg.is_error:
             # the agent stopped without finish_task: keep its last words as the summary
             store.update(task.id, state=T.DONE,
@@ -316,3 +463,16 @@ class SdkRunner:
             if store.get(task.id).cancel_requested:
                 await client.interrupt()
                 return
+
+
+def _text(text, error=False):
+    return {"content": [{"type": "text", "text": text}], **({"is_error": True} if error else {})}
+
+
+async def _detach_hint(hook_input, tool_use_id, context):
+    """After a Bash command that tries to leave something running: say it won't last."""
+    cmd = ((hook_input or {}).get("tool_input") or {}).get("command", "")
+    if not _DETACH.search(cmd):
+        return {}
+    return {"hookSpecificOutput": {"hookEventName": "PostToolUse",
+                                   "additionalContext": DETACH_HINT}}

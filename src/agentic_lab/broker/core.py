@@ -72,9 +72,15 @@ _URL = re.compile(r"\bhttps?://[^\s'\"<>]+")
 _VIOLATION_HOST = re.compile(r"network(?:-outbound)?\s+([A-Za-z0-9.-]+\.[A-Za-z]{2,})(?::\d+)?")
 
 
+# approved one at a time, never granted for a while: a long run is outside the sandbox
+ONE_OFF_ONLY = ("mcp__lab__start_run",)
+
+
 def grant_options(tool, tool_input, violations):
     """The grants a human could give instead of a one-off approval."""
     opts = []
+    if tool in ONE_OFF_ONLY:
+        return opts
 
     def add(kind, value):
         o = {"kind": kind, "value": value}
@@ -110,6 +116,10 @@ def describe(tool, tool_input):
         return f"fetch {tool_input.get('url', '')}"
     if tool == "WebSearch":
         return f"search: {tool_input.get('query', '')}"
+    if tool == "mcp__lab__start_run":
+        return (f"start a long run OUTSIDE the sandbox, as the agent, until it ends or is "
+                f"stopped ({tool_input.get('name', 'run')}): {tool_input.get('command', '')[:1800]}"
+                + (f"  [in {tool_input['cwd']}]" if tool_input.get("cwd") else ""))
     return f"{tool} {json.dumps(tool_input)[:500]}"
 
 

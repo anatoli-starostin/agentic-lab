@@ -1,0 +1,15 @@
+#!/bin/sh
+# lab-run-ctl start|stop <run-id>: the one command a worker's service may run with sudo
+# (/etc/sudoers.d/agentic-lab-runs): start or stop one of ITS OWN long runs, the unit
+# lab-run-<agent>@<run-id>.service (worker/runs.py). The agent comes from SUDO_USER, set
+# by sudo, never from the caller; a run itself can't use sudo (NoNewPrivileges).
+set -eu
+verb=${1:-}
+id=${2:-}
+case "$verb" in start|stop) ;; *) echo "usage: lab-run-ctl start|stop <run-id>" >&2; exit 2 ;; esac
+case "$id" in r-*[!0-9a-f]*|*[!r0-9a-f-]*) id= ;; esac      # r- and 12 hex digits, nothing else
+[ "${#id}" -eq 14 ] && [ "${id#r-}" != "$id" ] || { echo "bad run id" >&2; exit 2; }
+user=${SUDO_USER:-}
+case "$user" in lab-?*) ;; *) echo "only an agent's service may use this" >&2; exit 2 ;; esac
+agent=${user#lab-}
+exec /usr/bin/systemctl "$verb" --no-block "lab-run-$agent@$id.service"

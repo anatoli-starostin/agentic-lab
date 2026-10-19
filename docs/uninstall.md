@@ -72,7 +72,8 @@ Slack tokens), its state (task queue, memory, usage, event log).
 sudo systemctl disable --now lab-keep-awake.timer 2>/dev/null
 sudo rm -f /etc/systemd/system/lab-keep-awake.service /etc/systemd/system/lab-keep-awake.timer
 sudo rm -rf /etc/agentic-lab /opt/agentic-lab /var/log/agentic-lab /var/lib/agentic-lab
-sudo rm -f /usr/local/bin/lab /etc/sudoers.d/agentic-lab
+sudo rm -f /usr/local/bin/lab /etc/sudoers.d/agentic-lab /etc/sudoers.d/agentic-lab-runs
+sudo rm -f /etc/systemd/system/lab-run-*@.service     # workers' long runs (stopped with lab-*)
 sudo rm -f /etc/systemd/system/lab-worker@.service /etc/systemd/system/lab-manager@.service \
            /etc/systemd/system/lab-secretary.service /etc/systemd/system/lab-broker.service \
            /etc/systemd/system/lab-intake.service

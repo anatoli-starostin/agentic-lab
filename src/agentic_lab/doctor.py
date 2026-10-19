@@ -103,6 +103,27 @@ def host_checks(gpu):
     return out
 
 
+def run_checks(aid, user):
+    """A worker's long runs: its unit template and sudo rule (worker/runs.py)."""
+    from .worker.runs import RUN_CTL
+    out = []
+    if os.path.exists(f"/etc/systemd/system/lab-run-{aid}@.service") and os.path.exists(RUN_CTL):
+        out.append(Result(OK, "long runs: unit template and lab-run-ctl installed"))
+    else:
+        out.append(Result(FAIL, "long runs can't start (no unit template or lab-run-ctl)",
+                          "sudo lab apply"))
+    try:
+        with open("/etc/sudoers.d/agentic-lab-runs") as f:
+            ok = f"{user} ALL=(root) NOPASSWD: {RUN_CTL}" in f.read()
+    except OSError:
+        ok = None                     # not readable without root: can't tell
+    if ok is False:
+        out.append(Result(FAIL, f"no sudo rule for {user}'s long runs", "sudo lab apply"))
+    elif ok:
+        out.append(Result(OK, "long runs: sudo rule"))
+    return out
+
+
 def user_checks(user):
     try:
         pw = pwd.getpwnam(user)
@@ -208,6 +229,7 @@ def run(lab_path, host=None):
         if unit:
             res += unit_checks(unit)
             res += address_checks(*lab.address(aid)) if role == "worker" else []
+            res += run_checks(aid, lab.unix_user(aid)) if role == "worker" else []
         else:
             res.append(Result(WARN, f"{role} agents get a service in a later milestone"))
         sections.append((f"{role} {aid} ({lab.display_name(aid)})", res))

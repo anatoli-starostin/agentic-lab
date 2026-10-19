@@ -24,7 +24,7 @@ NEBIUS = os.path.expanduser("~/.nebius/bin/nebius")
 if not os.path.exists(NEBIUS) and os.path.exists("/usr/local/bin/nebius"):
     NEBIUS = "/usr/local/bin/nebius"
 PROFILE = "lab"
-BUSY = ("running", "queued", "awaiting_approval")
+BUSY = ("running", "queued", "awaiting_approval", "waiting")
 GPU_IDLE_READINGS = 5           # a GPU is idle only at 0% in this many readings in a row
 _gpu_recent = {}                # worker -> its GPUs' highest utilization, last readings
 
@@ -105,12 +105,17 @@ def note_gpu(snapshot):
 
 def worker_busy(name, seen):
     """Why a worker's machine is busy (None if it isn't), from its health readings: tasks
-    running, queued or waiting, someone's ~/.lab-keep-awake, or the GPUs in use by anything (nvidia-smi: a process on a
+    running, queued or waiting (for approval or on their long runs), long runs going,
+    someone's ~/.lab-keep-awake, or the GPUs in use by anything (nvidia-smi: a process on a
     GPU, the lab's or anyone's, or any utilization above 0% in its last readings)."""
     q = seen.get("queue") or {}
     n = {k: q.get(k, 0) for k in BUSY if q.get(k)}
     if n:
         return f"{name} has " + ", ".join(f"{v} {k.replace('_', ' ')}" for k, v in n.items())
+    runs = seen.get("runs") or []
+    if runs:                            # long runs (worker/runs.py), even CPU-only ones
+        return f"{name} has {len(runs)} long run(s) going (" + ", ".join(
+            r.get("name") or r.get("id") or "?" for r in runs) + ")"
     holders = seen.get("keep_awake") or []
     if holders:                         # someone working on the machine directly
         who = ", ".join(h["user"] + (f" ({h['note']})" if h.get("note") else "")
