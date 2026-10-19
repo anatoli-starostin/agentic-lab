@@ -53,7 +53,7 @@ _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
          "power": (str, False), "idle_stop_min": (int, False), "tailnet_name": (str, False),
          "ssh_user": (str, False),      # who `lab apply` logs in as (default: the admin)
-         "idle_stop_with_managers": (bool, False)}  # managers don't keep it busy
+         "idle_stop_with_managers": (bool, False)}  # default true; false: managers keep it busy
 _GITHUB = {"accounts": (dict, True)}
 # a bot account (a GitHub machine user) an agent acts as
 # a GitHub identity: a bot account (a machine user, with a fine-grained token), or a GitHub
@@ -242,10 +242,9 @@ def check(lab: Lab, today: dt.date | None = None):
             E(where, "a cloud host needs a provider")
         if "power" in h and h["power"] not in POWER:
             E(where, f"power must be one of {POWER}, got {h['power']!r}")
-        if h.get("idle_stop_with_managers") and (h.get("power") != "on_demand"
-                                                 or not h.get("idle_stop_min")):
-            W(where, "idle_stop_with_managers: no idle stop here without power: on_demand "
-                     "and idle_stop_min (members may still power it off when its workers idle)")
+        if h.get("idle_stop_with_managers") is True:
+            W(where, "idle_stop_with_managers: true is the default (managers never keep a "
+                     "host on); only false changes anything")
 
     roles = {}
     for aid, a in lab.agents.items():

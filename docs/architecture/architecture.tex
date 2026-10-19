@@ -441,11 +441,11 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
     why). While any such file exists the machine counts as busy; the web UI shows who keeps
     it awake. A root timer on every lab host lists these files each minute (home folders
     are private, so the lab's services can't look themselves).
-  \item \textbf{Idle stop}: an \code{on\_demand} host with only workers is stopped after
-    \code{idle\_stop\_min} minutes of not being busy. A manager on a host keeps it busy
-    (its own work isn't measured), unless the host has
-    \code{idle\_stop\_with\_managers: true}: then it's judged by its workers alone, and
-    stopping it takes the manager offline in Slack until the host is powered on.
+  \item \textbf{Idle stop}: an \code{on\_demand} host with workers is stopped after
+    \code{idle\_stop\_min} minutes of not being busy. It's judged by its workers alone: a
+    manager there goes offline in Slack until the host is powered on. A manager's own work
+    isn't measured, so \code{idle\_stop\_with\_managers: false} makes managers keep the
+    host busy.
   \item \textbf{Who may power}: any member may power a machine on, or off when idle;
     powering off a busy machine is for admins only, after confirming (\code{force\_off}).
 \end{itemize}

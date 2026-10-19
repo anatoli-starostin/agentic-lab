@@ -107,13 +107,12 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 - **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
   (a worker task running, queued or awaiting approval; any process on a GPU, anyone's; a GPU
   above 0% in any of its last 5 readings, about 75 s; someone's `~/.lab-keep-awake`; a
-  manager on it) may be powered off only by an admin, after confirming. Idle `on_demand` hosts with only workers are stopped after `idle_stop_min`.
-  A manager counts as busy just by being there, because its own work (a turn, following a
-  task on another host) isn't measured. A host can opt out with
-  `idle_stop_with_managers: true`: its managers then don't count, and it's judged by its
-  workers alone (e.g. a member's manager beside its only worker on an on-demand GPU VM).
-  Stopping it only takes the manager offline in Slack until someone asks the secretary to
-  power the host on; no work is lost.
+  manager on it, if the host has `idle_stop_with_managers: false`) may be powered off only by an admin, after confirming. Idle `on_demand` hosts with workers are stopped after `idle_stop_min`.
+  Managers on a host don't keep it on: it's judged by its workers alone (e.g. a member's
+  manager beside its only worker on an on-demand GPU VM). Stopping it only takes the manager
+  offline in Slack until someone asks the secretary to power the host on. A manager's own
+  work (a turn, following a task on another host) isn't measured, so a host where that
+  matters sets `idle_stop_with_managers: false`: any manager there then counts as busy.
 - **Keep-awake**: someone working on a machine directly (not through agents, e.g. a
   CPU-only job) creates `~/.lab-keep-awake` in their home (first line, optional: why); while
   it's there the machine is busy, and the web UI shows who keeps it awake. A root timer
@@ -375,8 +374,8 @@ hosts:
   sec-01: {kind: onprem, power: always_on}
   gpu-a:  {kind: cloud, provider: nebius, instance: computeinstance-..., power: on_demand,
            idle_stop_min: 30, tailnet_name: gpu-a.example.ts.net}
-                                   # + idle_stop_with_managers: true, if a manager runs
-                                   #   there and shouldn't keep it on (§4.1)
+                                   # + idle_stop_with_managers: false, if a manager
+                                   #   there should keep it on (§4.1)
 github:
   accounts:
     flash-bot: {expires: 2027-10-01}     # its token's expiry, for reminders

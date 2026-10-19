@@ -174,10 +174,9 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      generated on this host, the secretary's CLI profile; it lists the project's VMs.
    - Claude adds the GPU VMs to `lab.yaml` (`kind: cloud`, `provider: nebius`,
      `instance: <id>`, `power: on_demand`, `idle_stop_min: 30`, `tailnet_name`), as a PR
-     for the admin to merge. A manager on a host keeps it from being idle-stopped; if a
-     member's manager shares an on-demand GPU VM with its worker, add
-     `idle_stop_with_managers: true` to that host so it stops when the worker is idle (the
-     manager is offline in Slack until the host is powered on again).
+     for the admin to merge. A host is idle-stopped when its workers are idle, even if
+     a manager runs there too (it's offline in Slack until the host is powered on again);
+     `idle_stop_with_managers: false` on the host makes its managers keep it on.
    - Fallback, an existing service account: `... secret request service:secretary nebius-sa`
      (a form with the service account id, key id and private key PEM).
 

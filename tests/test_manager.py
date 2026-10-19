@@ -542,8 +542,8 @@ def test_system_prompts_render():
 
 
 def test_idle_stop_with_managers():
-    """A manager on a GPU host keeps it busy, unless the host has idle_stop_with_managers:
-    then it's judged by its workers alone (tasks, GPU, keep-awake still block)."""
+    """A host is judged by its workers alone (tasks, GPU, keep-awake), managers on it or not;
+    with idle_stop_with_managers: false a manager keeps it busy."""
     import datetime as dt
     from agentic_lab.secretary import power as P
     lab = registry.load(EXAMPLE)
@@ -558,12 +558,13 @@ def test_idle_stop_with_managers():
         w = P.IdleWatch()
         w.candidates(lab, snap, now=t0)
         return "gpu-a" in w.candidates(lab, snap, now=later)
-    # (a) without the flag: busy, never idle-stopped
-    assert "(manager)" in P.busy(lab, "gpu-a", idle) and "idle_stop_with_managers" in \
+    # (a) opted out: busy, never idle-stopped
+    lab.hosts["gpu-a"]["idle_stop_with_managers"] = False
+    assert "(manager)" in P.busy(lab, "gpu-a", idle) and "idle_stop_with_managers: false" in \
         P.busy(lab, "gpu-a", idle)
     assert not stoppable(idle)
-    # (b) with it: idle worker -> eligible
-    lab.hosts["gpu-a"]["idle_stop_with_managers"] = True
+    # (b) by default: idle worker -> eligible
+    del lab.hosts["gpu-a"]["idle_stop_with_managers"]
     assert P.busy(lab, "gpu-a", idle) is None
     assert stoppable(idle)
     # ...but a busy worker, a warm GPU or a keep-awake file still block it
@@ -581,8 +582,8 @@ def test_idle_stop_with_managers():
 def test_idle_stop_with_managers_check():
     import yaml
     d = yaml.safe_load(EXAMPLE.read_text())
-    d["hosts"]["mgr-vm-01"]["idle_stop_with_managers"] = True     # always_on: pointless
-    d["hosts"]["gpu-a"]["idle_stop_with_managers"] = True
+    d["hosts"]["mgr-vm-01"]["idle_stop_with_managers"] = True     # the default anyway
+    d["hosts"]["gpu-a"]["idle_stop_with_managers"] = False
     import tempfile
     with tempfile.TemporaryDirectory() as t:
         p = Path(t) / "lab.yaml"
