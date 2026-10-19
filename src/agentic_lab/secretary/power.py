@@ -136,9 +136,14 @@ def worker_busy(name, seen):
 
 
 def counts_busy(lab, host, aid):
-    """Does a non-worker agent on `host` make it busy by being there?"""
+    """Does a non-worker agent on `host` make it busy by being there? A manager doesn't
+    when a worker there judges the host (unless idle_stop_with_managers: false); on a host
+    with no worker it does: nothing measures it, and stopping it would take a member's
+    manager offline, so only an admin may."""
     a = lab.agents[aid]
-    return not (a.get("role") == "manager"
+    has_worker = any(x.get("host") == host and x.get("role") == "worker"
+                     for x in lab.agents.values())
+    return not (a.get("role") == "manager" and has_worker
                 and (lab.hosts.get(host) or {}).get("idle_stop_with_managers", True))
 
 
@@ -152,8 +157,11 @@ def busy(lab, host, snapshot):
             if not counts_busy(lab, host, aid):
                 continue                # judged by the host's workers alone
             if a.get("role") == "manager":
+                why = ("the host has idle_stop_with_managers: false" if any(
+                    x.get("host") == host and x.get("role") == "worker"
+                    for x in lab.agents.values()) else "no worker there to judge the host by")
                 return (f"it runs {lab.display_name(aid)} (manager), whose own work isn't "
-                        "measured (the host has idle_stop_with_managers: false)")
+                        f"measured ({why})")
             return f"it runs {lab.display_name(aid)} ({a.get('role')})"
         s = (snapshot or {}).get("agents", {}).get(aid, {})
         if not s.get("up"):

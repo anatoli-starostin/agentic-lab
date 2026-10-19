@@ -57,9 +57,10 @@ What it took:
   creates them that way).
 - **Long runs are outside the sandbox, by design.** A run (`start_run`, DESIGN.md §4.2)
   is the agent's command running as its Unix user with no sandbox, for hours: full
-  network, writes wherever that user may, the user's files (its lab secrets in
-  `~/.config/agentic-lab` included), and any socket server it starts is reachable from the
-  agent's sandbox while it lives. That's why a human approves **each** run: no grant is
+  network, writes wherever that user may, the user's files, and any socket server it starts
+  is reachable from the agent's sandbox while it lives. Its lab secrets are hidden from the
+  run (`InaccessiblePaths=` on `~/.config/agentic-lab`: the member's Claude seat token, the
+  lab tokens), so a careless or injected command can't send them away. That's why a human approves **each** run: no grant is
   offered, `lab check` refuses one in `lab.yaml`, and the runner ignores any. Review what
   the command runs (a script the agent wrote can do anything that user can). What stays
   in place: the run unit has `NoNewPrivileges` (it can't use the worker's sudo rule to

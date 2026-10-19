@@ -624,3 +624,14 @@ def test_idle_stop_min_required():
                        "worker-b": {"up": True, "queue": {}}}}
     w.candidates(lab, snap, now=t0)
     assert w.candidates(lab, snap, now=t0 + dt.timedelta(days=3)) == ["gpu-b"]   # 0: never
+
+
+def test_a_host_with_only_managers_needs_an_admin_to_power_off():
+    """Nothing measures a managers-only host: busy (admins only), never idle-stopped."""
+    from agentic_lab.secretary import power as P
+    lab = registry.load(EXAMPLE)                   # mgr-alice alone on mgr-vm-01
+    why = P.busy(lab, "mgr-vm-01", {"agents": {"mgr-alice": {"up": True}}})
+    assert "(manager)" in why and "no worker there" in why
+    lab.agents["worker-a"]["host"] = "mgr-vm-01"   # with a worker: judged by it
+    seen = {"agents": {"worker-a": {"up": True, "queue": {}}, "mgr-alice": {"up": True}}}
+    assert P.busy(lab, "mgr-vm-01", seen) is None
