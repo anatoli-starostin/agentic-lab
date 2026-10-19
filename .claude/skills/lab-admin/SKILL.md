@@ -103,6 +103,8 @@ or updates users, secrets and services on every host.
   - *A full bot account* (the admin creates the GitHub user): under `github.accounts`,
     `github: <bot>` on the agent → PR → merge → deploy → its token (`lab secret request
     service:github-<bot> github-token`) → deploy again.
+  Several identities for one agent, picked by repository: `github: {<name>: default,
+  <other>: [owner/repo, owner/*]}` (every name in `github.accounts`; exactly one default).
   Remind the admin to protect `main` in the repos (human code owners, no bypass for bots or
   apps).
 - **Remove an agent:** PR → merge → deploy; then on its host

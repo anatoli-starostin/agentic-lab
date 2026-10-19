@@ -95,17 +95,8 @@ def _public_user(login):
 
 def write_token(token, login, token_dir=TOKEN_DIR):
     """Put the token where git's credential helper and gh read it."""
-    d = os.path.expanduser(token_dir)
-    os.makedirs(os.path.join(d, "gh"), mode=0o700, exist_ok=True)
-    for path, text in ((os.path.join(d, "token"), token + "\n"),
-                       (os.path.join(d, "gh", "hosts.yml"),
-                        f"github.com:\n    oauth_token: {token}\n    git_protocol: https\n"
-                        f"    user: {login}\n")):
-        tmp = path + ".tmp"
-        with open(tmp, "w") as f:
-            f.write(text)
-        os.chmod(tmp, 0o600)
-        os.replace(tmp, path)
+    from .github import write_token as write
+    write(token, login, os.path.expanduser(token_dir))
 
 
 async def keep_token(app_id, login, stop, installation_id=None, key_path=KEY,

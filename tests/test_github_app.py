@@ -54,10 +54,8 @@ def test_both_kinds_side_by_side(tmp_path):
     assert [i for i in registry.check(lab) if i.level == "error"] == []
     mgr, worker = first(lab, "manager"), first(lab, "worker")
     assert lab.github_is_app("deepspike-flash") and not lab.github_is_app("worker-bot")
-    env = lab.agent_settings(mgr)["env"]
-    assert env["GIT_AUTHOR_NAME"] == "deepspike-flash[bot]"
-    assert env["GIT_AUTHOR_EMAIL"].startswith("999+deepspike-flash[bot]")
-    assert lab.agent_settings(worker)["env"]["GIT_AUTHOR_NAME"] == "worker-bot"
+    assert lab.github_login("deepspike-flash") == "deepspike-flash[bot]"
+    assert lab.github_email("deepspike-flash").startswith("999+deepspike-flash[bot]")
     assert "GitHub App deepspike-flash[bot]" in GH.instructions(lab, mgr)
     assert "bot account worker-bot" in GH.instructions(lab, worker)
     # deploy: the app's key for the manager, the token for the worker
@@ -70,8 +68,9 @@ def test_both_kinds_side_by_side(tmp_path):
     plan = host_plan(lab, lab.agents[mgr]["host"], Tok(), lambda o, n: secrets.get(
         (o, n), None if n in ("nebius-sa", "github-app", "github-token") else "secret"))
     files = {p: c for p, (_, _, c) in plan["files"].items()}
-    assert files[f"/home/{lab.unix_user(mgr)}/.config/agentic-lab/github-app.pem"].startswith("-----BEGIN")
-    assert files[f"/home/{lab.unix_user(worker)}/.config/agentic-lab/github.token"].startswith("ghp_")
+    cfg = "/home/{}/.config/agentic-lab/github"
+    assert files[f"{cfg.format(lab.unix_user(mgr))}/deepspike-flash.pem"].startswith("-----BEGIN")
+    assert files[f"{cfg.format(lab.unix_user(worker))}/worker-bot.token"].startswith("ghp_")
 
 
 def test_app_jwt_and_minting(key):
@@ -113,12 +112,19 @@ def test_token_kept_where_git_and_gh_read_it(tmp_path):
                               token_dir=str(tdir), mint_fn=fake_mint))
     assert (tdir / "token").read_text() == "ghs_fresh\n"
     assert "oauth_token: ghs_fresh" in (tdir / "gh" / "hosts.yml").read_text()
+    # the agent's git, with the app's token kept in its identity's folder
     lab = lab_with_both(tmp_path)
-    env = GH.env_for(lab, first(lab, "manager"), token_dir=str(tdir))
-    assert env["GH_CONFIG_DIR"] == str(tdir / "gh") and "GH_TOKEN" not in env
-    r = subprocess.run(["git", "credential", "fill"], input="protocol=https\nhost=github.com\n\n",
+    root = tmp_path / "share"
+    (root / "deepspike-flash").mkdir(parents=True)
+    GA.write_token("ghs_fresh", "deepspike-flash[bot]", str(root / "deepspike-flash"))
+    helper = Path(__file__).parent.parent / "deploy" / "worker" / "lab-git-credential"
+    env = GH.prepare(lab, first(lab, "manager"), root=str(root), secrets=str(tmp_path / "s"),
+                     helper=str(helper))
+    assert env["GH_CONFIG_DIR"] == str(root / "deepspike-flash" / "gh") and "GH_TOKEN" not in env
+    r = subprocess.run(["git", "credential", "fill"],
+                       input="protocol=https\nhost=github.com\npath=deepspike/x.git\n\n",
                        capture_output=True, text=True, timeout=20, cwd=tmp_path,
-                       env={**os.environ, **env, "GIT_CONFIG_GLOBAL": "/dev/null"})
+                       env={**os.environ, **env, "HOME": str(tmp_path)})
     assert "username=x-access-token" in r.stdout and "password=ghs_fresh" in r.stdout
 
 

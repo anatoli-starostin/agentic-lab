@@ -47,7 +47,8 @@ _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "display_name": (str, False), "compact_percent": (int, False),
           "grants": (list, False),
           "slack_app": (str, False),
-          "github": (str, False),           # its GitHub identity: a bot in github.accounts
+          # its GitHub identity: a name in github.accounts, or {name: default | [repos]}
+          "github": ((str, dict), False),
           "turn_budget_min": (int, False)}  # a manager's turns are cut off after this
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
          "power": (str, False), "idle_stop_min": (int, False), "tailnet_name": (str, False),
@@ -59,6 +60,7 @@ _GITHUB = {"accounts": (dict, True)}
 _GH_ACCOUNT = {"email": (str, False),                       # default: its noreply address
                "expires": ((dt.date, type(None)), False),   # a bot account's token expiry
                "app_id": (int, False), "installation_id": (int, False)}
+_REPO_PATTERN = re.compile(r"^[A-Za-z0-9_.-]+/(?:\*|[A-Za-z0-9_.*-]+)$")
 _GH_LOGIN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?$")
 _CRED = {"name": (str, True), "host": (str, True), "expires": ((dt.date, type(None)), True),
          "scope": (str, False), "agent": (str, False)}
@@ -137,13 +139,27 @@ class Lab:
             gpu=a.get("gpu", a.get("role") == "worker"),
             compact_percent=a.get("compact_percent",
                                   DEFAULT_COMPACT_PERCENT.get(a.get("role"))),
-            git_identity=((self.github_login(a["github"]), self.github_email(a["github"]))
-                          if a.get("github") else None),
             domains=github.DOMAINS if a.get("github") else ())
 
     @property
     def github_accounts(self):
         return (self.data.get("github") or {}).get("accounts") or {}
+
+    def github_identities(self, agent_id):
+        """(default identity, [(repo pattern, identity)]) of an agent; (None, []) if none.
+        `github: name` is one identity for everything; `github: {name: default, other:
+        [owner/repo, owner/*]}` picks the identity by repository."""
+        g = (self.agents.get(agent_id) or {}).get("github")
+        if not g:
+            return None, []
+        if isinstance(g, str):
+            return g, []
+        default = next((n for n, v in g.items() if v == "default"), None)
+        return default, [(p, n) for n, v in g.items() if isinstance(v, list) for p in v]
+
+    def github_names(self, agent_id):
+        default, mapped = self.github_identities(agent_id)
+        return list(dict.fromkeys(([default] if default else []) + [n for _, n in mapped]))
 
     def github_is_app(self, account):
         return bool((self.github_accounts.get(account) or {}).get("app_id"))
@@ -293,14 +309,25 @@ def check(lab: Lab, today: dt.date | None = None):
                 elif left <= EXPIRY_WARN_DAYS:
                     W(where, f"its token expires in {left} days ({exp})")
     for aid, a in lab.agents.items():
-        acc_name = (a or {}).get("github")
-        if acc_name is None:
+        g = (a or {}).get("github")
+        if g is None:
             continue
-        where = f"agents.{aid}"
+        where = f"agents.{aid}.github"
         if (a or {}).get("role") not in ("manager", "worker"):
             E(where, "'github' applies to managers and workers only")
-        elif acc_name not in lab.github_accounts:
-            E(where, f"github account {acc_name!r} is not in github.accounts")
+            continue
+        if isinstance(g, dict):
+            defaults = [n for n, v in g.items() if v == "default"]
+            if len(defaults) != 1:
+                E(where, "name exactly one identity `default` (the others: lists of repos)")
+            for n, v in g.items():
+                if v != "default" and not (isinstance(v, list) and v and all(
+                        isinstance(x, str) and _REPO_PATTERN.match(x) for x in v)):
+                    E(where, f"{n}: `default`, or a list of repositories like owner/repo "
+                             "or owner/*")
+        for n in ([g] if isinstance(g, str) else list(g)):
+            if n not in lab.github_accounts:
+                E(where, f"github account {n!r} is not in github.accounts")
 
     for hid, h in lab.humans.items():
         if (h or {}).get("admin") and not (h or {}).get("tailscale_login"):

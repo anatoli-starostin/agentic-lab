@@ -567,9 +567,14 @@ an agent asked to recite a token refuses.
 \section{GitHub for agents}\label{sec:github}
 
 \begin{itemize}
-  \item A manager or worker may have \textbf{one GitHub identity}, named in \code{lab.yaml}
-    (\code{github: <name>} on the agent, the identity in \code{github.accounts}); several
-    agents may share one. Two kinds, side by side in one lab:
+  \item A manager or worker may have a GitHub identity (\code{github: <name>} on the agent),
+    or \textbf{several, picked by repository}: for example a DeepSpike identity by default
+    and the open-source project's bot for that project,
+    \code{github: \{deepspike-flash: default, spikyclaudebot: [anatoli-starostin/spiky]\}}.
+    git picks the identity by the repository by itself (the token through a credential
+    helper, the commit author through git's conditional configuration); for \code{gh} on a
+    mapped repository the agent passes that identity's token. Several agents may share an
+    identity. Identities are named in \code{github.accounts}; two kinds, side by side:
     \begin{itemize}
       \item \textbf{A GitHub App} (\code{app\_id}): appears as \code{<slug>[bot]}, with no
         account or email to create, which makes it easy to give each agent one. Its tokens
