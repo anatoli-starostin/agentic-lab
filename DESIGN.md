@@ -102,6 +102,9 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 | Answer questions about the lab in Slack (DMs, threads it's tagged in) | Power off its own host |
 | Administer the lab with admins: propose changes as PRs, deploy `main` (§11a) | Merge anything |
 
+- **Its GitHub identity** (optional, `github: <account>`): its config-repo work is then done
+  as that bot account or GitHub App, over HTTPS, and it opens the pull requests itself.
+  Without one, a deploy key (write access) and the admin opens the PR from its link. §4.4.
 - **State**: workers over MCP (a read-only monitoring token), managers' status endpoints,
   the broker's overview, local systemd units, machine power states (Nebius).
 - **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
@@ -205,6 +208,17 @@ safety is GitHub's — private repositories, a fine-grained token limited to the
 (contents, pull requests, issues), and **branch protection** on `main` (pull requests,
 reviews by human code owners, no bypass for bots). Bots push branches and open pull
 requests, issues and comments; they never approve or merge.
+
+**The secretary** may have one identity too (`github: <account>`, a bot account or an App;
+no per-repository map: it only works on the config repo). It's for its *service*, not its
+agent: the config clone goes over HTTPS with that identity's token, commits are authored as
+it, and `propose_lab_change` opens the pull request through GitHub's API; `lab apply` then
+makes no deploy key (some organisations forbid them). The token and the git setup sit in
+the service's state folder, which the agent's sandbox can't read, and the agent's sandbox
+doesn't get `github.com`. Without `github:` it keeps its deploy key, as before. Every
+secretary commit carries a `Lab-Agent: <name> (secretary)` trailer, since an identity may be
+shared by several agents. Recommended: a fine-grained token limited to the config repo
+(Contents and Pull requests: read and write); branch protection keeps it off `main`.
 
 ---
 
@@ -473,8 +487,9 @@ a human reviews and merges → deploy. Every host records what it runs
 (`/etc/agentic-lab/applied.yaml`). Break glass: `lab apply --unreviewed` (flagged).
 
 **After the install, admins work with the secretary in Slack**, with admin-only tools checked
-in code: `propose_lab_change` (a checked branch, pushed; replies with the diff and "here is
-the PR, review and merge it"), `offer_deploy` (a **Deploy** button; only an admin's click
+in code: `propose_lab_change` (a checked branch, pushed, and with the secretary's GitHub
+identity the pull request opened; replies with the diff and "here is the PR, review and merge
+it"), `offer_deploy` (a **Deploy** button; only an admin's click
 deploys), `request_slack_app` (with an app icon Claude draws from the agent's name, role and the lab's name;
 `redraw_app_icon` for another), `request_github_token`, `request_github_app` and `check_github_app` (a GitHub App as an
 agent's identity), `check_slack_app`. The secretary's one
@@ -576,6 +591,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-18 | **`~/.lab-keep-awake`**: anyone working on a lab machine directly keeps it from being stopped. |
 | 2026-10-19 | **Several GitHub identities per agent, picked by repository** (e.g. a lab identity by default, an open-source project's bot for that project). |
 | 2026-10-19 | **GitHub Apps as agents' identities**, alongside full bot accounts: `<slug>[bot]`, nothing to create but the app; the service mints its hourly tokens. |
+| 2026-10-19 | **The secretary may have a GitHub identity** (its service's, for the config repo): HTTPS instead of a deploy key, PRs opened by it, a `Lab-Agent:` trailer on its commits. Without one, the deploy key as before. |
 | 2026-10-19 | **Long runs**: jobs that outlive the session run as their own units, outside the sandbox, approved one at a time by a human; the task waits (parked) and the worker takes other tasks meanwhile. Not a second sandbox runtime (`srt` would mean Node and another versioned copy of the sandbox to maintain). |
 | 2026-10-18 | **Approval requests have no timeout by default** (a member may set `timeout_s`); a request the agent stops waiting for is withdrawn. |
 

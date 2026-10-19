@@ -110,7 +110,8 @@ stage's pieces (the GPU wrapper and AppArmor profile help them too) and say so.
   private keys) in the organisation's Settings → Developer settings → GitHub Apps; for each
   bot account, revoke its token (log in as the bot → Settings → Developer settings →
   Personal access tokens), and remove or keep the account.
-- **GitHub**: in the config repo, remove the secretary's deploy key and the admin's;
+- **GitHub**: in the config repo, remove the secretary's deploy key (or revoke its
+  identity's token / uninstall its App) and the admin's;
   archive or delete the repo. In the framework repo (if private), remove this machine's
   deploy key.
 - **Nebius** (if `lab nebius connect` was used): delete the service account `lab-power`,

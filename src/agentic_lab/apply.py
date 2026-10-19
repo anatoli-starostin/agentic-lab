@@ -332,12 +332,11 @@ def run_units_script(run_units):
 
 def self_admin_script(sa):
     """The secretary host: what lets the secretary deploy main when an admin asks in Slack
-    (selfadmin.py): its one sudo rule, its deploy key, its clone of the config repo."""
+    (selfadmin.py): its one sudo rule, and its deploy key and clone of the config repo
+    (unless it has a GitHub identity: then its service clones over HTTPS as that identity)."""
     u = sa["config_owner"]
     q = shlex.quote
-    ssh = ("ssh -i ~/.config/agentic-lab/config-repo-key -o IdentitiesOnly=yes "
-           "-o StrictHostKeyChecking=accept-new")
-    return [
+    rule = [
         'say "self-administration (deploying main from Slack)"',
         'install -m 644 "$B/apply-main.yaml" /etc/agentic-lab/apply-main.yaml',
         f"echo '{u} ALL=(root) NOPASSWD: /usr/local/bin/lab apply-main' "
@@ -346,6 +345,13 @@ def self_admin_script(sa):
         "visudo -cqf /etc/sudoers.d/agentic-lab.new && mv /etc/sudoers.d/agentic-lab.new "
         "/etc/sudoers.d/agentic-lab || { rm -f /etc/sudoers.d/agentic-lab.new; "
         "echo '  sudo rule refused by visudo'; }",
+    ]
+    if sa.get("github"):        # its GitHub identity: HTTPS, its service clones (no deploy key)
+        return rule + [f"echo '  config repo: the secretary uses its GitHub identity "
+                       f"{sa['github']} (HTTPS, its service clones; no deploy key)'"]
+    ssh = ("ssh -i ~/.config/agentic-lab/config-repo-key -o IdentitiesOnly=yes "
+           "-o StrictHostKeyChecking=accept-new")
+    return rule + [
         f"sudo -u {u} -H bash -c 'umask 077; mkdir -p ~/.config/agentic-lab "
         "~/.local/state/agentic-lab; test -f ~/.config/agentic-lab/config-repo-key || "
         f"ssh-keygen -q -t ed25519 -N \"\" -C {u}@agentic-lab "

@@ -528,9 +528,10 @@ and emergencies. Admin-only tools, checked in code (the person's Slack identity 
 admin's in \code{lab.yaml}):
 \begin{description}
   \item[\code{propose\_lab\_change}] writes the whole new \code{lab.yaml} on a branch of the
-    secretary's own clone of the config repository, checks it, pushes it, and replies with
-    the diff and the pull request link: \emph{``here is the PR, review and merge it''}. It
-    never touches \code{main}.
+    secretary's own clone of the config repository, checks it, pushes it, opens the pull
+    request if the secretary has a GitHub identity (else gives the link to open it), and
+    replies with the diff: \emph{``here is the PR, review and merge it''}. It never touches
+    \code{main}.
   \item[\code{offer\_deploy}] after the merge, posts a \textbf{Deploy} button listing what
     is merged but not deployed. Only an admin's click deploys; a button left behind by a
     newer \code{main} refuses. The result is posted back in the conversation.
@@ -550,8 +551,11 @@ admin's in \code{lab.yaml}):
 rule with no arguments: it deploys only the config repository's \code{main}, moving the
 framework checkout to the pinned commit, as its own systemd unit (so it survives the
 secretary's own restart). Even a misled secretary can only deploy what a human merged.
-Its deploy key (write: it pushes branches, never merges) and its clone live in folders its
-sandbox can't read.
+It reaches the config repository with a deploy key (write: it pushes branches, never
+merges) or, if it has one (\code{github:} on the secretary), as its GitHub identity over
+HTTPS: then \code{lab apply} makes no deploy key and the pull requests come from the lab's
+bot. The key or token and its clone live in folders its sandbox can't read, and every
+commit it makes carries a \code{Lab-Agent:} trailer.
 
 \textbf{Still at the console}: the install itself; creating the first Slack apps; giving a
 new GPU VM SSH access; removing an agent's Unix user; \code{--unreviewed}; uninstalling

@@ -68,6 +68,14 @@ What it took:
   nothing else (the agent comes from `SUDO_USER`). Inside its sandbox the agent can't use
   sudo or reach systemd (`/run` hidden), so only the worker service starts runs.
   Tested: a run started this way outlives the process that started it, and stops cleanly.
+- **The secretary's GitHub identity** (optional) is its service's alone: the token and the
+  git setup are in its state folder (`~/.local/state/agentic-lab/github`), which its
+  agent's sandbox can't read, and its sandbox doesn't get `github.com`. The service uses
+  it only for the config repo: clone, branches, pull requests. It never merges or
+  approves; that rests on branch protection on `main` (no bypass for bots or apps). Give it
+  a fine-grained token limited to the config repo (Contents and Pull requests, read and
+  write). Its commits carry a `Lab-Agent:` trailer, so a shared identity still says which
+  agent made the change.
 - **Settings are host-specific.** `~` in generated paths expands on the machine that runs
   the generator, so settings must be generated on the agent's own host.
 - **Real workloads**: verified, a worker installed PyTorch from PyPI (a domain grant) and

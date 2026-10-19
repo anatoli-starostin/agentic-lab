@@ -108,6 +108,15 @@ or updates users, secrets and services on every host.
   <other>: [owner/repo, owner/*]}` (every name in `github.accounts`; exactly one default).
   Remind the admin to protect `main` in the repos (human code owners, no bypass for bots or
   apps).
+- **The secretary's GitHub identity** (instead of its deploy key: the lab's bot opens the
+  config PRs; needed where the organisation forbids deploy keys): `github: <account>` on
+  the secretary (one identity, no repository map), the account in `github.accounts` as
+  above. Its token: a fine-grained token limited to the config repo (Contents and Pull
+  requests, read and write), or the App installed on the config repo only. PR → merge →
+  deploy → its secret → deploy again. `lab apply` then makes no deploy key; the
+  secretary clones over HTTPS and opens PRs itself (if a PR can't be opened, it gives
+  the link instead: check the token's permissions). Its commits carry
+  `Lab-Agent: <name> (secretary)`.
 - **Remove an agent:** PR → merge → deploy; then on its host
   `sudo systemctl disable --now lab-<role>@<id>` and, after the admin confirms (offer to
   archive `~lab-<id>/work` first), `sudo userdel -r lab-<id>`.

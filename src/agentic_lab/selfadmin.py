@@ -3,10 +3,14 @@ once a human merged them, deploys `main` (DESIGN.md §11a).
 
 The same rule as from the console: only what's merged to the config repo's `main` is ever
 deployed. The secretary:
-  - keeps its own clone of the config repo (CLONE), with its own deploy key (KEY, write
-    access: it pushes branches, it never merges);
-  - proposes a change: a branch with the new lab.yaml (checked first), pushed; it hands
-    the admin the pull request link;
+  - keeps its own clone of the config repo (CLONE), reached either
+      * with its own deploy key (KEY, write access: it pushes branches, it never merges), or
+      * as its GitHub identity (`github:` on the secretary in lab.yaml: a bot account or a
+        GitHub App), over HTTPS with that identity's token, which only its service holds;
+  - proposes a change: a branch with the new lab.yaml (checked first), pushed; with a
+    GitHub identity it opens the pull request itself, else it hands the admin the link.
+    Every commit says which agent made it (a `Lab-Agent:` trailer: an identity may be
+    shared by several agents);
   - after the merge, on an admin's click in Slack, runs `sudo lab apply-main`: the one
     root command it may run (/etc/sudoers.d/agentic-lab). It takes no arguments and
     deploys only the config repo's `main`, so even a misled secretary can only deploy what
@@ -14,10 +18,13 @@ deployed. The secretary:
 Both folders are in the agent's secret and state folders, which its sandbox can't read.
 """
 import datetime as dt
+import json
 import os
 import re
 import subprocess
 import tempfile
+import urllib.error
+import urllib.request
 
 import yaml
 
@@ -41,23 +48,57 @@ def ssh_command(key=KEY):
             "-o StrictHostKeyChecking=accept-new")
 
 
-class ConfigCopy:
-    """The secretary's clone of the config repo."""
+def https_url(url):
+    """git@github.com:o/r.git / ssh://git@github.com/o/r -> https://github.com/o/r.git"""
+    m = re.match(r"^(?:ssh://)?git@github\.com[:/](.+?)(?:\.git)?/?$", url or "")
+    return f"https://github.com/{m.group(1)}.git" if m else url
 
-    def __init__(self, lab_rel="lab.yaml", clone=CLONE, author=("Lab secretary", "secretary@lab")):
+
+def github_repo(url):
+    m = re.search(r"github\.com[:/](.+?)(?:\.git)?/?$", url or "")
+    return m.group(1) if m else None
+
+
+class ConfigCopy:
+    """The secretary's clone of the config repo. `github`: its GitHub identity, or None
+    (the deploy key): {"env": git's environment from github.prepare, "token_file": that
+    identity's current token, "url": the config repo}. `agent`: who commits, for the
+    `Lab-Agent:` trailer."""
+
+    def __init__(self, lab_rel="lab.yaml", clone=CLONE, author=("Lab secretary", "secretary@lab"),
+                 github=None, agent=None):
         self.root = os.path.expanduser(clone)
         self.rel = lab_rel
         self.author = author
+        self.github = github
+        self.agent = agent
 
-    def git(self, *args, timeout=60):
-        env = {**os.environ, "GIT_SSH_COMMAND": ssh_command(),
+    def git(self, *args, timeout=60, cwd=True):
+        env = {**os.environ,
                "GIT_AUTHOR_NAME": self.author[0], "GIT_AUTHOR_EMAIL": self.author[1],
                "GIT_COMMITTER_NAME": self.author[0], "GIT_COMMITTER_EMAIL": self.author[1]}
-        r = subprocess.run(["git", "-C", self.root, *args], capture_output=True, text=True,
-                           timeout=timeout, env=env)
+        if self.github:
+            env.update(self.github["env"])          # its credential helper, by repository
+            env["GIT_TERMINAL_PROMPT"] = "0"
+        else:
+            env["GIT_SSH_COMMAND"] = ssh_command()
+        r = subprocess.run(["git", *(["-C", self.root] if cwd else []), *args],
+                           capture_output=True, text=True, timeout=timeout, env=env)
         if r.returncode:
             raise AdminError(f"git {' '.join(args[:2])}: {r.stderr.strip()[-300:]}")
         return r.stdout
+
+    def _ensure_clone(self):
+        """With a GitHub identity the service clones over HTTPS itself (lab apply only
+        clones with the deploy key); an older SSH clone switches to HTTPS."""
+        if not self.github:
+            return
+        url = https_url(self.github["url"])
+        if not os.path.isdir(os.path.join(self.root, ".git")):
+            os.makedirs(os.path.dirname(self.root), mode=0o700, exist_ok=True)
+            self.git("clone", "--quiet", url, self.root, cwd=False, timeout=120)
+        elif self.git("remote", "get-url", "origin").strip() != url:
+            self.git("remote", "set-url", "origin", url)
 
     def _path(self, name):
         d = os.path.dirname(self.rel)
@@ -65,6 +106,7 @@ class ConfigCopy:
 
     def read_main(self):
         """{lab.yaml, framework.lock, commit} as on origin/main, just fetched."""
+        self._ensure_clone()
         if not os.path.isdir(os.path.join(self.root, ".git")):
             raise AdminError("the secretary has no copy of the config repo yet: add its deploy "
                              "key to the repo (sudo lab apply prints it), then sudo lab apply")
@@ -79,8 +121,9 @@ class ConfigCopy:
         return out
 
     def propose(self, summary, lab_yaml, framework_commit=None):
-        """A branch off main with the new lab.yaml (and pin), checked, pushed.
-        Returns {branch, link, diff}."""
+        """A branch off main with the new lab.yaml (and pin), checked, pushed; with a
+        GitHub identity, the pull request opened. Returns {branch, link, diff, pr}: `pr` the
+        pull request's URL (None: `link` is where to open it by hand)."""
         main = self.read_main()
         with tempfile.TemporaryDirectory() as tmp:     # check before anything is written
             p = os.path.join(tmp, "lab.yaml")
@@ -110,14 +153,44 @@ class ConfigCopy:
         if not diff.strip():
             self.git("checkout", "--quiet", "--detach", f"origin/{CR.BRANCH}")
             raise AdminError("that's what main already says: nothing to change")
-        self.git("commit", "--quiet", "-m", summary)
+        self.git("commit", "--quiet", "-m", self.message(summary))
         self.git("push", "--quiet", "-u", "origin", branch)
         self.git("checkout", "--quiet", "--detach", f"origin/{CR.BRANCH}")
-        url = self.git("remote", "get-url", "origin").strip()
-        m = re.search(r"github\.com[:/](.+?)(?:\.git)?$", url)
-        link = (f"https://github.com/{m.group(1)}/compare/{CR.BRANCH}...{branch}?expand=1"
-                if m else None)
-        return {"branch": branch, "link": link, "diff": diff}
+        repo = github_repo(self.git("remote", "get-url", "origin").strip())
+        link = (f"https://github.com/{repo}/compare/{CR.BRANCH}...{branch}?expand=1"
+                if repo else None)
+        pr = None
+        if self.github and repo:
+            pr = self.open_pr(repo, branch, summary, diff)
+        return {"branch": branch, "link": link, "diff": diff, "pr": pr}
+
+    def message(self, summary):
+        """The commit message: the summary, and which agent made it."""
+        return summary + (f"\n\nLab-Agent: {self.agent}" if self.agent else "")
+
+    def open_pr(self, repo, branch, summary, diff):
+        """Open the pull request as the secretary's GitHub identity; its URL, or None
+        (then the compare link is handed over instead)."""
+        try:
+            with open(self.github["token_file"]) as f:
+                token = f.read().strip()
+        except OSError:
+            return None
+        body = (f"Proposed by {self.agent or 'the lab secretary'}, asked in Slack.\n\n"
+                "The lab deploys only what's merged to `main`: review and merge (agents "
+                "never merge).")
+        req = urllib.request.Request(
+            f"https://api.github.com/repos/{repo}/pulls", method="POST",
+            data=json.dumps({"title": summary[:250], "head": branch, "base": CR.BRANCH,
+                             "body": body}).encode(),
+            headers={"Authorization": f"Bearer {token}",
+                     "Accept": "application/vnd.github+json",
+                     "X-GitHub-Api-Version": "2022-11-28"})
+        try:
+            with urllib.request.urlopen(req, timeout=30) as r:
+                return json.load(r).get("html_url")
+        except (urllib.error.URLError, OSError, ValueError):
+            return None
 
     def not_applied(self, applied_commit):
         """Commits on main since the one deployed (one line each)."""

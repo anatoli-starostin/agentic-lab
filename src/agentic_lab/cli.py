@@ -301,8 +301,10 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
             continue
         p["lab_path"], p["source"], p["applied"] = os.path.abspath(lab_path), source, record
         if p["host"] == sec_host and self_admin:
-            p["self_admin"] = {**self_admin, "config_owner": lab.unix_user(
-                secretary_host(lab)[1])}
+            sec = secretary_host(lab)[1]
+            p["self_admin"] = {**self_admin, "config_owner": lab.unix_user(sec),
+                               # its GitHub identity reaches the config repo (no deploy key)
+                               "github": lab.github_identities(sec)[0]}
         rc = run_bundle(p, local=(p["host"] == here), admin=admin)
         print(f"  -> {'done' if rc == 0 else f'FAILED (exit {rc})'}\n")
         failed += rc != 0
