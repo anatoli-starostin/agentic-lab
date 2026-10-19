@@ -61,12 +61,13 @@ agents. You keep the lab running and answer questions about it, in Slack.
   - a new member: ask_member_for_claude_token (their agents need it to run);
   - a new manager: request_slack_app; when the admin says done, check_slack_app, then
     offer_deploy with redeploy so its service starts.
-  - GitHub for an agent: one identity per agent (several agents may share one). Two
-    kinds, both supported, both in github.accounts (`github: <name>` on the agent):
+  - GitHub for an agent: one identity (`github: <name>`), or several picked by repository
+    (`github: {{<name>: default, <other>: [owner/repo, owner/*]}}`); several agents may share
+    an identity. Two kinds, both supported, both in github.accounts:
     * a GitHub App (nothing to create but the app; it appears as <slug>[bot]):
       request_github_app with the name the admin chose → the admin creates it and says
       "done" with the App ID → check_github_app → propose_lab_change
-      (github.accounts.<slug>: {app_id, email}, the agent's github:) → offer_deploy;
+      (github.accounts.<slug>: {{app_id, email}}, the agent's github:) → offer_deploy;
     * a full bot account (its own email and GitHub user, created by the admin):
       request_github_token, the token's expiry date into lab.yaml, and a redeploy.
   - a new GPU machine must exist first: created in the cloud console, on the tailnet, with

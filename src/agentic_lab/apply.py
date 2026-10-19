@@ -159,17 +159,16 @@ def host_plan(lab, host, tokens, intake=intake_secret):
             _, port = lab.address(aid)
             envs[f"/etc/agentic-lab/manager-{aid}.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={port}\n"
             units.append(("lab-manager@.service", f"lab-manager@{aid}"))
-        if a.get("github"):             # its GitHub identity's secret (its service holds it)
-            bot = a["github"]
-            kind, fname = (("github-app", "github-app.pem") if lab.github_is_app(bot)
-                           else ("github-token", "github.token"))
+        for bot in lab.github_names(aid):    # its GitHub identities' secrets (service only)
+            kind, ext = (("github-app", "pem") if lab.github_is_app(bot)
+                         else ("github-token", "token"))
             tok = intake(f"service:github-{bot.lower()}", kind)
-            if tok is None:             # optional: the agent runs, just without GitHub yet
+            if tok is None:             # optional: the agent runs, just without it yet
                 later.append(f"{bot}'s GitHub {'App key' if kind == 'github-app' else 'token'}"
                              f" (lab secret request service:github-{bot.lower()} {kind})")
             else:
-                files[f"/home/{user}/.config/agentic-lab/{fname}"] = (user, "600",
-                                                                    tok.strip() + "\n")
+                files[f"/home/{user}/.config/agentic-lab/github/{bot}.{ext}"] = (
+                    user, "600", tok.strip() + "\n")
 
     if host == sec_host:
         sec_user = lab.unix_user(secretary)

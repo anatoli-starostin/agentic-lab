@@ -528,3 +528,14 @@ def test_gpu_idle_only_after_several_zero_readings():
     P.note_gpu(s)                                              # 0% in 5 readings in a row
     assert P.worker_busy("w", s["agents"]["worker-b"]) is None
     P._gpu_recent.clear()
+
+
+def test_system_prompts_render():
+    """Every agent's instructions are f-strings: literal braces must be doubled, or the
+    agent fails on every conversation."""
+    from agentic_lab.manager import brain as MB
+    from agentic_lab.secretary import brain as SB
+    assert "github.accounts" in SB.system_prompt("Iris", "lab")
+    assert "{app_id, email}" in SB.system_prompt("Iris", "lab")
+    assert "Flash" in MB.system_prompt("Flash", "lab")
+    assert "Bob" in MB.guest_prompt("Alice", "Bob")

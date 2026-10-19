@@ -159,8 +159,18 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 
 ### 4.4 GitHub for agents
 
-A manager or worker may have **one GitHub identity**, named in `lab.yaml` (`github: <name>`;
-several agents may share one). Two kinds, side by side:
+A manager or worker may have a GitHub identity (`github: <name>`), or **several, picked
+by repository**:
+```yaml
+github:
+  deepspike-flash: default                     # everything else
+  spikyclaudebot: [anatoli-starostin/spiky]    # these repositories (owner/* too)
+```
+git picks the identity by the repository by itself (a credential helper for the token,
+git's conditional config for the commit author; the service writes the agent's git config,
+`GIT_CONFIG_GLOBAL`); for `gh` on a mapped repository the agent passes that identity's token.
+Several agents may share an identity. Identities live in `github.accounts`; two kinds, side
+by side:
 - **A GitHub App** (`app_id`): appears as `<slug>[bot]`, no account or email to create, so
   every agent can easily have its own. Tokens last an hour: the agent's service holds the
   app's private key (unreadable by the agent), mints a token, keeps a fresh one where git
@@ -538,6 +548,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-18 | **A worker's event log goes only to the secretary's monitoring token.** |
 | 2026-10-18 | **Anyone in the lab may talk to any manager.** On a dedicated manager, other members are guests: conversation only, no tools, no work, no memory, 2-minute turns. |
 | 2026-10-18 | **`~/.lab-keep-awake`**: anyone working on a lab machine directly keeps it from being stopped. |
+| 2026-10-19 | **Several GitHub identities per agent, picked by repository** (e.g. a lab identity by default, an open-source project's bot for that project). |
 | 2026-10-19 | **GitHub Apps as agents' identities**, alongside full bot accounts: `<slug>[bot]`, nothing to create but the app; the service mints its hourly tokens. |
 | 2026-10-18 | **Approval requests have no timeout by default** (a member may set `timeout_s`); a request the agent stops waiting for is withdrawn. |
 

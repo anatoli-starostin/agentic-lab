@@ -1,5 +1,5 @@
-"""GitHub for agents: one bot account per agent, set in lab.yaml; its token in the agent's
-environment, git and gh set up to use it."""
+"""GitHub for agents: identities in lab.yaml (bot accounts or GitHub Apps), one per agent or
+several chosen by repository; git and gh set up by the agent's service."""
 import os
 import subprocess
 from pathlib import Path
@@ -13,14 +13,16 @@ from agentic_lab.apply import host_plan
 from agentic_lab.secrets import intake as I
 
 SINGLE = Path(__file__).parent.parent / "examples" / "single-vm" / "lab.yaml"
+HELPER = Path(__file__).parent.parent / "deploy" / "worker" / "lab-git-credential"
 
 
 def lab_with_github(tmp_path, mutate=None):
     d = yaml.safe_load(SINGLE.read_text())
-    d["github"] = {"accounts": {"flash-bot": {}, "worker-bot": {"email": "w@example.org"}}}
+    d["github"] = {"accounts": {"flash-bot": {}, "worker-bot": {"email": "w@example.org"},
+                                "spikyclaudebot": {"email": "spiky@example.org"}}}
     for a in d["agents"].values():
         if a["role"] == "manager":
-            a["github"] = "flash-bot"
+            a["github"] = {"flash-bot": "default", "spikyclaudebot": ["anatoli-starostin/spiky"]}
         elif a["role"] == "worker":
             a["github"] = "worker-bot"
     if mutate:
@@ -38,103 +40,102 @@ def first(lab, role):
     return next(a for a, x in lab.agents.items() if x["role"] == role)
 
 
+class Tok:
+    def get(self, k):
+        return "t"
+
+
 def test_schema(tmp_path):
     lab = lab_with_github(tmp_path)
     assert errors(lab) == []
+    mgr = first(lab, "manager")
+    assert lab.github_identities(mgr) == ("flash-bot", [("anatoli-starostin/spiky",
+                                                         "spikyclaudebot")])
+    assert lab.github_names(mgr) == ["flash-bot", "spikyclaudebot"]
+    assert lab.github_identities(first(lab, "worker")) == ("worker-bot", [])
 
     def bad(d):
+        m = next(a for a in d["agents"].values() if a["role"] == "manager")
+        m["github"] = {"flash-bot": ["not a repo!"], "worker-bot": ["x/y"]}   # no default
         next(a for a in d["agents"].values() if a["role"] == "worker")["github"] = "nobody-bot"
         next(a for a in d["agents"].values() if a["role"] == "secretary")["github"] = "flash-bot"
-        d["github"]["accounts"]["flash-bot"] = {"member": "alice"}       # no such key now
-        d["github"]["accounts"]["bad login!"] = {}
     errs = " ".join(errors(lab_with_github(tmp_path, bad)))
+    assert "exactly one identity `default`" in errs and "owner/repo" in errs
     assert "'nobody-bot' is not in github.accounts" in errs
-    assert "managers and workers only" in errs and "unknown key 'member'" in errs
-    assert "GitHub login" in errs
+    assert "managers and workers only" in errs
 
 
-def test_settings_env_and_prompt(tmp_path):
+def test_settings_and_prompt(tmp_path):
     lab = lab_with_github(tmp_path)
-    worker = first(lab, "worker")
-    s = lab.agent_settings(worker)
-    assert s["env"]["GIT_AUTHOR_NAME"] == "worker-bot"
-    assert s["env"]["GIT_COMMITTER_EMAIL"] == "w@example.org"
+    mgr, sec = first(lab, "manager"), first(lab, "secretary")
+    s = lab.agent_settings(mgr)
     assert "github.com" in s["sandbox"]["network"]["allowedDomains"]
-    sec = first(lab, "secretary")
+    assert "GIT_AUTHOR_NAME" not in s["env"]          # per repository: from git's config
     assert "github.com" not in lab.agent_settings(sec)["sandbox"]["network"]["allowedDomains"]
-
-    tok = tmp_path / "github.token"
-    tok.write_text("ghp_abc\n")
-    env = GH.env_for(lab, worker, path=str(tok))
-    assert env["GH_TOKEN"] == "ghp_abc"
-    assert env["GIT_CONFIG_KEY_0"] == "credential.https://github.com.helper"
-    assert GH.env_for(lab, worker, path=str(tmp_path / "missing")) == {}   # not there yet
-    assert GH.env_for(lab, sec, path=str(tok)) == {}                       # no identity
-    prompt = GH.instructions(lab, worker)
-    assert "worker-bot" in prompt and "never approve or merge" in prompt.lower()
-    assert "ghp_" not in prompt
+    prompt = GH.instructions(lab, mgr, root="/r")
+    assert "bot account flash-bot" in prompt and "anatoli-starostin/spiky" in prompt
+    assert "spikyclaudebot" in prompt and "GH_TOKEN=$(cat /r/<identity>/token)" in prompt
+    assert "never approve or merge" in prompt.lower()
 
 
-def test_apply_installs_only_the_agents_own_bot(tmp_path):
+def test_git_picks_the_identity_by_repository(tmp_path):
+    """The real git: in a Spiky clone it commits and authenticates as spikyclaudebot,
+    elsewhere as the default identity."""
     lab = lab_with_github(tmp_path)
-    worker = first(lab, "worker")
-    tokens = {"service:github-worker-bot": "ghp_" + "w" * 36}
-
-    class Tok:
-        def get(self, k):
-            return "t"
-
-    def intake(owner, name):
-        return tokens.get(owner) if name == "github-token" else (
-            None if name == "nebius-sa" else "secret")
-    plan = host_plan(lab, lab.agents[worker]["host"], Tok(), intake)
-    files = {p: c for p, (_, _, c) in plan["files"].items()}
-    assert files[f"/home/{lab.unix_user(worker)}/.config/agentic-lab/github.token"].startswith(
-        "ghp_w")
     mgr = first(lab, "manager")
-    if lab.agents[mgr]["host"] == lab.agents[worker]["host"]:
-        # the manager's bot has no token yet: reported, and never holds the host back
-        assert f"/home/{lab.unix_user(mgr)}/.config/agentic-lab/github.token" not in files
-        assert any("flash-bot" in m for m in plan["later"])
-    assert not any("GitHub" in m for m in plan["missing"])
+    secrets, root = tmp_path / "secrets", tmp_path / "share"
+    secrets.mkdir()
+    (secrets / "flash-bot.token").write_text("ghp_flash\n")
+    (secrets / "spikyclaudebot.token").write_text("ghp_spiky\n")
+    env = GH.prepare(lab, mgr, root=str(root), secrets=str(secrets), helper=str(HELPER))
+    assert env["GH_CONFIG_DIR"] == str(root / "flash-bot" / "gh")
+    assert "oauth_token: ghp_flash" in (root / "flash-bot" / "gh" / "hosts.yml").read_text()
+    full = {**os.environ, **env, "HOME": str(tmp_path)}
+
+    def git(cwd, *a, stdin=None):
+        return subprocess.run(["git", *a], cwd=cwd, env=full, input=stdin, text=True,
+                              capture_output=True, timeout=20).stdout
+    for name, url in (("spiky", "https://github.com/anatoli-starostin/spiky.git"),
+                      ("other", "https://github.com/deepspike/models")):
+        (tmp_path / name).mkdir()
+        git(tmp_path / name, "init", "-q")
+        git(tmp_path / name, "remote", "add", "origin", url)
+    assert git(tmp_path / "spiky", "var", "GIT_AUTHOR_IDENT").startswith(
+        "spikyclaudebot <spiky@example.org>")
+    assert git(tmp_path / "other", "var", "GIT_AUTHOR_IDENT").startswith(
+        "flash-bot <flash-bot@users.noreply.github.com>")
+
+    def password(path):
+        out = git(tmp_path / "other", "credential", "fill",
+                  stdin=f"protocol=https\nhost=github.com\npath={path}\n\n")
+        return next(line[9:] for line in out.splitlines() if line.startswith("password="))
+    assert password("anatoli-starostin/spiky.git") == "ghp_spiky"
+    assert password("deepspike/models.git") == "ghp_flash"
 
 
-def test_one_bot_for_several_agents(tmp_path):
-    """Several agents may share one bot: each gets its token."""
-    def share(d):
-        for a in d["agents"].values():
-            if a["role"] in ("manager", "worker"):
-                a["github"] = "flash-bot"
-    lab = lab_with_github(tmp_path, share)
-    assert errors(lab) == []
-
-    class Tok:
-        def get(self, k):
-            return "t"
+def test_apply_installs_every_identity_of_the_agent(tmp_path):
+    lab = lab_with_github(tmp_path)
+    mgr, worker = first(lab, "manager"), first(lab, "worker")
+    tokens = {"service:github-flash-bot": "ghp_" + "f" * 36,
+              "service:github-worker-bot": "ghp_" + "w" * 36}
 
     def intake(owner, name):
-        return "ghp_" + "f" * 36 if (owner, name) == ("service:github-flash-bot",
-                                                      "github-token") else (
-            None if name == "nebius-sa" else "secret")
-    users = [lab.unix_user(a) for a, x in lab.agents.items() if x["role"] in ("manager", "worker")]
-    files = {}
-    for host in {lab.agents[a]["host"] for a in lab.agents}:
-        files.update(host_plan(lab, host, Tok(), intake)["files"])
-    for u in users:
-        assert files[f"/home/{u}/.config/agentic-lab/github.token"][2].startswith("ghp_f")
+        if name in ("github-token", "github-app"):
+            return tokens.get(owner)
+        return None if name == "nebius-sa" else "secret"
+    plan = host_plan(lab, lab.agents[mgr]["host"], Tok(), intake)
+    files = {p: c for p, (_, _, c) in plan["files"].items()}
+    home = f"/home/{lab.unix_user(mgr)}/.config/agentic-lab/github"
+    assert files[f"{home}/flash-bot.token"].startswith("ghp_f")
+    assert f"{home}/spikyclaudebot.token" not in files        # not handed over yet...
+    assert any("spikyclaudebot" in m for m in plan["later"])  # ...reported, never blocking
+    assert not any("GitHub" in m for m in plan["missing"])
+    wfiles = f"/home/{lab.unix_user(worker)}/.config/agentic-lab/github"
+    assert files[f"{wfiles}/worker-bot.token"].startswith("ghp_w")
+    assert f"{wfiles}/spikyclaudebot.token" not in files      # another agent's identity
 
 
 def test_intake_takes_github_tokens():
     assert I.check_value("github-token", "github_pat_" + "a" * 40).startswith("github_pat_")
     with pytest.raises(I.IntakeError, match="GitHub token"):
         I.check_value("github-token", "xoxb-" + "a" * 40)
-
-
-def test_the_credential_helper_hands_git_the_token(tmp_path):
-    """git, configured only through the environment, gets GH_TOKEN for github.com."""
-    env = {**os.environ, "GH_TOKEN": "ghp_abc", "GIT_CONFIG_COUNT": "1",
-           "GIT_CONFIG_KEY_0": "credential.https://github.com.helper",
-           "GIT_CONFIG_VALUE_0": GH.CREDENTIAL_HELPER, "GIT_CONFIG_GLOBAL": "/dev/null"}
-    r = subprocess.run(["git", "credential", "fill"], input="protocol=https\nhost=github.com\n\n",
-                       capture_output=True, text=True, env=env, cwd=tmp_path, timeout=20)
-    assert "username=x-access-token" in r.stdout and "password=ghp_abc" in r.stdout

@@ -227,7 +227,10 @@ deployed, and the secretary checks in code that the person asking is an admin.
     PR → merge → deploy; then it posts how to make the bot's fine-grained token (contents,
     pull requests and issues of those repos) and a one-time link for it; then a redeploy.
 
-  The agent then uses git and `gh` as that identity. **Protect `main`** in each repo (pull requests only, reviews by human
+  The agent then uses git and `gh` as that identity. An agent can also have **several,
+  picked by repository**, e.g. a DeepSpike identity by default and an open-source
+  project's bot for that project:
+  `github: {deepspike-flash: default, spikyclaudebot: [anatoli-starostin/spiky]}`. **Protect `main`** in each repo (pull requests only, reviews by human
   code owners, no bypass for bots): that is what keeps bots from approving or merging.
 - **People working on a lab machine directly** (not through agents): tell them to create
   `~/.lab-keep-awake` while they need the machine (`echo "CPU sweep until Friday" >
