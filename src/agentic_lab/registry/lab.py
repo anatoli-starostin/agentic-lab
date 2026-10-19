@@ -140,7 +140,9 @@ class Lab:
             gpu=a.get("gpu", a.get("role") == "worker"),
             compact_percent=a.get("compact_percent",
                                   DEFAULT_COMPACT_PERCENT.get(a.get("role"))),
-            domains=github.DOMAINS if a.get("github") else ())
+            # the secretary's identity is its service's (config repo PRs), not its agent's
+            domains=github.DOMAINS if a.get("github") and a.get("role") != "secretary"
+            else ())
 
     @property
     def github_accounts(self):
@@ -333,8 +335,12 @@ def check(lab: Lab, today: dt.date | None = None):
         if g is None:
             continue
         where = f"agents.{aid}.github"
-        if (a or {}).get("role") not in ("manager", "worker"):
-            E(where, "'github' applies to managers and workers only")
+        if (a or {}).get("role") not in ("manager", "worker", "secretary"):
+            E(where, "'github' applies to managers, workers and the secretary")
+            continue
+        if (a or {}).get("role") == "secretary" and not isinstance(g, str):
+            E(where, "the secretary has one identity (github: <account>): it only works on "
+                     "the config repo")
             continue
         if isinstance(g, dict):
             defaults = [n for n, v in g.items() if v == "default"]

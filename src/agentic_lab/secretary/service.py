@@ -29,6 +29,7 @@ from ..secrets.intake import Intake, form_url, message
 from ..slackio import SILENT, SlackIO
 from .brain import SecretaryBrain, expiry_notices
 from ..eventlog import EventLog
+from .. import github as GH
 from .. import selfadmin as SA
 from ..worker.usage import UsageLog, probe_loop, probe_now
 from . import home as H
@@ -104,10 +105,23 @@ class Secretary:
         return None
 
     def config_copy(self):
+        """The config repo, as the secretary's GitHub identity if it has one (HTTPS, the
+        service's token; it opens the PRs), else with its deploy key."""
         sa = SA.applied(SA.APPLY_MAIN)          # where lab.yaml sits in the config repo
-        return SA.ConfigCopy(sa.get("lab_rel") or "lab.yaml", author=(
-            f"{self.lab.display_name(sec_id_of(self.lab))} (lab secretary)",
-            f"{self.lab.unix_user(sec_id_of(self.lab))}@agentic-lab"))
+        sec = sec_id_of(self.lab)
+        agent = f"{self.lab.display_name(sec)} (secretary)"
+        name = self.lab.github_identities(sec)[0]
+        if name and sa.get("config_url"):
+            # its git setup, where its agent can't read it (the service's alone)
+            env = GH.env_for(self.lab, sec, root=GH.SERVICE_ROOT)
+            return SA.ConfigCopy(
+                sa.get("lab_rel") or "lab.yaml", agent=agent,
+                author=(self.lab.github_login(name), self.lab.github_email(name)),
+                github={"env": env, "url": sa["config_url"], "token_file": os.path.join(
+                    os.path.expanduser(GH.SERVICE_ROOT), name, "token")})
+        return SA.ConfigCopy(sa.get("lab_rel") or "lab.yaml", agent=agent, author=(
+            f"{self.lab.display_name(sec)} (lab secretary)",
+            f"{self.lab.unix_user(sec)}@agentic-lab"))
 
     async def read_config(self, asked_by=None):
         refused = self._admin_only(asked_by, "read the lab's configuration")
@@ -131,8 +145,11 @@ class Secretary:
             return f"not proposed: {e}"
         if self.events is not None:
             self.events.add("note", f"proposed {r['branch']}: {summary}", member=asked_by)
-        return (f"pushed branch {r['branch']}. PR link (give it to the admin to review and "
-                f"merge; you never merge): {r['link'] or '(not GitHub: open it by hand)'}\n"
+        if r.get("pr"):
+            return (f"opened pull request {r['pr']} (branch {r['branch']}): give it to the "
+                    f"admin to review and merge; you never merge.\ndiff:\n{r['diff'][:6000]}")
+        return (f"pushed branch {r['branch']}. PR link (give it to the admin to open, review "
+                f"and merge; you never merge): {r['link'] or '(not GitHub: open it by hand)'}\n"
                 f"diff:\n{r['diff'][:6000]}")
 
     async def request_slack_app(self, agent, asked_by=None, conv=None):
@@ -741,6 +758,8 @@ async def serve(lab_path, host, port):
     tasks = [asyncio.create_task(collector()), asyncio.create_task(notice_loop()),
              asyncio.create_task(probe_loop(usage, seat, stop)),
              asyncio.create_task(apply_watch())]
+    GH.env_for(lab, sec_id, root=GH.SERVICE_ROOT)   # its GitHub identity's git setup, if any
+    tasks += GH.start(lab, sec_id, stop, root=GH.SERVICE_ROOT)  # an App: keep its token fresh
     await server.serve()
     stop.set()
     if sec.slack is not None:

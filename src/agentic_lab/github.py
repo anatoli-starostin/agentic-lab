@@ -31,6 +31,9 @@ import os
 
 SECRETS = "~/.config/agentic-lab/github"     # <name>.token / <name>.pem (service only)
 ROOT = "~/.local/share/agentic-lab/github"   # readable by the agent, not writable
+# the secretary's identity is its service's alone (config repo PRs): kept in its state
+# folder, which its agent's sandbox can't read
+SERVICE_ROOT = "~/.local/state/agentic-lab/github"
 HELPER = "/opt/agentic-lab/src/deploy/worker/lab-git-credential"
 DOMAINS = ["github.com", "api.github.com", "codeload.github.com", "uploads.github.com",
            "objects.githubusercontent.com", "raw.githubusercontent.com"]

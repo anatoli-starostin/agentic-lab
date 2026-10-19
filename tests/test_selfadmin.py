@@ -108,3 +108,112 @@ def test_admin_only_and_the_click_decides(monkeypatch):
         read_main=lambda: {"commit": "newer"}))
     run(sec.on_action("U-A", alice, "lab_apply", "abc", where))
     assert started == [] and "main moved" in updated[-1]
+
+
+# ── the secretary with a GitHub identity (github: on the secretary) ─────────
+
+def test_with_a_github_identity_it_commits_as_it_and_opens_the_pr(copy, tmp_path, monkeypatch):
+    c, origin, git = copy
+    token = tmp_path / "token"
+    token.write_text("ghs_abc\n")
+    c.github = {"env": {}, "url": str(origin), "token_file": str(token)}
+    c.author = ("flash-bot", "flash-bot@users.noreply.github.com")
+    c.agent = "Iris (secretary)"
+    monkeypatch.setattr(SA, "github_repo", lambda url: "acme/lab-config")
+    sent = {}
+
+    class Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+        def read(self):
+            return b'{"html_url": "https://github.com/acme/lab-config/pull/7"}'
+
+    def urlopen(req, timeout=None):
+        sent.update(url=req.full_url, auth=req.get_header("Authorization"),
+                    body=__import__("json").loads(req.data))
+        return Resp()
+    monkeypatch.setattr(SA.urllib.request, "urlopen", urlopen)
+    main = c.read_main()
+    r = c.propose("Rename Alice", main["lab.yaml"].replace("name: Alice", "name: Alice L."))
+    assert r["pr"] == "https://github.com/acme/lab-config/pull/7"
+    assert sent["url"] == "https://api.github.com/repos/acme/lab-config/pulls"
+    assert sent["auth"] == "Bearer ghs_abc"
+    assert sent["body"]["head"] == r["branch"] and sent["body"]["base"] == "main"
+    log = git(origin, "log", "-1", "--format=%an <%ae>%n%B", r["branch"])
+    assert log.startswith("flash-bot <flash-bot@users.noreply.github.com>")
+    assert "Rename Alice" in log and "Lab-Agent: Iris (secretary)" in log
+
+
+def test_with_a_github_identity_the_service_clones_over_https(copy, tmp_path):
+    c, origin, git = copy
+    fresh = SA.ConfigCopy(clone=str(tmp_path / "state" / "config-repo"),
+                          github={"env": {}, "url": str(origin), "token_file": "/nonexistent"})
+    assert "humans:" in fresh.read_main()["lab.yaml"]           # cloned on first use
+    assert SA.https_url("git@github.com:acme/lab-config.git") == \
+        "https://github.com/acme/lab-config.git"
+    assert SA.https_url("ssh://git@github.com/acme/lab-config") == \
+        "https://github.com/acme/lab-config.git"
+
+
+def test_a_pr_that_cant_be_opened_falls_back_to_the_link(copy, tmp_path, monkeypatch):
+    c, origin, git = copy
+    c.github = {"env": {}, "url": str(origin), "token_file": str(tmp_path / "missing")}
+    monkeypatch.setattr(SA, "github_repo", lambda url: "acme/lab-config")
+    main = c.read_main()
+    r = c.propose("Rename", main["lab.yaml"].replace("name: Alice", "name: A"))
+    assert r["pr"] is None and r["link"].endswith(f"compare/main...{r['branch']}?expand=1")
+
+
+def test_deploy_key_mode_unchanged_but_commits_say_who(copy):
+    c, origin, git = copy
+    c.agent = "Iris (secretary)"
+    main = c.read_main()
+    r = c.propose("Rename", main["lab.yaml"].replace("name: Alice", "name: A"))
+    assert r["pr"] is None                                       # the admin opens it
+    assert "Lab-Agent: Iris (secretary)" in git(origin, "log", "-1", "--format=%B", r["branch"])
+    lines = "\n".join(self_admin_script({"config_owner": "lab-secretary",
+                                         "config_url": "git@github.com:acme/lab-config.git"}))
+    assert "ssh-keygen" in lines and "config-repo-key" in lines
+
+
+def test_apply_skips_the_deploy_key_with_a_github_identity():
+    lines = "\n".join(self_admin_script({"config_owner": "lab-secretary", "github": "flash-bot",
+                                         "config_url": "git@github.com:acme/lab-config.git"}))
+    assert "NOPASSWD: /usr/local/bin/lab apply-main" in lines
+    assert "ssh-keygen" not in lines and "deploy key" not in lines.replace("no deploy key", "")
+    assert "GitHub identity flash-bot" in lines
+    assert subprocess.run(["bash", "-n"], input=lines, text=True).returncode == 0
+
+
+def test_secretary_service_uses_its_identity(tmp_path, monkeypatch):
+    import yaml
+    from agentic_lab import github as GH
+    from agentic_lab.secretary.service import Secretary
+    d = yaml.safe_load(SINGLE.read_text())
+    d["github"] = {"accounts": {"flash-bot": {"email": "flash@acme.org"}}}
+    sec = next(a for a, x in d["agents"].items() if x["role"] == "secretary")
+    d["agents"][sec]["github"] = "flash-bot"
+    p = tmp_path / "lab.yaml"
+    p.write_text(yaml.safe_dump(d))
+    lab = registry.load(p)
+    assert [i for i in registry.check(lab) if i.level == "error"] == []
+    # its identity is its service's: the agent's sandbox doesn't get GitHub
+    assert "github.com" not in lab.agent_settings(sec)["sandbox"]["network"]["allowedDomains"]
+    monkeypatch.setattr(GH, "SERVICE_ROOT", str(tmp_path / "state" / "github"))
+    monkeypatch.setattr(SA, "applied", lambda path: {"config_url":
+                                                     "git@github.com:acme/lab-config.git"})
+    s = Secretary.__new__(Secretary)
+    s.lab = lab
+    c = s.config_copy()
+    assert c.author == ("flash-bot", "flash@acme.org")
+    assert c.github["url"] == "git@github.com:acme/lab-config.git"
+    assert c.github["env"]["LAB_GITHUB_DIR"] == str(tmp_path / "state" / "github")
+    assert c.github["token_file"] == str(tmp_path / "state" / "github" / "flash-bot" / "token")
+    assert c.agent.endswith("(secretary)")
+    del lab.agents[sec]["github"]                              # without: the deploy key
+    c = s.config_copy()
+    assert c.github is None and c.author[0].endswith("(lab secretary)")

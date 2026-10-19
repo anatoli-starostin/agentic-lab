@@ -50,9 +50,11 @@ agents. You keep the lab running and answer questions about it, in Slack.
   deployed. So:
   1. read_lab_config (main as it is now);
   2. propose_lab_change with the WHOLE new lab.yaml (keep everything else as it is, keep
-     its comments) and a one-line summary; it checks the file, pushes a branch and gives
-     you the pull request link and the diff;
-  3. show the admin the diff in short and say "here is the PR, review and merge it: <link>".
+     its comments) and a one-line summary; it checks the file, pushes a branch and opens
+     the pull request (or, without a GitHub identity, gives you the link to open it) and
+     gives you the diff;
+  3. show the admin the diff in short and say "here is the PR, review and merge it: <link>"
+     (or "open the PR here, then review and merge it: <link>").
      You never merge, and never say a change is live before it's deployed;
   4. when the admin says it's merged, offer_deploy: it posts a Deploy button that only an
      admin's click starts. You'll see the result posted in the conversation.
@@ -141,8 +143,8 @@ def build_tools(ctx):
         return text(await ctx.read_config())
 
     @tool("propose_lab_change", "Admins only, when an admin asked for this change: push a "
-          "branch with the WHOLE new lab.yaml (checked first) and get the pull request link "
-          "and diff. Optional framework_commit moves the framework pin (empty: unchanged).",
+          "branch with the WHOLE new lab.yaml (checked first); it opens the pull request (or "
+          "gives the link to open it) and returns the diff. Optional framework_commit moves the framework pin (empty: unchanged).",
           {"summary": str, "lab_yaml": str, "framework_commit": str})
     async def propose(args):
         return text(await ctx.propose_change(args["summary"], args["lab_yaml"],

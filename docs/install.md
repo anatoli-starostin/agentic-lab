@@ -113,11 +113,21 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      Services whose Slack app doesn't exist yet (the broker's, a manager's) are installed
      but held back, and listed; other missing secrets (Claude tokens) are listed too. The
      next steps provide them, and the final `lab apply` starts everything.
-   - **The secretary's deploy key.** This first deploy also prints a public key for the
-     secretary: the admin adds it to the config repo (Settings → Deploy keys) **with write
-     access** (it pushes branches; branch protection keeps it off `main`). The next deploy
-     clones the config repo for the secretary; from then on the lab can be administered
-     from Slack (see "Afterwards").
+   - **How the secretary reaches the config repo**, one of:
+     - *A deploy key* (default). This first deploy prints a public key for the secretary:
+       the admin adds it to the config repo (Settings → Deploy keys) **with write access**
+       (it pushes branches; branch protection keeps it off `main`). The next deploy clones
+       the config repo for the secretary, and the admin opens its PRs from the links it
+       gives.
+     - *A GitHub identity* (when the organisation wants the lab's bot to open the PRs, or
+       forbids deploy keys): `github: <account>` on the secretary in `lab.yaml`, the
+       account in `github.accounts` (a bot account or a GitHub App, as for other agents).
+       Its token: `lab secret request service:github-<account> github-token` (a
+       fine-grained token limited to the config repo: Contents and Pull requests, read and
+       write), or for an App the `github-app` key. No deploy key is made; the secretary
+       clones over HTTPS itself and opens its PRs.
+
+     From then on the lab can be administered from Slack (see "Afterwards").
 
 7. **Slack apps** (Admin creates them, Claude guides; ~3 minutes each)
    - Two apps at install: **Lab Approvals** (the broker's) and **the secretary**.

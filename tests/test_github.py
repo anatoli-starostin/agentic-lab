@@ -58,11 +58,12 @@ def test_schema(tmp_path):
         m = next(a for a in d["agents"].values() if a["role"] == "manager")
         m["github"] = {"flash-bot": ["not a repo!"], "worker-bot": ["x/y"]}   # no default
         next(a for a in d["agents"].values() if a["role"] == "worker")["github"] = "nobody-bot"
-        next(a for a in d["agents"].values() if a["role"] == "secretary")["github"] = "flash-bot"
+        next(a for a in d["agents"].values() if a["role"] == "secretary")["github"] = {
+            "flash-bot": "default"}                     # the secretary: one identity
     errs = " ".join(errors(lab_with_github(tmp_path, bad)))
     assert "exactly one identity `default`" in errs and "owner/repo" in errs
     assert "'nobody-bot' is not in github.accounts" in errs
-    assert "managers and workers only" in errs
+    assert "the secretary has one identity" in errs
 
 
 def test_settings_and_prompt(tmp_path):
