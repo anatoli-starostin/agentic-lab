@@ -63,6 +63,7 @@ WorkingDirectory=~
 ExecStart=/opt/agentic-lab/venv/bin/lab --lab {lab_path} worker run-exec {agent_id} %i
 NoNewPrivileges=yes
 PrivateTmp=yes
+UMask=0077
 InaccessiblePaths=-{home}/.config/agentic-lab
 KillMode=control-group
 TimeoutStopSec=60
@@ -180,7 +181,7 @@ def _systemctl(verb, agent_id, run_id):
     return True
 
 
-def run_exec(store: RunStore, run_id):
+def run_exec(store: RunStore, run_id, env=None):
     """The unit's main process (as the agent's user, outside the sandbox): run the command,
     output to its log, and record how it ended."""
     spec = store.get(run_id)
@@ -192,7 +193,7 @@ def run_exec(store: RunStore, run_id):
         p = subprocess.Popen(["/bin/bash", "-c", spec["command"]], cwd=spec["cwd"],
                              stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                              start_new_session=True,
-                             env={**os.environ, **cache_env(store.workdir)})
+                             env={**os.environ, **cache_env(store.workdir), **(env or {})})
         store._write(status, {"state": "running", "started": _now(), "pid": p.pid})
         stopped = {}
 

@@ -271,7 +271,13 @@ deployed, and the secretary checks in code that the person asking is an admin.
 - **People working on a lab machine directly** (not through agents): tell them to create
   `~/.lab-keep-awake` while they need the machine (`echo "CPU sweep until Friday" >
   ~/.lab-keep-awake`) and delete it when done; otherwise an idle machine may be stopped
-  under them. The web UI shows who keeps a machine awake.
+  under them. The web UI shows who keeps a machine awake. To let them **look at what its
+  agents do** with ordinary tools (`ls`, `less`, `tail -f`, no `sudo`), list their Linux
+  user names on the host in `lab.yaml` (`readers: [alice, bob]`), PR → merge → deploy:
+  they can then read each worker's and manager's working folder (`~lab-<id>/work`,
+  including what the agent writes later) and its temporary files (`~lab-<id>/work/tmp`,
+  the agent's `TMPDIR` on such hosts), never its secrets or state, and never write. They
+  may need to log in again for the group to apply.
 - **Workers' warm environments**: a worker keeps what it builds in its working folder
   (`~lab-<id>/work`): tools' caches in `.cache/` (uv, pip, torch extensions, Triton,
   Hugging Face, CUDA), checkouts in `repos/`, virtual environments in `envs/`, listed in

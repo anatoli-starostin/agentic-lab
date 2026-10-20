@@ -221,8 +221,14 @@ def host_plan(lab, host, tokens, intake=intake_secret):
                      {"lab-broker": "lab-broker", "lab-intake": "lab-secretary",
                       "lab-secretary": "lab-secretary"}.get(u)) for _, u in units}
     held = sorted(u for u, owner in unit_user.items() if owner in waiting)
+    # who may read its agents' working folders (#43): {agent user: its working folder}
+    readable = {lab.unix_user(aid): os.path.normpath(
+                    (a.get("workdir") or "~/work").replace("~", f"/home/{lab.unix_user(aid)}", 1))
+                for aid, a in here.items() if a.get("role") in ("worker", "manager")}
     return {"host": host, "name": name, "files": files, "users": users, "units": units,
             "run_units": run_units,
+            "readers": list((lab.hosts.get(host) or {}).get("readers") or []),
+            "readable": readable,
             "envs": envs, "missing": missing, "later": later,
             "secretary_host": host == sec_host,
             "nebius_cli": locals().get("nebius_cli"), "held": held,
@@ -295,6 +301,7 @@ def script(plan):
         lines.append(f"install -m 644 /opt/agentic-lab/src/deploy/{sub}/{unit_file} /etc/systemd/system/")
     if plan.get("run_units"):
         lines += run_units_script(plan["run_units"])
+    lines += readers_script(plan.get("readers") or [], plan.get("readable") or {})
     lines.append("systemctl daemon-reload")
     held = set(plan.get("held") or [])
     for _, unit in plan["units"]:
@@ -307,6 +314,43 @@ def script(plan):
         note = " (waiting for its secrets)" if unit in held else ""
         lines.append(f'echo "  {unit}: $(systemctl is-active {unit}){note}"')
     return "\n".join(lines) + "\n"
+
+
+def readers_script(readers, readable):
+    """Plain Linux read access to agents' working folders for the host's `readers` (#43):
+    the group lab-readers (exactly those users), and on each agent: its home traversable by
+    the group and nothing else in it (everything but the working folder made private), the
+    working folder readable, including what the agent writes later (a default ACL, which
+    the agent's UMask=0077 doesn't override). Secrets and state stay closed. No readers:
+    the group is emptied."""
+    q = shlex.quote
+    if not readers:
+        return ["getent group lab-readers >/dev/null && gpasswd -M '' lab-readers >/dev/null "
+                "|| true"]
+    lines = ['say "readers (plain read access to the agents\' working folders)"',
+             "command -v setfacl >/dev/null || apt-get install -y acl >/dev/null",
+             "getent group lab-readers >/dev/null || groupadd lab-readers",
+             "members=''"]
+    for r in readers:
+        lines.append(f"if id {q(r)} >/dev/null 2>&1; then members=\"$members,{r}\"; "
+                     f"else echo '  no user {r} here: skipped'; fi")
+    lines.append('gpasswd -M "${members#,}" lab-readers >/dev/null')
+    for user, work in sorted(readable.items()):
+        home = f"/home/{user}"
+        if os.path.dirname(work) != home:
+            lines.append(f"echo '  {user}: its working folder {work} is not directly in its "
+                         "home: not shared'")
+            continue
+        lines += [
+            f"install -d -o {user} -g {user} -m 700 {q(work)} {q(work + '/tmp')}",
+            # everything in the home but the working folder: the agent's alone
+            f"find {q(home)} -mindepth 1 -maxdepth 1 ! -path {q(work)} -exec chmod go-rwx {{}} +",
+            f"setfacl -m g:lab-readers:x {q(home)}",
+            f"setfacl -R -m g:lab-readers:rX {q(work)}",
+            f"setfacl -R -d -m g:lab-readers:rX {q(work)}",
+        ]
+    lines.append('echo "  lab-readers: ${members#,} (they may need to log in again)"')
+    return lines
 
 
 def run_units_script(run_units):

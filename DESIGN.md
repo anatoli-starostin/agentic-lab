@@ -428,6 +428,8 @@ hosts:
            idle_stop_min: 30, tailnet_name: gpu-a.example.ts.net}
                                    # + idle_stop_with_managers: false, if a manager
                                    #   there should keep it on (§4.1)
+                                   # + readers: [alice]: Linux users here who may read
+                                   #   its agents' working folders (§10)
 github:
   accounts:
     flash-bot: {expires: 2027-10-01}     # its token's expiry, for reminders
@@ -475,7 +477,8 @@ permission callback *is* the gate: sandboxed Bash is allowed, active grants are 
 anything else goes to the broker.
 
 - **One Unix user per agent**, `lab-<agent-id>`, even when several agents share a host: no
-  password, no SSH keys, a `nologin` shell, lingering off, home folder private. Agents on one
+  password, no SSH keys, a `nologin` shell, lingering off, home folder private (files created
+  `0077`; a host's `readers` may read its agents' working folders, #43). Agents on one
   host are separated by Unix permissions. Nobody runs anything else as these users (GPU
   agents allow Unix sockets, so a socket server running as the agent's user would be a way
   out). Humans log in as themselves; `sudo lab debug <agent>` switches to the agent's user.

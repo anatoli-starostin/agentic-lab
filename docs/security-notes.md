@@ -77,6 +77,15 @@ What it took:
   a fine-grained token limited to the config repo (Contents and Pull requests, read and
   write). Its commits carry a `Lab-Agent:` trailer, so a shared identity still says which
   agent made the change.
+- **Readers** (`readers:` on a host, #43) read agents' working folders and their `tmp`
+  through a group (`lab-readers`) and ACLs: the agent's home is traversable by the group
+  but everything in it except the working folder is made private, and the agent services
+  run with `UMask=0077`, so only the working folder's default ACL lets readers in. They
+  never write. What an agent keeps in its working folder (data, results, its
+  `ENVIRONMENTS.md`) is visible to them, so don't list people who shouldn't see that
+  member's work. On such hosts the agent's `TMPDIR` is `<workdir>/tmp` (stable across
+  restarts) instead of the service's private `/tmp`: to verify on a first host that
+  Claude Code's own temporary files are fine there.
 - **Settings are host-specific.** `~` in generated paths expands on the machine that runs
   the generator, so settings must be generated on the agent's own host.
 - **Real workloads**: verified, a worker installed PyTorch from PyPI (a domain grant) and

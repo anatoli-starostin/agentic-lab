@@ -196,6 +196,10 @@ async def serve(lab_path, agent_id, host=None, port=None):
 
     workdir = os.path.expanduser(a.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
+    tmpdir = lab.agent_tmpdir(agent_id)      # hosts with readers: a tmp they can find (#43)
+    if tmpdir:
+        os.makedirs(tmpdir, exist_ok=True)
+        env["TMPDIR"] = tmpdir
     state_root = os.path.expanduser(STATE)
     state = ManagerState(state_root)
     memory = Memory(os.path.join(state_root, "memory"), shared=a.get("access") == "shared")

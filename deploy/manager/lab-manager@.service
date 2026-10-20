@@ -20,6 +20,8 @@ RestartSec=5
 # A /tmp of its own: sockets other processes leave in the host's /tmp (tmux, forwarded SSH
 # agents, other agents) aren't even visible to this agent.
 PrivateTmp=yes
+# New files private to the agent (its working folder's ACL lets readers in, #43).
+UMask=0077
 
 [Install]
 WantedBy=multi-user.target
