@@ -397,8 +397,8 @@ humans:
   alice:
     name: Alice
     slack_user: U0123ABC
-    admin: true                          # may read agents' logs, administer the lab
-    tailscale_login: alice@example.org   # how the web UI recognises her
+    admin: true                          # may read every agent's log, administer the lab
+    tailscale_login: alice@example.org   # how the web UI recognises her (her agents' logs)
     channels:
       - {type: slack_dm, on_timeout: deny}
 agents:
@@ -456,9 +456,12 @@ permissions are answered in Slack (§7).
 - **Machines**: power state, policy, idle since.
 - **Agents**: role, seat, host, service state.
 - **Deployed**: the config and framework commits every host runs (flagged if unreviewed).
-- **Agents' logs** (`/logs/<agent>`): **admins only**. The request's tailnet address must not
-  be a lab host; `tailscale whois` must name a person (not a tagged device) whose login is an
-  admin's in `lab.yaml`. Tailscale authenticates every packet with its device's key, so the
+- **Agents' logs** (`/logs/<agent>`): admins see every agent's; a member sees the whole log
+  of their **dedicated** agents (guest turns in their manager's threads included), and only
+  **their own entries** (their messages, their tasks) of shared agents and the secretary,
+  whose logs hold other members' work; anyone else gets 403. The request's tailnet address
+  must not be a lab host; `tailscale whois` must name a person (not a tagged device) whose
+  login is a member's `tailscale_login` in `lab.yaml`. Tailscale authenticates every packet with its device's key, so the
   address can't be forged.
 
 The main page needs no login: it's visible to whoever can reach the secretary host on the
@@ -599,6 +602,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-17 | **Agents can't read their lab secrets** (§6.4). |
 | 2026-10-17 | **No spend limits.** Transparency through the web UI instead. |
 | 2026-10-17 | **Agents' logs are for admins only** (`admin: true` + Tailscale identity). |
+| 2026-10-20 | **Members see their own agents' logs**: dedicated ones whole, their own entries of shared agents and the secretary (Tailscale identity). Admins see all. |
 | 2026-10-17 | **Usage percentages from a probe** of the seat's rate-limit headers, only while a window is open; "Check now" in the web UI. |
 | 2026-10-17 | **Admin-only actions, checked in code**: powering off a busy machine (after confirming), asking for someone else's token. **Busy** includes any process on a GPU or any GPU utilization (idle only after 0% in several readings in a row). |
 | 2026-10-17 | **Private config repository**: `lab.yaml` + `framework.lock` (the framework pinned by commit). **Only `main` is deployed**; every change is a reviewed PR. |

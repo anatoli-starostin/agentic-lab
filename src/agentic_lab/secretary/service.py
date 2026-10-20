@@ -35,7 +35,7 @@ from ..worker.usage import UsageLog, probe_loop, probe_now
 from . import home as H
 from . import power as P
 from .status import check_seat, collect, manager_status
-from .web import app
+from .web import app, own_entries
 import datetime as dt
 from types import SimpleNamespace
 
@@ -591,19 +591,28 @@ async def serve(lab_path, host, port):
     events.prune()
     usage = UsageLog(os.path.expanduser(f"{STATE}/usage.json"))
     sec_id = next(a for a, x in lab.agents.items() if x.get("role") == "secretary")
-    admins = {(h or {}).get("tailscale_login") for h in lab.humans.values()
-              if (h or {}).get("admin") and (h or {}).get("tailscale_login")}
+    logins = {(h or {}).get("tailscale_login"): hid for hid, h in lab.humans.items()
+              if (h or {}).get("tailscale_login")}
 
-    async def get_events(agent, hours):
+    async def get_events(agent, hours, member=None):
+        """An agent's events; with `member`, only theirs (their messages, their tasks)."""
         r = role(agent)
         if r == "worker":
-            return (await workers.call(agent, "recent_events", {"hours": hours}))["events"]
-        if r == "manager" and agent in managers:
-            return (await manager_status(lab, agent, managers[agent], hours))["events"]
-        if r == "secretary":
+            evs = (await workers.call(agent, "recent_events", {"hours": hours}))["events"]
+        elif r == "manager" and agent in managers:
+            evs = (await manager_status(lab, agent, managers[agent], hours))["events"]
+        elif r == "secretary":
             import datetime as _dt
-            return events.read(since=_dt.timedelta(hours=hours), limit=2000)
-        raise ValueError(f"no log for {agent!r}")
+            evs = events.read(since=_dt.timedelta(hours=hours), limit=2000)
+        else:
+            raise ValueError(f"no log for {agent!r}")
+        if member is None:
+            return evs
+        mine = set()
+        if r == "worker":
+            mine = {t["id"] for t in await workers.call(agent, "list_tasks", retries=0) or []
+                    if t.get("requester") == member}
+        return own_entries(evs, member, mine)
 
     def lab_host_ips():
         """The tailnet addresses of the lab's own hosts: agents run there, never admins."""
@@ -616,11 +625,11 @@ async def serve(lab_path, host, port):
                 pass
         return ips
 
-    async def is_admin(ip):
+    async def viewer(ip):
         """Who's behind this tailnet address? A person (not a tagged machine, not one of
-        the lab's hosts) whose login is an admin's in lab.yaml?"""
+        the lab's hosts) whose login is a member's tailscale_login in lab.yaml; else None."""
         if ip in lab_host_ips():
-            return False
+            return None
         try:
             p = await asyncio.create_subprocess_exec(
                 "tailscale", "whois", "--json", ip, stdout=asyncio.subprocess.PIPE,
@@ -628,11 +637,10 @@ async def serve(lab_path, host, port):
             out, _ = await asyncio.wait_for(p.communicate(), 10)
             who = json.loads(out or b"{}")
         except (OSError, ValueError, asyncio.TimeoutError):
-            return False
+            return None
         if (who.get("Node") or {}).get("Tags"):
-            return False
-        login = (who.get("UserProfile") or {}).get("LoginName")
-        return bool(login) and login in admins
+            return None
+        return logins.get((who.get("UserProfile") or {}).get("LoginName"))
     here = {aid for aid, a in lab.agents.items()
             if a.get("host") == next((x.get("host") for x in lab.agents.values()
                                       if x.get("role") == "secretary"), None)}
@@ -763,8 +771,10 @@ async def serve(lab_path, host, port):
         s = latest["state"]
         return {**s, "checks": checks} if s else s
 
-    server = uvicorn.Server(uvicorn.Config(app(state_with_checks, get_events, is_admin,
-                                               check_usage),
+    from .web import log_access
+    server = uvicorn.Server(uvicorn.Config(app(state_with_checks, get_events, viewer,
+                                               check_usage,
+                                               access=lambda m, a: log_access(lab, m, a)),
                                            host=host, port=port, log_level="warning"))
     log.info("secretary: watching %d worker(s), slack=%s, web UI on http://%s:%d/",
              len(workers.known()), sec.slack is not None, host, port)

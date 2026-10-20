@@ -42,6 +42,31 @@ def test_ago():
     assert web.ago(None) == "never"
 
 
+def test_log_access():
+    """#44: admins see every log; a member their dedicated agents' whole log, their own
+    entries of shared agents and the secretary; nothing of others' dedicated agents."""
+    from pathlib import Path
+
+    from agentic_lab import registry
+    lab = registry.load(Path(__file__).parent.parent / "examples" / "minimal" / "lab.yaml")
+    lab.humans["alice"]["admin"] = False
+    lab.humans["bob"] = {"name": "Bob"}
+    lab.agents["mgr-alice"]["access"] = "dedicated"
+    lab.agents["worker-a"]["access"] = "shared"
+    lab.agents["worker-b"].update(access="dedicated", human="alice")
+    acc = lambda m, a: web.log_access(lab, m, a)          # noqa: E731
+    assert acc("alice", "mgr-alice") == "all" and acc("alice", "worker-b") == "all"
+    assert acc("bob", "mgr-alice") is None and acc("bob", "worker-b") is None
+    assert acc("bob", "worker-a") == "own" and acc("bob", "secretary") == "own"
+    assert acc(None, "worker-a") is None and acc("mallory", "worker-a") is None
+    lab.humans["bob"]["admin"] = True
+    assert acc("bob", "mgr-alice") == "all"
+    evs = [{"member": "bob", "text": "hi"}, {"member": "carol", "text": "x"},
+           {"task": "t-1", "text": "bob's task"}, {"task": "t-2", "text": "carol's"},
+           {"kind": "note", "text": "no owner"}]
+    assert [e["text"] for e in web.own_entries(evs, "bob", {"t-1"})] == ["hi", "bob's task"]
+
+
 def test_logs_page_admin_only(free_port):
     import asyncio
     import threading
@@ -50,13 +75,17 @@ def test_logs_page_admin_only(free_port):
     import httpx2
     import uvicorn
 
-    async def events(agent, hours):
+    asked = []
+
+    async def events(agent, hours, member=None):
+        asked.append(member)
         return [{"at": NOW.isoformat(), "kind": "tool", "text": "Bash: <b>ls</b>", "task": "t-1"}]
 
-    def run(admin):
-        async def is_admin(ip):
-            return admin
-        server = uvicorn.Server(uvicorn.Config(web.app(lambda: STATE, events, is_admin),
+    def run(scope):
+        async def viewer(ip):
+            return "alice"
+        server = uvicorn.Server(uvicorn.Config(web.app(lambda: STATE, events, viewer,
+                                                       access=lambda m, a: scope),
                                                host="127.0.0.1", port=free_port, log_level="error"))
         th = threading.Thread(target=server.run, daemon=True)
         th.start()
@@ -68,9 +97,10 @@ def test_logs_page_admin_only(free_port):
             server.should_exit = True
             th.join()
 
-    assert run(False).status_code == 403
-    r = run(True)
+    assert run(None).status_code == 403
+    r = run("all")
     assert r.status_code == 200 and "&lt;b&gt;ls&lt;/b&gt;" in r.text and "t-1" in r.text
+    assert run("own").status_code == 200 and asked == [None, "alice"]   # filtered for alice
 
 
 def test_event_log(tmp_path):
