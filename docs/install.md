@@ -286,6 +286,6 @@ deployed, and the secretary checks in code that the person asking is an admin.
   Claude: a branch → `lab pr-link` → merge → `sudo lab apply`.
 - **Uninstalling** (the whole lab, a host or an agent): at the console only, with the
   admin's Claude, following `docs/uninstall.md`.
-- **Watching and debugging:** the web UI (`:8774`, logs for admins); `sudo lab logs
+- **Watching and debugging:** the web UI (`:8774`; logs: admins all, members their own agents'); `sudo lab logs
   <agent>`; `sudo lab debug <agent>` (the agent's own session, in the classic console);
   `lab manager ask` / `lab secretary ask` (talk without Slack).

@@ -37,8 +37,9 @@ _TOP = {"lab": (str, True), "tailnet": (str, False), "trust_tailnet": (bool, Fal
         "agents": (dict, True), "hosts": (dict, True), "credentials": (list, False),
         "github": (dict, False)}            # the agents' GitHub bot accounts
 _HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, False),
-          "admin": (bool, False),           # may see agents' logs in the web UI
-          "tailscale_login": (str, False)}  # how the web UI recognises them (tailscale whois)
+          "admin": (bool, False),           # may see every agent's log in the web UI
+          # how the web UI recognises them (tailscale whois): their own agents' logs
+          "tailscale_login": (str, False)}
 _CHANNEL = {"type": (str, True), "timeout_s": (int, False), "on_timeout": (str, False)}
 _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "model": (str, False), "access": (str, False), "workdir": (str, False),

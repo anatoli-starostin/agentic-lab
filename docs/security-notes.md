@@ -118,9 +118,10 @@ What it took:
   off (`force_off`).
 - **`sudo` on a lab host is admin power**: it reads every agent's files and logs there.
   Give members SSH without `sudo`.
-- **Admins' devices are the keys to the logs**: the web UI trusts Tailscale's identity of
-  the device (it can't be forged over the tailnet, but a stolen, unlocked admin laptop is
-  an admin).
+- **Members' devices are the keys to the logs**: the web UI trusts Tailscale's identity of
+  the device (it can't be forged over the tailnet, but a stolen, unlocked laptop is its
+  member: an admin's reads every log; a member's, their dedicated agents' logs and their
+  own entries of shared ones).
 - **Tailnet is trusted.** Any sandboxed command can reach any tailnet host (by name). This
   may tighten to per-host lists as the organisation grows.
 - **Allowed domains can carry data out.** A domain grant (say, GitHub) also lets a

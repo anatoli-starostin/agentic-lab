@@ -64,7 +64,7 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 | A Slack app manifest | `lab --lab ~/lab-config/lab.yaml slack-manifest <manager or secretary>` / `slack-manifest approvals` |
 | VM power | after the admin's one Nebius browser login: `sudo lab --lab ~/lab-config/lab.yaml nebius connect --project <id> [--forget-admin]` |
 | Talk to an agent without Slack | `sudo -u lab-<id> lab manager ask <id> --as <member> "..."` (or `secretary ask --as <member> "..."`) |
-| An agent's log | web UI `/logs/<agent>` (admins), or `sudo lab logs <agent> [--hours N]` on its host |
+| An agent's log | web UI `/logs/<agent>` (admins; members: their own agents), or `sudo lab logs <agent> [--hours N]` on its host |
 | Talk to an agent in the classic console | `sudo lab debug <agent>` (`--print "q"` for one question) |
 | The lab's web UI | `http://<secretary host>:8774/` on the tailnet |
 
@@ -135,7 +135,8 @@ asking before each one. The whole lab, one host, or one agent.
 
 ## Diagnosis
 
-- **See what an agent is doing or did:** its log in the web UI (`/logs/<agent>`, admins)
+- **See what an agent is doing or did:** its log in the web UI (`/logs/<agent>`: admins all; members their own agents, with
+  `tailscale_login` in `lab.yaml`)
   or `sudo lab logs <agent>` on its host; the service itself: `sudo journalctl -u
   lab-worker@<id>` (or `lab-manager@<id>`, `lab-secretary`, `lab-broker`, `lab-intake`).
 - **Talk to an agent directly:** `sudo lab debug <agent>`

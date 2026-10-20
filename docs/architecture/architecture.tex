@@ -154,7 +154,7 @@ A typical piece of work:
 % ---- secretary host
 \node[box, fill=agt] (sec) at (0,2) {Secretary\\\scriptsize agent};
 \node[box, fill=svc] (web) at (0,3.45) {Web UI :8774\\\scriptsize monitoring;\\[-2pt]
-      \scriptsize logs: admins only};
+      \scriptsize logs: own / admins};
 \node[box, fill=svc] (bro) at (2.9,2) {Broker\\\scriptsize :8772};
 \node[box, fill=svc] (int) at (5.8,2) {Intake\\\scriptsize :8771};
 \node[host, fit=(sec)(web)(bro)(int), label={[hl, anchor=north east]south east:secretary host}] (sh) {};
@@ -219,7 +219,7 @@ services, never by sandboxed agent commands, except GitHub for an agent with a b
 2 & Each Slack-facing agent has its own Slack app (the secretary, every manager), the broker
     has \emph{Lab Approvals}; all connect \emph{out} to Slack (Socket Mode, no public URL). \\
 3 & Over the tailnet: members' browsers open the web UI (served by the secretary;
-    monitoring only, agents' logs for admins only); their laptops hand secrets to the
+    monitoring only; agents' logs for their members, all of them for admins); their laptops hand secrets to the
     intake (one-time links and codes). \\
 4 & Managers give workers tasks and exchange files with them (MCP, a token per pair). \\
 5 & Every worker and every manager sends its permission requests to the broker, which asks
@@ -418,9 +418,10 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
   \item \textbf{The web UI} (\code{http://<secretary host>:8774/}, tailnet only, refreshes
     every 20 s): Claude usage per account, workers and their tasks, approvals and grants,
     machines, agents, and which configuration and framework commits are deployed.
-  \item \textbf{Agents' logs} (\code{/logs/<agent>}), \textbf{admins only}: the request's
-    tailnet address must not be a lab host; \code{tailscale whois} must name a person (not
-    a tagged device) whose login is an admin's in \code{lab.yaml}. Tailscale authenticates
+  \item \textbf{Agents' logs} (\code{/logs/<agent>}): admins see all; a member sees their
+    dedicated agents' whole logs and their own entries of shared agents and the secretary.
+    The request's tailnet address must not be a lab host; \code{tailscale whois} must name
+    a person (not a tagged device) whose login is a member's in \code{lab.yaml}. Tailscale authenticates
     every packet with the device's key, so the address can't be forged.
   \item \textbf{A Slack Home tab}: a personal digest (your usage, your tasks, approvals
     waiting for you, machines) with a link to the web UI.

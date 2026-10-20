@@ -5,7 +5,9 @@ Every reading shows when it was taken and which agent reported it. No external a
 
     GET /                 the page
     GET /state.json       the snapshot, for scripts
-    GET /logs/{agent}     an agent's event log (admins only: recognised by `tailscale whois`)
+    GET /logs/{agent}     an agent's event log, for whoever may see it (log_access): admins
+                          all; a member their dedicated agents' logs, and their own
+                          entries of shared agents (recognised by `tailscale whois`)
 """
 import datetime as dt
 import html
@@ -321,7 +323,31 @@ HEADERS = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inl
            "Cache-Control": "no-store"}
 
 
-def render_logs(state, agent, hours, events, error=None):
+def log_access(lab, member, agent):
+    """What `member` may see of `agent`'s log: "all", "own" (only their own entries), or
+    None. Admins: everything. A member: their dedicated agents' whole log (guest turns in
+    their manager's conversations included); of shared agents and the secretary (whose logs
+    hold other members' work), their own entries only."""
+    if member is None or member not in lab.humans or agent not in lab.agents:
+        return None
+    if (lab.humans.get(member) or {}).get("admin"):
+        return "all"
+    a = lab.agents[agent]
+    if a.get("role") in ("manager", "worker") and a.get("human") == member \
+            and a.get("access", "dedicated") == "dedicated":
+        return "all"
+    if a.get("role") == "secretary" or a.get("access") == "shared":
+        return "own"
+    return None
+
+
+def own_entries(events, member, task_ids=()):
+    """A member's own entries of a shared log: their messages, and their tasks' events."""
+    mine = set(task_ids)
+    return [ev for ev in events if ev.get("member") == member or ev.get("task") in mine]
+
+
+def render_logs(state, agent, hours, events, error=None, scope="all"):
     name = (state or {}).get("agents", {}).get(agent, {}).get("name", agent)
     picks = " · ".join(f"<a href='/logs/{e(agent)}?hours={h}'>{label}</a>"
                        for h, label in ((1, "1 h"), (24, "24 h"), (168, "7 days")))
@@ -342,12 +368,15 @@ def render_logs(state, agent, hours, events, error=None):
     return (f"<!doctype html><html><head><meta charset='utf-8'><title>{e(name)} · logs</title>"
             f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
             f"<style>{CSS}</style></head><body><header><h1>{e(name)} · log</h1>"
-            f"<span class='muted small'>admins only</span></header>{body}</body></html>")
+            f"<span class='muted small'>{'all entries' if scope == 'all' else 'your entries only'}"
+            f"</span></header>{body}</body></html>")
 
 
-def app(get_state, get_events=None, is_admin=None, check_usage=None):
-    """`get_events(agent, hours)` (async) -> events; `is_admin(client_ip)` (async) -> bool;
-    `check_usage(human)` (async): read that seat's limits now."""
+def app(get_state, get_events=None, viewer=None, check_usage=None, access=None):
+    """`get_events(agent, hours, member)` (async) -> events (only `member`'s own entries
+    when given); `viewer(client_ip)` (async) -> the member behind that address, or None;
+    `access(member, agent)` -> "all" | "own" | None (log_access); `check_usage(human)`
+    (async): read that seat's limits now."""
     async def check(request):
         if check_usage is not None:
             await check_usage(request.path_params["human"])
@@ -374,18 +403,24 @@ def app(get_state, get_events=None, is_admin=None, check_usage=None):
 
     async def logs(request):
         agent = request.path_params["agent"]
-        if is_admin is None or get_events is None or not await is_admin(request.client.host):
-            return HTMLResponse("<!doctype html><p>Agents' logs are for the lab's admins only.</p>",
+        member = await viewer(request.client.host) if viewer is not None else None
+        scope = access(member, agent) if access is not None and member else None
+        if get_events is None or scope is None:
+            return HTMLResponse("<!doctype html><p>You can see the logs of your own agents "
+                                "(admins: every agent's). Your Tailscale login must be in "
+                                "lab.yaml (tailscale_login).</p>",
                                 status_code=403, headers=HEADERS)
         try:
             hours = min(max(float(request.query_params.get("hours", 24)), 0.1), 336)
         except ValueError:
             hours = 24
         try:
-            events, error = await get_events(agent, hours), None
+            events, error = await get_events(agent, hours,
+                                             member if scope == "own" else None), None
         except Exception as ex:
             events, error = [], f"couldn't fetch the log: {ex}"
-        return HTMLResponse(render_logs(get_state(), agent, hours, events, error), headers=HEADERS)
+        return HTMLResponse(render_logs(get_state(), agent, hours, events, error, scope),
+                            headers=HEADERS)
 
     return Starlette(routes=[Route("/", page), Route("/state.json", state_json),
                              Route("/logs/{agent}", logs),
