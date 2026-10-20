@@ -8,6 +8,7 @@ roles, channels, policies, expiring credentials) and returns every issue at once
 `lab check` run shows everything that's wrong.
 """
 import datetime as dt
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -25,6 +26,8 @@ DEFAULT_COMPACT_PERCENT = {"manager": 17}
 USER_PREFIX = "lab-"
 # an agent id becomes part of its Unix user name: lab-<agent-id>, at most 32 characters
 _AGENT_ID = re.compile(r"^[a-z][a-z0-9-]*$")
+_UNIX_USER = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+READERS_GROUP = "lab-readers"
 CHANNEL_TYPES = ("slack_dm",)   # first version: Slack DM only (DESIGN.md §7)
 ACCESS = ("shared", "dedicated")
 HOST_KINDS = ("onprem", "cloud")
@@ -54,7 +57,9 @@ _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False)
          # minutes idle before the secretary stops it (cloud hosts: required; 0: never)
          "idle_stop_min": (int, False), "tailnet_name": (str, False),
          "ssh_user": (str, False),      # who `lab apply` logs in as (default: the admin)
-         "idle_stop_with_managers": (bool, False)}  # default true; false: managers keep it busy
+         "idle_stop_with_managers": (bool, False),  # default true; false: managers keep it busy
+         # Linux users here who may read its agents' working folders (#43; lab-readers)
+         "readers": (list, False)}
 _GITHUB = {"accounts": (dict, True)}
 # a bot account (a GitHub machine user) an agent acts as
 # a GitHub identity: a bot account (a machine user, with a fine-grained token), or a GitHub
@@ -129,6 +134,18 @@ class Lab:
         """The agent's standing grants from lab.yaml (raises GrantError if malformed)."""
         return [G.from_mapping(m) for m in self.agents[agent_id].get("grants") or []]
 
+    def readers(self, agent_id):
+        """The Linux users on the agent's host who may read its working folder (#43)."""
+        return list((self.hosts.get(self.agents[agent_id].get("host")) or {}).get("readers") or [])
+
+    def agent_tmpdir(self, agent_id):
+        """A stable TMPDIR, `<workdir>/tmp`, when its host has readers (so they find the
+        agent's temporary files; the service's own /tmp is private and changes on restart)."""
+        a = self.agents[agent_id]
+        if not self.readers(agent_id) or a.get("role") not in ("worker", "manager"):
+            return None
+        return os.path.join(os.path.expanduser(a.get("workdir", DEFAULT_WORKDIR)), "tmp")
+
     def agent_settings(self, agent_id, extra_grants=(), now=None):
         """The agent's Claude Code settings: the sandbox model + its grants (DESIGN.md §6)."""
         a = self.agents[agent_id]
@@ -141,6 +158,7 @@ class Lab:
             gpu=a.get("gpu", a.get("role") == "worker"),
             compact_percent=a.get("compact_percent",
                                   DEFAULT_COMPACT_PERCENT.get(a.get("role"))),
+            tmpdir=self.agent_tmpdir(agent_id),
             # the secretary's identity is its service's (config repo PRs), not its agent's
             domains=github.DOMAINS if a.get("github") and a.get("role") != "secretary"
             else ())
@@ -256,6 +274,9 @@ def check(lab: Lab, today: dt.date | None = None):
         if h.get("kind") != "cloud" and stop:
             W(where, "idle_stop_min only applies to cloud hosts (the secretary can't power "
                      "this one)")
+        for r in h.get("readers") or []:
+            if not isinstance(r, str) or not _UNIX_USER.match(r):
+                E(where, f"readers: {r!r} isn't a Linux user name")
         if h.get("idle_stop_with_managers") is True:
             W(where, "idle_stop_with_managers: true is the default (managers never keep a "
                      "host on); only false changes anything")

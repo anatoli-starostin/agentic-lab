@@ -74,6 +74,7 @@ sudo rm -f /etc/systemd/system/lab-keep-awake.service /etc/systemd/system/lab-ke
 sudo rm -rf /etc/agentic-lab /opt/agentic-lab /var/log/agentic-lab /var/lib/agentic-lab
 sudo rm -f /usr/local/bin/lab /etc/sudoers.d/agentic-lab /etc/sudoers.d/agentic-lab-runs
 sudo rm -f /etc/systemd/system/lab-run-*@.service     # workers' long runs (stopped with lab-*)
+sudo groupdel lab-readers 2>/dev/null                 # hosts with readers
 sudo rm -f /etc/systemd/system/lab-worker@.service /etc/systemd/system/lab-manager@.service \
            /etc/systemd/system/lab-secretary.service /etc/systemd/system/lab-broker.service \
            /etc/systemd/system/lab-intake.service

@@ -80,6 +80,10 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
     # tools' caches in the working folder, for the agent and everything it starts (#45);
     # the settings say so too, this also covers what doesn't read them
     env.update(cache_env(workdir))
+    tmpdir = lab.agent_tmpdir(agent_id)      # hosts with readers: a tmp they can find (#43)
+    if tmpdir:
+        os.makedirs(tmpdir, exist_ok=True)
+        env["TMPDIR"] = tmpdir
     broker_cfg = yaml.safe_load(_read_secret(f"{CONFIG}/broker.yaml") or "") or {}
     if broker_cfg.get("url") and broker_cfg.get("token"):
         approver = BrokerApprover(broker_cfg["url"], broker_cfg["token"])

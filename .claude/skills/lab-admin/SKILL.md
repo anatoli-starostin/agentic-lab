@@ -149,6 +149,9 @@ asking before each one. The whole lab, one host, or one agent.
   `sandbox.bwrapPath` at `/usr/local/libexec/agentic-lab/bwrap-gpu`.
 - **`cuInit` returns 304 inside the sandbox:** the agent's settings lack
   `allowAllUnixSockets` (set automatically for agents with `gpu: true`).
+- **Someone on a host wants to see an agent's files without sudo:** add their Linux user to
+  the host's `readers:` in `lab.yaml` (PR → merge → deploy); they then read the agents'
+  working folders and their `tmp` (never secrets or state), after logging in again.
 - **A long run** (a worker's job that outlives its session, approved by a human each time):
   `systemctl list-units 'lab-run-*'` on the host; its log is in the worker's
   `~/work/runs/<name>-<id>/log` (`sudo cat`); stop one with

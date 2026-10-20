@@ -114,8 +114,9 @@ def cmd_worker_run_exec(args):
     if a.get("role") != "worker":
         raise SystemExit(f"{args.agent!r} is not a worker")
     workdir = os.path.expanduser(a.get("workdir", "~/work"))
+    tmpdir = lab.agent_tmpdir(args.agent)
     return run_exec(RunStore(os.path.expanduser(f"{STATE}/runs"), workdir, args.agent),
-                    args.run)
+                    args.run, env={"TMPDIR": tmpdir} if tmpdir else None)
 
 
 STATE = "~/.local/state/agentic-lab"

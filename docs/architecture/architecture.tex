@@ -489,7 +489,8 @@ Section & Contents \\
   \code{slack\_app}, \code{turn\_budget\_min} (managers), \code{keep\_free\_gb} (workers:
   free disk below which it prunes its caches and environments; default 30). \\
 \code{hosts} & \code{kind} (onprem/cloud), \code{provider}, \code{instance},
-  \code{idle\_stop\_min} (required on cloud hosts; 0: never), \code{tailnet\_name}, \code{ssh\_user}, \code{idle\_stop\_with\_managers}. \\
+  \code{idle\_stop\_min} (required on cloud hosts; 0: never), \code{readers} (Linux users
+  who may read its agents' working folders), \code{tailnet\_name}, \code{ssh\_user}, \code{idle\_stop\_with\_managers}. \\
 \code{github} & \code{accounts}: the agents' identities: bot accounts (commit
   \code{email}, token \code{expires}) and GitHub Apps (\code{app\_id}, \code{email}, and
   \code{installation\_id} when the app is installed in several places). \\
