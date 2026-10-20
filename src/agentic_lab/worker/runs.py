@@ -188,9 +188,11 @@ def run_exec(store: RunStore, run_id):
     with open(spec["log"], "ab") as log:
         log.write(f"== {_now()} run {run_id}: {spec['command']}\n".encode())
         log.flush()
+        from ..policy.sandbox import cache_env      # the same caches as its tasks (#45)
         p = subprocess.Popen(["/bin/bash", "-c", spec["command"]], cwd=spec["cwd"],
                              stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
-                             start_new_session=True)
+                             start_new_session=True,
+                             env={**os.environ, **cache_env(store.workdir)})
         store._write(status, {"state": "running", "started": _now(), "pid": p.pid})
         stopped = {}
 

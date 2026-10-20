@@ -41,6 +41,20 @@ NEBIUS = "~/.nebius"
 GPU_VISIBLE = ["/run/nvidia-persistenced"]
 
 
+def cache_env(workdir):
+    """Every common tool's cache inside the working folder (#45): ~/.cache isn't writable
+    in the sandbox, and a cache in /tmp is lost on every restart. Kept across tasks, so the
+    second task on a project reuses its downloads, wheels and compiled extensions."""
+    cache = os.path.join(_abs(workdir), ".cache")
+    return {"XDG_CACHE_HOME": cache,
+            "UV_CACHE_DIR": os.path.join(cache, "uv"),
+            "PIP_CACHE_DIR": os.path.join(cache, "pip"),
+            "TORCH_EXTENSIONS_DIR": os.path.join(cache, "torch_extensions"),
+            "TRITON_CACHE_DIR": os.path.join(cache, "triton"),
+            "HF_HOME": os.path.join(cache, "huggingface"),
+            "CUDA_CACHE_PATH": os.path.join(cache, "nv")}
+
+
 def _abs(path):
     return os.path.normpath(os.path.expanduser(path))
 
@@ -76,10 +90,7 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
     for g in live:
         {"domain": domains, "write": writes, "tool": tools}[g.kind].append(g.value)
     writable = [_abs(workdir), TMP] + [_abs(w) for w in writes]
-    # Tools keep their caches (pip, uv, Hugging Face, torch hub...) under XDG_CACHE_HOME.
-    # ~/.cache isn't writable in the sandbox, so point it into the working folder: caches
-    # then persist between tasks without widening the sandbox.
-    cache = os.path.join(_abs(workdir), ".cache")
+    # caches go to the working folder (cache_env): writable, kept between tasks
     secrets = _abs(SECRETS)
     private = [secrets, _abs(STATE), _abs(NEBIUS)]
 
@@ -103,7 +114,7 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
             },
             "credentials": {"envVars": [{"name": n, "mode": "deny"} for n in SECRET_ENV]},
         },
-        "env": {"XDG_CACHE_HOME": cache,
+        "env": {**cache_env(workdir),
                 **({"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": str(compact_percent)}
                    if compact_percent else {})},
         "permissions": {

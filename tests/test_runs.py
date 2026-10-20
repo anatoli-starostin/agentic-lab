@@ -239,3 +239,37 @@ def test_a_run_cant_see_the_agents_lab_secrets():
     unit = R.unit_template("worker-a", "lab-worker-a")
     assert "InaccessiblePaths=-/home/lab-worker-a/.config/agentic-lab" in unit
     assert "%h" not in unit                     # %h is root's home in a system unit
+
+
+def test_warm_environments(tmp_path, monkeypatch):
+    """#45: tools' caches in the working folder (agent, its commands, its runs); the prompt
+    says how to reuse checkouts and envs; low disk is said before a new task."""
+    from agentic_lab.policy import sandbox
+    from agentic_lab.worker import runner as RN
+    env = sandbox.cache_env("/w")
+    assert env["TORCH_EXTENSIONS_DIR"] == "/w/.cache/torch_extensions"
+    assert {"UV_CACHE_DIR", "PIP_CACHE_DIR", "TRITON_CACHE_DIR", "HF_HOME", "CUDA_CACHE_PATH",
+            "XDG_CACHE_HOME"} <= set(env)
+    assert sandbox.settings("/w")["env"]["HF_HOME"] == "/w/.cache/huggingface"
+    tasks, runs, units = stores(tmp_path)
+    r = runs.start("t-1", "env", "echo $TORCH_EXTENSIONS_DIR")
+    R.run_exec(runs, r["id"])
+    assert f"{tmp_path}/work/.cache/torch_extensions" in R.log_tail(r["log"])
+    t = tasks.submit("x", "alice", "mgr")
+    prompt = RN._system_prompt("worker-a", t, keep_free_gb=77)
+    assert "ENVIRONMENTS.md" in prompt and "77 GB" in prompt and "{" not in prompt
+    runner = SdkRunner("worker-a", str(tmp_path), lambda g: {}, keep_free_gb=10**6)
+    assert runner._disk_note().startswith("[lab] Disk is low")
+    runner.keep_free_gb = 0
+    assert runner._disk_note() == ""
+
+
+def test_keep_free_gb_is_for_workers(tmp_path):
+    import yaml
+    d = yaml.safe_load(EXAMPLE.read_text())
+    d["agents"]["worker-a"]["keep_free_gb"] = 50
+    d["agents"]["mgr-alice"]["keep_free_gb"] = 50
+    p = tmp_path / "lab.yaml"
+    p.write_text(yaml.safe_dump(d))
+    errs = [str(i) for i in registry.check(registry.load(p)) if i.level == "error"]
+    assert len(errs) == 1 and "agents.mgr-alice: 'keep_free_gb' applies to workers only" in errs[0]

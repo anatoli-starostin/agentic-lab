@@ -154,6 +154,17 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   its own runs, through one sudo rule for `lab-run-ctl`; a run has `NoNewPrivileges` and
   can't see the agent's lab secrets (`~/.config/agentic-lab`: its member's Claude seat
   token, lab tokens).
+- **Warm environments**: setting a project up often takes longer than the experiment, so
+  a worker keeps what it builds in its working folder. The service points every common
+  tool's cache there (`XDG_CACHE_HOME`, `UV_CACHE_DIR`, `PIP_CACHE_DIR`,
+  `TORCH_EXTENSIONS_DIR`, `TRITON_CACHE_DIR`, `HF_HOME`, `CUDA_CACHE_PATH` → `.cache/…`,
+  for its session, its commands and its long runs; `~/.cache` isn't writable in the
+  sandbox and `/tmp` is lost on restarts). Its prompt sets a convention: checkouts in
+  `repos/<owner>/<repo>` (fetch, don't clone again), virtual environments in `envs/<name>`,
+  both listed in `ENVIRONMENTS.md` (repo, commit or lock file, how to use), read first and
+  kept up to date; rebuild only if the lock file changed. Below `keep_free_gb` of free
+  disk (per worker, default 30) it prunes caches and old environments, least recently used
+  first, and says so in the task's result; a new task is told when disk is low.
 - **Watching and debugging** (the same for every agent): the agent's own **event log**
   (messages, tool calls, results, approvals, task events), shown to admins in the web UI;
   `sudo lab debug <agent>` stops its service and opens **the same session** in the classic
