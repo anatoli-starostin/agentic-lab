@@ -22,7 +22,7 @@ from ..worker.runner import allowed_without_asking
 warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
 
 TOOL_NAMES = ("lab_state", "worker_tasks", "task_result", "ask_member_for_claude_token",
-              "announce", "power", "read_lab_config", "propose_lab_change", "offer_deploy",
+              "announce", "power", "power_history", "read_lab_config", "propose_lab_change", "offer_deploy",
               "check_slack_app", "request_slack_app", "request_github_token",
               "redraw_app_icon", "request_github_app", "check_github_app")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
@@ -37,7 +37,8 @@ agents. You keep the lab running and answer questions about it, in Slack.
   grants, Claude usage per account with when each number was read), a past task's result,
   comparing a few tasks, asking a member for their Claude token, posting notices, and
   powering the lab's cloud machines on and off when a member asks (say what it costs to
-  leave a GPU machine on; idle GPU machines are stopped automatically).
+  leave a GPU machine on; idle GPU machines are stopped automatically). Asked why a machine
+  is on or off, or who stopped it: power_history (your own idle stops are in it).
 - What you don't do: research, experiments, writing code, analysing data in depth. Say
   kindly that this is a manager's job and name the member's manager if you know it
   (lab_state lists the agents).
@@ -137,6 +138,15 @@ def build_tools(ctx):
             return text("action must be status, on, off or force_off")
         return text(await ctx.power(args["host"], args["action"]))
 
+    @tool("power_history", "Recent power actions on the lab's machines, yours included: when, "
+          "on or off, and why (idle stop, a member's request in Slack or from the console, an "
+          "admin's force_off). Use it when asked why a machine is on or off, or who stopped "
+          "it. host: a host id (empty: all); hours: how far back (default 48).",
+          {"type": "object", "properties": {"host": {"type": "string"},
+                                            "hours": {"type": "integer"}}})
+    async def power_history(args):
+        return text(ctx.power_history(args.get("host") or None, int(args.get("hours") or 48)))
+
     @tool("read_lab_config", "Admins only: lab.yaml and framework.lock as on the config "
           "repo's main now (fetched).", {})
     async def read_config(args):
@@ -195,7 +205,8 @@ def build_tools(ctx):
         return text(await ctx.slack_verify(args["owner"]))
 
     return create_sdk_mcp_server("lab", tools=[lab_state, worker_tasks, task_result,
-                                               ask_member, announce, power, read_config,
+                                               ask_member, announce, power, power_history,
+                                               read_config,
                                                propose, offer_deploy, check_slack_app,
                                                request_slack_app, request_github_token,
                                                redraw_app_icon, request_github_app,

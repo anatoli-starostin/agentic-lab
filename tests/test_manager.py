@@ -635,3 +635,33 @@ def test_a_host_with_only_managers_needs_an_admin_to_power_off():
     lab.agents["worker-a"]["host"] = "mgr-vm-01"   # with a worker: judged by it
     seen = {"agents": {"worker-a": {"up": True, "queue": {}}, "mgr-alice": {"up": True}}}
     assert P.busy(lab, "mgr-vm-01", seen) is None
+
+
+def test_power_actions_are_on_record_and_the_secretary_can_tell(monkeypatch, tmp_path):
+    """#39: the secretary's chat sees past power actions (its own idle stops included);
+    #41: actions from the console are logged too, saying so."""
+    from agentic_lab.eventlog import EventLog
+    from agentic_lab.secretary import power as P
+    from agentic_lab.secretary.service import Secretary
+    lab = registry.load(EXAMPLE)
+    lab.humans["alice"]["admin"] = True
+
+    async def noop(lab_, host):
+        pass
+    monkeypatch.setattr(P, "stop", noop)
+    monkeypatch.setattr(P, "start", noop)
+    sec = Secretary.__new__(Secretary)
+    sec.lab, sec.slack, sec.workers = lab, None, None
+    sec.state = SimpleNamespace(save=None)
+    sec.events = EventLog(tmp_path / "events")
+    sec.latest = {"state": {"agents": {"worker-a": {"up": True, "queue": {}},
+                                       "worker-b": {"up": True, "queue": {}}}}}
+    asyncio.run(sec.power("gpu-a", "off", "idle for 30 min"))           # an idle stop
+    sec.via = "from the console (Unix user admin)"
+    asyncio.run(sec.ctx("alice").power("gpu-b", "on"))
+    hist = sec.ctx("alice").power_history()
+    assert "gpu-a off (idle for 30 min)" in hist
+    assert "gpu-b on (asked by Alice from the console (Unix user admin))" in hist
+    assert "gpu-a" not in sec.ctx("alice").power_history("gpu-b")
+    ev = [e for e in sec.events.read() if e["kind"] == "power"]
+    assert ev[1]["member"] == "alice" and ev[1]["host"] == "gpu-b"

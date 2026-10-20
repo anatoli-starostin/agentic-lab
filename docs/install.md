@@ -194,6 +194,15 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
    - Create the VM (Nebius console, Ubuntu 24.04 with NVIDIA drivers), join it to the
      tailnet, and let the admin SSH in with passwordless sudo. If the image's login user
      isn't the admin's name, add `ssh_user: <user>` to the host in `lab.yaml`.
+   - **SSH must not wait for a browser.** With Tailscale SSH on and the tailnet's default
+     SSH rule (action *check*), `ssh` to the host waits for a confirmation in a browser, so
+     `lab apply` and the secretary's deploys hang. Either give the admin an *accept* rule
+     in the tailnet's SSH policy, or leave Tailscale SSH off on lab hosts and use OpenSSH
+     (key-only) over the tailnet.
+   - **No public IP needed.** Once a VM is on the tailnet it needs no public IP: on Nebius,
+     a VM without one still reaches the internet through the default egress gateway.
+     Better to create it without one: removing the public IP of a running VM left it
+     without network until it was stopped and started.
 
 11. **Everything else** (Claude)
     - A GPU host that's stopped can't be set up: ask the secretary to power it on first
@@ -247,11 +256,17 @@ deployed, and the secretary checks in code that the person asking is an admin.
     the org with access to the lab's repos only): the secretary adds it to `lab.yaml` →
     PR → merge → deploy; then it posts how to make the bot's fine-grained token (contents,
     pull requests and issues of those repos) and a one-time link for it; then a redeploy.
+    Two traps of fine-grained tokens: they can't reach a repository owned by *another
+    personal account*, even as a collaborator (only the bot's own and its organisations'
+    repos), and an organisation's policy on fine-grained tokens can hide all its
+    repositories from an otherwise approved token. Then use a classic token with the least
+    scope (`public_repo` for public repos, `repo` for private). A GitHub App has neither
+    problem.
 
   The agent then uses git and `gh` as that identity. An agent can also have **several,
-  picked by repository**, e.g. a DeepSpike identity by default and an open-source
+  picked by repository**, e.g. a lab identity by default and an open-source
   project's bot for that project:
-  `github: {deepspike-flash: default, spikyclaudebot: [anatoli-starostin/spiky]}`. **Protect `main`** in each repo (pull requests only, reviews by human
+  `github: {acme-flash: default, spikyclaudebot: [anatoli-starostin/spiky]}`. **Protect `main`** in each repo (pull requests only, reviews by human
   code owners, no bypass for bots): that is what keeps bots from approving or merging.
 - **People working on a lab machine directly** (not through agents): tell them to create
   `~/.lab-keep-awake` while they need the machine (`echo "CPU sweep until Friday" >

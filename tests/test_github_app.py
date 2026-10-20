@@ -33,11 +33,11 @@ def lab_with_both(tmp_path):
     """A manager with a GitHub App, a worker with a full bot account: both kinds at once."""
     d = yaml.safe_load(SINGLE.read_text())
     d["github"] = {"accounts": {
-        "deepspike-flash": {"app_id": 123456, "email": "999+deepspike-flash[bot]@users.noreply.github.com"},
+        "acme-flash": {"app_id": 123456, "email": "999+acme-flash[bot]@users.noreply.github.com"},
         "worker-bot": {}}}
     for a in d["agents"].values():
         if a["role"] == "manager":
-            a["github"] = "deepspike-flash"
+            a["github"] = "acme-flash"
         elif a["role"] == "worker":
             a["github"] = "worker-bot"
     p = tmp_path / "lab.yaml"
@@ -53,13 +53,13 @@ def test_both_kinds_side_by_side(tmp_path):
     lab = lab_with_both(tmp_path)
     assert [i for i in registry.check(lab) if i.level == "error"] == []
     mgr, worker = first(lab, "manager"), first(lab, "worker")
-    assert lab.github_is_app("deepspike-flash") and not lab.github_is_app("worker-bot")
-    assert lab.github_login("deepspike-flash") == "deepspike-flash[bot]"
-    assert lab.github_email("deepspike-flash").startswith("999+deepspike-flash[bot]")
-    assert "GitHub App deepspike-flash[bot]" in GH.instructions(lab, mgr)
+    assert lab.github_is_app("acme-flash") and not lab.github_is_app("worker-bot")
+    assert lab.github_login("acme-flash") == "acme-flash[bot]"
+    assert lab.github_email("acme-flash").startswith("999+acme-flash[bot]")
+    assert "GitHub App acme-flash[bot]" in GH.instructions(lab, mgr)
     assert "bot account worker-bot" in GH.instructions(lab, worker)
     # deploy: the app's key for the manager, the token for the worker
-    secrets = {("service:github-deepspike-flash", "github-app"): "-----BEGIN PRIVATE KEY-----x",
+    secrets = {("service:github-acme-flash", "github-app"): "-----BEGIN PRIVATE KEY-----x",
                ("service:github-worker-bot", "github-token"): "ghp_" + "w" * 36}
 
     class Tok:
@@ -69,7 +69,7 @@ def test_both_kinds_side_by_side(tmp_path):
         (o, n), None if n in ("nebius-sa", "github-app", "github-token") else "secret"))
     files = {p: c for p, (_, _, c) in plan["files"].items()}
     cfg = "/home/{}/.config/agentic-lab/github"
-    assert files[f"{cfg.format(lab.unix_user(mgr))}/deepspike-flash.pem"].startswith("-----BEGIN")
+    assert files[f"{cfg.format(lab.unix_user(mgr))}/acme-flash.pem"].startswith("-----BEGIN")
     assert files[f"{cfg.format(lab.unix_user(worker))}/worker-bot.token"].startswith("ghp_")
 
 
@@ -93,10 +93,10 @@ def test_app_jwt_and_minting(key):
     with pytest.raises(GA.AppError, match="several places"):
         GA.mint(1, pem, call=lambda *a, **k: [{"id": 1}, {"id": 2}])
     info = GA.check(123456, pem, users=lambda login: {"id": 999}, call=lambda m, p, b, body=None: (
-        {"slug": "deepspike-flash"} if p == "/app" else
-        [{"id": 42, "account": {"login": "deepspike"}, "repository_selection": "selected"}]))
-    assert info["bot"] == "deepspike-flash[bot]"
-    assert info["email"] == "999+deepspike-flash[bot]@users.noreply.github.com"
+        {"slug": "acme-flash"} if p == "/app" else
+        [{"id": 42, "account": {"login": "acme"}, "repository_selection": "selected"}]))
+    assert info["bot"] == "acme-flash[bot]"
+    assert info["email"] == "999+acme-flash[bot]@users.noreply.github.com"
 
 
 def test_token_kept_where_git_and_gh_read_it(tmp_path):
@@ -108,21 +108,21 @@ def test_token_kept_where_git_and_gh_read_it(tmp_path):
     def fake_mint(app_id, key, inst):
         stop.set()                                   # one round is enough here
         return "ghs_fresh", dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)
-    asyncio.run(GA.keep_token(1, "deepspike-flash[bot]", stop, key_path=str(keyfile),
+    asyncio.run(GA.keep_token(1, "acme-flash[bot]", stop, key_path=str(keyfile),
                               token_dir=str(tdir), mint_fn=fake_mint))
     assert (tdir / "token").read_text() == "ghs_fresh\n"
     assert "oauth_token: ghs_fresh" in (tdir / "gh" / "hosts.yml").read_text()
     # the agent's git, with the app's token kept in its identity's folder
     lab = lab_with_both(tmp_path)
     root = tmp_path / "share"
-    (root / "deepspike-flash").mkdir(parents=True)
-    GA.write_token("ghs_fresh", "deepspike-flash[bot]", str(root / "deepspike-flash"))
+    (root / "acme-flash").mkdir(parents=True)
+    GA.write_token("ghs_fresh", "acme-flash[bot]", str(root / "acme-flash"))
     helper = Path(__file__).parent.parent / "deploy" / "worker" / "lab-git-credential"
     env = GH.prepare(lab, first(lab, "manager"), root=str(root), secrets=str(tmp_path / "s"),
                      helper=str(helper))
-    assert env["GH_CONFIG_DIR"] == str(root / "deepspike-flash" / "gh") and "GH_TOKEN" not in env
+    assert env["GH_CONFIG_DIR"] == str(root / "acme-flash" / "gh") and "GH_TOKEN" not in env
     r = subprocess.run(["git", "credential", "fill"],
-                       input="protocol=https\nhost=github.com\npath=deepspike/x.git\n\n",
+                       input="protocol=https\nhost=github.com\npath=acme/x.git\n\n",
                        capture_output=True, text=True, timeout=20, cwd=tmp_path,
                        env={**os.environ, **env, "HOME": str(tmp_path)})
     assert "username=x-access-token" in r.stdout and "password=ghs_fresh" in r.stdout

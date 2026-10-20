@@ -96,12 +96,16 @@ or updates users, secrets and services on every host.
   - *A GitHub App*: the admin picks its name; `lab secret request service:github-<slug>
     github-app` (a one-time link for its private key); guide the admin through creating the
     app (organisation Settings → Developer settings → GitHub Apps → New: no webhook;
-    Contents, Pull requests, Issues read and write; generate a private key; install on the
+    Contents, Pull requests, Issues read and write; its key under *Credentials → Key pairs →
+    New key*; install on the
     lab's repos); then `sudo lab github-app-check <slug> --app-id N` prints the `lab.yaml`
     lines (`github.accounts.<slug>: {app_id, email}`; add `installation_id` if the app is
     installed in several places) → with `github: <slug>` on the agent
     → PR → merge → deploy.
-  - *A full bot account* (the admin creates the GitHub user): under `github.accounts`,
+  - *A full bot account* (the admin creates the GitHub user). Its fine-grained token can't
+    reach a repo owned by another personal account (only the bot's own and its orgs'), and
+    an org's policy can hide its repos from fine-grained tokens: then a classic token with
+    only `public_repo` (public) or `repo` (private); an App avoids both. Under `github.accounts`,
     `github: <bot>` on the agent → PR → merge → deploy → its token (`lab secret request
     service:github-<bot> github-token`) → deploy again.
   Several identities for one agent, picked by repository: `github: {<name>: default,

@@ -190,7 +190,7 @@ A manager or worker may have a GitHub identity (`github: <name>`), or **several,
 by repository**:
 ```yaml
 github:
-  deepspike-flash: default                     # everything else
+  acme-flash: default                     # everything else
   spikyclaudebot: [anatoli-starostin/spiky]    # these repositories (owner/* too)
 ```
 git picks the identity by the repository by itself (a credential helper for the token,
@@ -259,7 +259,7 @@ task waiting on its long runs doesn't count (§4.2).
 |---|---|---|
 | Internet | none (plus granted hosts; github.com for an agent with a bot) | allowed after a human says yes |
 | Tailnet (lab resources) | **allowed**, by tailnet name (raw IPs refused) | — |
-| Local files | write the **working folder and /tmp**; read anything except `/run` and its service's secrets and state | writes elsewhere need permission |
+| Local files | write the **working folder and /tmp**; read anything except `/run` and its service's secrets and state (`~/.config/agentic-lab`, `~/.local/state/agentic-lab`, `~/.nebius`) | writes elsewhere need permission |
 | GPU | available to workers | — |
 
 Enforcement is **Claude Code's built-in sandbox** (bubblewrap + seccomp + a network proxy),

@@ -593,9 +593,9 @@ an agent asked to recite a token refuses.
 
 \begin{itemize}
   \item A manager or worker may have a GitHub identity (\code{github: <name>} on the agent),
-    or \textbf{several, picked by repository}: for example a DeepSpike identity by default
+    or \textbf{several, picked by repository}: for example a lab identity by default
     and the open-source project's bot for that project,
-    \code{github: \{deepspike-flash: default, spikyclaudebot: [anatoli-starostin/spiky]\}}.
+    \code{github: \{acme-flash: default, spikyclaudebot: [anatoli-starostin/spiky]\}}.
     git picks the identity by the repository by itself (the token through a credential
     helper, the commit author through git's conditional configuration); for \code{gh} on a
     mapped repository the agent passes that identity's token. Several agents may share an
