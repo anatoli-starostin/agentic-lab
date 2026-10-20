@@ -434,7 +434,9 @@ def cmd_nebius_connect(args):
         sys.exit("lab.yaml has no secretary")
     try:
         connect(os.environ["SUDO_USER"], lab.unix_user(sec), args.project,
-                forget_admin=args.forget_admin)
+                forget_admin=args.forget_admin,
+                instances={h: x["instance"] for h, x in lab.hosts.items()
+                           if (x or {}).get("provider") == "nebius" and (x or {}).get("instance")})
     except ConnectError as e:
         sys.exit(f"lab nebius connect: {e}")
     return 0

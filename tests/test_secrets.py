@@ -239,6 +239,15 @@ def test_web_form(tmp_path, free_port):
         assert "Stored" in ok.text
         assert httpx2.get(url).status_code == 404          # the link works once
         assert it.load("service:broker", "slack-app").startswith("SLACK_BOT_TOKEN=xoxb-")
+        # one-field secrets, whatever their field's name (#37: github-app's is private_key)
+        pem = "-----BEGIN RSA PRIVATE KEY-----\n" + "A" * 64 + "\n-----END RSA PRIVATE KEY-----"
+        for owner, name, field, value in (
+                ("service:github-bot", "github-app", "private_key", pem),
+                ("alice", "github-token", "value", "github_pat_" + "a" * 40)):
+            url = I.form_url(it.request(owner, name), f"http://127.0.0.1:{free_port}")
+            r = httpx2.post(url, data={field: value})
+            assert r.status_code == 200 and "Stored" in r.text, r.text
+            assert it.load(owner, name).strip() == value
     finally:
         server.should_exit = True
         th.join()

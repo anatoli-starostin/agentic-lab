@@ -8,7 +8,7 @@
 An agent has one identity (`github: flash-bot`), or several chosen by repository:
 
     github:
-      deepspike-flash: default                     # everything else
+      acme-flash: default                     # everything else
       spikyclaudebot: [anatoli-starostin/spiky]    # these repositories (owner/* too)
 
 The agent's service writes, where the agent can read but not write (ROOT):

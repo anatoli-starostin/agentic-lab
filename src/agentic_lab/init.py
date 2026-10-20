@@ -107,7 +107,7 @@ def run(path, args):
     if os.path.exists(path) and not args.force:
         raise SystemExit(f"lab init: {path} exists (pass --force to overwrite)")
     tailnet, me = tailscale_self()
-    lab_name = args.name or _ask("Lab name (e.g. deepspike)", check=ID.match)
+    lab_name = args.name or _ask("Lab name (e.g. acme)", check=ID.match)
     tailnet = args.tailnet or tailnet or _ask("Tailnet DNS suffix (e.g. example.ts.net)")
     admin_id = args.admin or _ask("Your member id (lowercase, e.g. anatoly)", check=ID.match)
     admin_name = args.admin_name or _ask("Your name", admin_id.capitalize())

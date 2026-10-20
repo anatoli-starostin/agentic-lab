@@ -10,7 +10,7 @@ def test_init_with_flags(tmp_path, monkeypatch, capsys):
                                                                     "sec.example.ts.net"))
     monkeypatch.setattr("agentic_lab.init.tailscale_login", lambda: "admin@example.com")
     path = tmp_path / "lab.yaml"
-    rc = main(["init", str(path), "--name", "deepspike", "--admin", "anatoly",
+    rc = main(["init", str(path), "--name", "acme", "--admin", "anatoly",
                "--admin-name", "Anatoly", "--slack-user", "U0123", "--manager", "mgr-anatoly",
                "--worker", "worker-a@gpu-a", "--worker", "worker-b@gpu-b=gpu-b.other.ts.net",
                "--display", "mgr-anatoly=Flash", "--display", "worker-a=Nebius-the-Great"])

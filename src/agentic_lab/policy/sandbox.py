@@ -35,6 +35,9 @@ SECRET_ENV = ["CLAUDE_CODE_OAUTH_TOKEN"]
 # The service's own state (task queue, a manager's per-member memory...) is the service's
 # too: the agent reaches it only through its lab tools, which decide what it may see.
 STATE = "~/.local/state/agentic-lab"
+# The secretary's Nebius CLI profile and service-account key (VM power): its service's
+# credentials, never its agent's (#40).
+NEBIUS = "~/.nebius"
 GPU_VISIBLE = ["/run/nvidia-persistenced"]
 
 
@@ -78,7 +81,7 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
     # then persist between tasks without widening the sandbox.
     cache = os.path.join(_abs(workdir), ".cache")
     secrets = _abs(SECRETS)
-    private = [secrets, _abs(STATE)]
+    private = [secrets, _abs(STATE), _abs(NEBIUS)]
 
     return {
         "sandbox": {

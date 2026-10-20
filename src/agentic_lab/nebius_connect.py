@@ -9,9 +9,10 @@ auth.nebius.com --no-browser`, then open the printed link). It then, with the ad
      else), with the service account in it;
   2. generates the service account's key pair ON THIS HOST, as the secretary's user (the
      private key never leaves it), registers the public key, and sets up the secretary's
-     CLI profile `lab`;
-  3. checks the secretary can list the project's VMs, and prints them, so the admin can
-     say which ones lab.yaml should list.
+     CLI profile `lab` (kept as it is when it's already this account's);
+  3. lists the project's VMs with the admin's login (the power role can't list), so the
+     admin can say which ones lab.yaml should list, and checks the secretary can see each
+     VM lab.yaml already lists (`instance get`: what powering needs).
 Each step looks first, so running it again is safe. The admin's own login can then be
 removed (`--forget-admin`).
 """
@@ -20,6 +21,8 @@ import os
 import pwd
 import shutil
 import subprocess
+
+import yaml
 
 SA_NAME = "lab-power"
 GROUP_NAME = "lab-power-operators"
@@ -62,7 +65,17 @@ def _id(out):
         raise ConnectError(f"unexpected answer: {out[:200]}") from None
 
 
-def connect(admin, secretary_user, project, forget_admin=False, say=print):
+def _lab_profile(home):
+    """The secretary's CLI profile `lab` as its config file has it ({} if none)."""
+    try:
+        with open(os.path.join(home, ".nebius", "config.yaml")) as f:
+            return ((yaml.safe_load(f) or {}).get("profiles") or {}).get("lab") or {}
+    except (OSError, ValueError):
+        return {}
+
+
+def connect(admin, secretary_user, project, forget_admin=False, say=print, instances=()):
+    """`instances`: {host: instance id} lab.yaml already lists (checked as the secretary)."""
     p = dict(profile=ADMIN_PROFILE)
     if ADMIN_PROFILE not in neb(admin, "profile", "list", check=False):
         raise ConnectError(
@@ -107,23 +120,40 @@ def connect(admin, secretary_user, project, forget_admin=False, say=print):
         run_as(secretary_user, "bash", "-c", f"umask 077; mkdir -p ~/.nebius; "
                f"openssl genrsa -out {key} 4096 2>/dev/null; openssl rsa -in {key} -pubout "
                f"-out {pub} 2>/dev/null")
-    with open(pub) as f:
-        pub_pem = f.read()
-    key_id = _id(neb(admin, "iam", "auth-public-key", "create", "--parent-id", project,
-                     "--account-service-account-id", sa, "--data", pub_pem, "--format",
-                     "json", **p))
-    neb(secretary_user, "profile", "delete", "lab", check=False)
-    neb(secretary_user, "profile", "create", "lab", "--endpoint", "api.nebius.cloud",
-        "--parent-id", project, "--service-account-id", sa, "--public-key-id", key_id,
-        "--private-key-file-path", key)
-    say(f"   key {key_id}; profile 'lab' for {secretary_user}")
+    have = _lab_profile(home)
+    if (have.get("service-account-id") == sa and have.get("public-key-id")
+            and have.get("private-key-file-path") == key):
+        key_id = have["public-key-id"]          # already set up: keep it (no new key)
+        say(f"   key {key_id}; profile 'lab' for {secretary_user} (already there)")
+    else:
+        with open(pub) as f:
+            pub_pem = f.read()
+        key_id = _id(neb(admin, "iam", "auth-public-key", "create", "--parent-id", project,
+                         "--account-service-account-id", sa, "--data", pub_pem, "--format",
+                         "json", **p))
+        flags = ["--endpoint", "api.nebius.cloud", "--parent-id", project,
+                 "--service-account-id", sa, "--public-key-id", key_id,
+                 "--private-key-file-path", key]
+        neb(secretary_user, "profile", "update" if have else "create", "lab", *flags)
+        say(f"   key {key_id}; profile 'lab' for {secretary_user}")
 
-    say("3. check: the VMs the secretary can see")
-    vms = json.loads(neb(secretary_user, "compute", "instance", "list", "--parent-id", project,
-                         "--all", "--format", "json", profile="lab") or "{}")
+    say("3. the project's VMs (listed with your login)")
+    vms = json.loads(neb(admin, "compute", "instance", "list", "--parent-id", project,
+                         "--all", "--format", "json", check=False, **p) or "{}")
     for vm in vms.get("items", []):
         say(f"   {vm['metadata']['id']}  {vm['metadata'].get('name', '')}  "
             f"{(vm.get('status') or {}).get('state', '')}")
+    failed = []
+    for host, inst in sorted(dict(instances).items()):
+        out = neb(secretary_user, "compute", "instance", "get", "--id", inst, "--format",
+                  "json", check=False, profile="lab")
+        ok = out.strip().startswith("{")
+        say(f"   the secretary {'can' if ok else 'CANNOT'} see {host} ({inst})")
+        if not ok:
+            failed.append(host)
+    if failed:
+        raise ConnectError(f"the secretary can't see {', '.join(failed)}: are they in project "
+                           f"{project}?")
     if forget_admin:
         neb(admin, "profile", "delete", ADMIN_PROFILE, check=False)
         say(f"   removed {admin}'s own Nebius login (profile {ADMIN_PROFILE})")

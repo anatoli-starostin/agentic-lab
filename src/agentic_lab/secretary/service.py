@@ -57,6 +57,7 @@ def sec_id_of(lab):
 
 class Secretary:
     """The secretary's Slack side: answers members, asks them for secrets, posts notices."""
+    via = "in Slack"            # how members reach it; the console says so (#41)
 
     def __init__(self, lab, latest, workers, brain, state, slack=None):
         self.lab, self.latest, self.workers = lab, latest, workers
@@ -78,8 +79,9 @@ class Secretary:
             state=lambda: self.latest["state"], workers=self.workers,
             request_token=lambda member: self.request_token(member, asked_by=human),
             announce=self.announce, save=self.state.save,
-            power=lambda host, action: self.power(host, action, f"asked by {who} in Slack",
+            power=lambda host, action: self.power(host, action, f"asked by {who} {self.via}",
                                                   asked_by=human),
+            power_history=lambda host=None, hours=48: self.power_history(host, hours),
             read_config=lambda: self.read_config(asked_by=human),
             propose_change=lambda summary, lab_yaml, framework_commit=None:
                 self.propose_change(summary, lab_yaml, framework_commit, asked_by=human),
@@ -215,6 +217,11 @@ class Secretary:
             "*Issues* read and write (Metadata read comes with them). Nothing else.\n"
             "5. Expiration: up to a year; tell me the date, I'll add it to lab.yaml so I can "
             "remind you before it runs out.\n"
+            "   If the repos belong to *another person's account* (fine-grained tokens only "
+            "reach the bot's own and its organisations' repos), or the organisation's policy "
+            "hides its repos from fine-grained tokens: a classic token instead "
+            "(https://github.com/settings/tokens/new) with only `public_repo` (public repos) "
+            "or `repo` (private). A GitHub App avoids both.\n"
             f"6. Paste the token here (never in Slack): {form_url(code, self.intake_url)}\n"
             "Then: offer a redeploy, so the agents that use this bot get it.\n"
             "On GitHub, protect each repo's main: require a pull request with a review from "
@@ -246,8 +253,9 @@ class Secretary:
             "4. *Repository permissions*: *Contents* read and write, *Pull requests* read and "
             "write, *Issues* read and write (Metadata read comes with them). Nothing else.\n"
             "5. *Only on this account* → *Create GitHub App*.\n"
-            "6. On the app's page: note the *App ID*; *Generate a private key* (a .pem file "
-            f"downloads): paste its whole contents here (never in Slack): "
+            "6. On the app's page: note the *App ID*; then *Credentials* → *Key pairs* → "
+            "*New key* (a .pem file downloads): paste its whole contents here (never in "
+            f"Slack): "
             f"{form_url(code, self.intake_url)}\n"
             "7. *Install App* → your organisation → *Only select repositories*: the lab's repos.\n"
             "Then tell me \"done\" and the App ID: I check the app and propose the lab.yaml "
@@ -467,10 +475,27 @@ class Secretary:
         except P.PowerError as e:
             return f"couldn't: {e}"
         if self.events is not None:
-            self.events.add("power", f"{host} {action} ({why})")
+            self.events.add("power", f"{host} {action} ({why})", host=host, action=action,
+                            member=asked_by, why=why)
         verb = "on" if action == "on" else "off"
         await self.announce(f":electric_plug: {host} powering {verb} ({why}).")
         return f"{host}: powering {verb}; it takes a minute or two"
+
+    def power_history(self, host=None, hours=48):
+        """Recent power actions (who or what, when, why), oldest first: idle stops, members'
+        requests in Slack or from the console, admins' force-offs."""
+        if self.events is None:
+            return "no event log here"
+        rows = []
+        for e in self.events.read(since=dt.timedelta(hours=hours), limit=2000):
+            if e.get("kind") != "power":
+                continue
+            h = e.get("host") or (e.get("text") or "").split(" ", 1)[0]
+            if host and h != host:
+                continue
+            rows.append(f"{e['at']}  {e.get('text')}")
+        return "\n".join(rows) or f"no power actions{' on ' + host if host else ''} in the " \
+                                   f"last {hours} h"
 
     async def request_token(self, member, asked_by=None):
         if member not in self.lab.humans:
@@ -768,6 +793,12 @@ async def serve(lab_path, host, port):
         t.cancel()
 
 
+def console_user():
+    """Who ran the command: the admin behind sudo, else this user."""
+    import getpass
+    return os.environ.get("SUDO_USER") or getpass.getuser()
+
+
 async def ask(lab_path, human, text):
     """One message to the secretary from the command line, as `human` (no Slack)."""
     from ..slackio import Incoming
@@ -789,9 +820,14 @@ async def ask(lab_path, human, text):
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
     workdir = os.path.expanduser(sa.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
+    # the same event log as the service: what's done from the console is on record (#41)
+    events = EventLog(os.path.expanduser(f"{STATE}/events"))
     brain = SecretaryBrain(lab.display_name(sec_id), lab.name, workdir,
                            lab.agent_settings(sec_id), model=sa.get("model"), env=env,
+                           events=events,
                            usage=UsageLog(os.path.expanduser(f"{STATE}/usage.json")))
     sec = Secretary(lab, latest, workers, brain,
                     ManagerState(os.path.expanduser(f"{STATE}/chat-cli")))
+    sec.events = events
+    sec.via = f"from the console (Unix user {console_user()})"
     print(await sec.on_message(Incoming("cli", None, "0", None, human, text, True, True)))

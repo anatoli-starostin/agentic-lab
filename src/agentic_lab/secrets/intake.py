@@ -220,7 +220,7 @@ def check_value(name, value):
     """Validate a secret and return the text to store. A one-field secret is a string; a
     several-field one (slack-app) is a dict of its fields."""
     fields = FIELDS[name]
-    if len(fields) == 1:
+    if len(fields) == 1 and isinstance(value, str):
         value = {fields[0][0]: value}
     if not isinstance(value, dict):
         raise IntakeError("bad secret")

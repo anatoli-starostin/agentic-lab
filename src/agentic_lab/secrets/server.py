@@ -87,7 +87,7 @@ def app(intake: Intake, client_path):
             return _page("<h2>Too large.</h2>", status=413)
         form = await request.form()
         fields = {k: str(form.get(k) or "") for k, _, _ in FIELDS[req.name]}
-        value = fields["value"] if list(fields) == ["value"] else fields
+        value = next(iter(fields.values())) if len(fields) == 1 else fields   # one field: its text
         try:
             intake.receive(code, req.name, value)
         except IntakeError as e:

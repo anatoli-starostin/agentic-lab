@@ -19,9 +19,11 @@ def test_base_model():
     assert sb["network"]["strictAllowlist"] is True                   # refuse, don't prompt
     assert sb["filesystem"]["allowWrite"] == [f"{HOME}/work", "/tmp"]
     secrets, state = f"{HOME}/.config/agentic-lab", f"{HOME}/.local/state/agentic-lab"
-    assert sb["filesystem"]["denyRead"] == ["/run", "/var/run", secrets, state]
+    nebius = f"{HOME}/.nebius"                  # the secretary's VM-power key (#40)
+    assert sb["filesystem"]["denyRead"] == ["/run", "/var/run", secrets, state, nebius]
     assert s["permissions"]["deny"] == [f"Read(/{secrets}/**)", f"Edit(/{secrets}/**)",
-                                        f"Read(/{state}/**)", f"Edit(/{state}/**)"]
+                                        f"Read(/{state}/**)", f"Edit(/{state}/**)",
+                                        f"Read(/{nebius}/**)", f"Edit(/{nebius}/**)"]
     assert sb["credentials"]["envVars"] == [{"name": "CLAUDE_CODE_OAUTH_TOKEN", "mode": "deny"}]
     assert sb["filesystem"]["allowRead"] == []
     assert sb["network"]["allowAllUnixSockets"] is False           # seccomp socket block on

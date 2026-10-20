@@ -97,7 +97,7 @@ def test_git_picks_the_identity_by_repository(tmp_path):
         return subprocess.run(["git", *a], cwd=cwd, env=full, input=stdin, text=True,
                               capture_output=True, timeout=20).stdout
     for name, url in (("spiky", "https://github.com/anatoli-starostin/spiky.git"),
-                      ("other", "https://github.com/deepspike/models")):
+                      ("other", "https://github.com/acme/models")):
         (tmp_path / name).mkdir()
         git(tmp_path / name, "init", "-q")
         git(tmp_path / name, "remote", "add", "origin", url)
@@ -111,7 +111,7 @@ def test_git_picks_the_identity_by_repository(tmp_path):
                   stdin=f"protocol=https\nhost=github.com\npath={path}\n\n")
         return next(line[9:] for line in out.splitlines() if line.startswith("password="))
     assert password("anatoli-starostin/spiky.git") == "ghp_spiky"
-    assert password("deepspike/models.git") == "ghp_flash"
+    assert password("acme/models.git") == "ghp_flash"
 
 
 def test_apply_installs_every_identity_of_the_agent(tmp_path):
