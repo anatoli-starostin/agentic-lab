@@ -43,6 +43,7 @@ LAB_TOOLS = ("mcp__lab__report_progress", "mcp__lab__finish_task", "mcp__lab__ru
              "mcp__lab__stop_run", "mcp__lab__wait_for_runs")
 # a human approves each one, whatever grants say: a run is outside the sandbox
 ALWAYS_ASK = ("mcp__lab__start_run",)
+KEEP_FREE_GB = 30          # a worker prunes its caches when free disk falls below this
 RUN_LOG_LINES = 30          # log lines a resumed session sees per run
 # commands that try to outlive themselves: in the sandbox they can't (runs.py)
 _DETACH = re.compile(r"\bnohup\b|\bsetsid\b|\bdisown\b|\bscreen\s+-d|\btmux\s+new|"
@@ -108,7 +109,7 @@ class AgentRunner(Protocol):
         """Run `task` to a terminal state, recording progress and the result in `store`."""
 
 
-def _system_prompt(agent_id, task):
+def _system_prompt(agent_id, task, keep_free_gb=KEEP_FREE_GB):
     return f"""
 You are {agent_id}, a worker agent in an agentic lab: a team of humans and AI agents.
 This task comes from the human {task.requester}, through the manager agent {task.manager}.
@@ -142,6 +143,19 @@ Long jobs (training, big evaluations, anything over ~10 minutes):
 - While a task waits, you may get other tasks. Before using the GPU, check run_status:
   don't start GPU work that would compete with a running run unless the task says so.
 - finish_task only once the task's runs are over (stop_run the ones you don't need).
+
+Warm environments: setting up a project often takes longer than the experiment, so keep
+what you build and reuse it.
+- Tools' caches (uv, pip, torch extensions, Triton, Hugging Face, CUDA) already go to
+  .cache/ in your working folder and stay between tasks.
+- Checkouts in repos/<owner>/<repo> (reuse: git fetch and check out, don't clone again);
+  virtual environments in envs/<name>.
+- ENVIRONMENTS.md in your working folder lists them: for each, the repo, the commit or lock
+  file it was built from, and how to use it. Read it first, keep it up to date. Reuse
+  before rebuilding; rebuild an environment only if its lock file changed.
+- Keep at least {keep_free_gb} GB free on disk: below that, before installing anything
+  big, prune caches and old environments (least recently used first), and say what you
+  removed in the task's result. Never delete anything else.
 """
 
 
@@ -154,7 +168,7 @@ def _grant_line(g):
 class SdkRunner:
     def __init__(self, agent_id, workdir, settings_for: Callable[[list], dict],
                  approver: Approver = None, model=None, env=None, cli_path=None, usage=None,
-                 events=None, prompt_extra="", runs=None):
+                 events=None, prompt_extra="", runs=None, keep_free_gb=KEEP_FREE_GB):
         """`settings_for(grants)` returns the agent's settings given its active Grants;
         `prompt_extra` is added to its system prompt (e.g. its GitHub identity); `runs`: the
         worker's RunStore (long runs; None: no run tools)."""
@@ -169,6 +183,7 @@ class SdkRunner:
         self.events = events        # an EventLog, or None
         self.prompt_extra = prompt_extra
         self.runs = runs
+        self.keep_free_gb = keep_free_gb
 
     def _log(self, kind, text="", **meta):
         if self.events is not None:
@@ -326,7 +341,8 @@ class SdkRunner:
             mcp_servers={"lab": self._lab_server(task, store, outcome)},
             allowed_tools=list(LAB_TOOLS),
             system_prompt={"type": "preset", "preset": "claude_code",
-                           "append": _system_prompt(self.agent_id, task) + self.prompt_extra},
+                           "append": _system_prompt(self.agent_id, task, self.keep_free_gb)
+                           + self.prompt_extra},
             model=self.model,
             env=self.env,
             cli_path=self.cli_path,
@@ -342,7 +358,7 @@ class SdkRunner:
             prompt = self._wake_prompt(task)
             task = store.update(task.id, wake=None, waiting=None)
         elif task.session_id is None:
-            prompt = task.instruction
+            prompt = self._disk_note() + task.instruction
         else:
             prompt = ("The worker restarted while you were on this task. Continue it from where "
                       "you were; check the state of your working folder (and run_status) first.")
@@ -418,6 +434,19 @@ class SdkRunner:
             finally:
                 watcher.cancel()
         return result_msg, last_text
+
+    def _disk_note(self):
+        """A line before a new task when free disk is below keep_free_gb (#45)."""
+        import shutil
+        try:
+            free = shutil.disk_usage(self.workdir).free / 1e9
+        except OSError:
+            return ""
+        if free >= self.keep_free_gb:
+            return ""
+        return (f"[lab] Disk is low: {free:.0f} GB free, below the {self.keep_free_gb} GB to "
+                "keep. Before installing anything, prune caches and old environments (least "
+                "recently used first) and say what you removed in the result.\n\n")
 
     def _wake_prompt(self, task):
         lines = [f"You're back on this task: {task.wake}."]

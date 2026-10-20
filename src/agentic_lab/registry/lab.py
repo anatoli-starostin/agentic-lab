@@ -48,7 +48,8 @@ _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "slack_app": (str, False),
           # its GitHub identity: a name in github.accounts, or {name: default | [repos]}
           "github": ((str, dict), False),
-          "turn_budget_min": (int, False)}  # a manager's turns are cut off after this
+          "turn_budget_min": (int, False),  # a manager's turns are cut off after this
+          "keep_free_gb": (int, False)}     # a worker prunes its caches below this (#45)
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
          # minutes idle before the secretary stops it (cloud hosts: required; 0: never)
          "idle_stop_min": (int, False), "tailnet_name": (str, False),
@@ -286,6 +287,10 @@ def check(lab: Lab, today: dt.date | None = None):
             E(where, "'slack_app' applies to managers only")
         if role != "manager" and "turn_budget_min" in a:
             E(where, "'turn_budget_min' applies to managers only")
+        if role != "worker" and "keep_free_gb" in a:
+            E(where, "'keep_free_gb' applies to workers only")
+        if isinstance(a.get("keep_free_gb"), int) and a["keep_free_gb"] < 0:
+            E(where, "keep_free_gb must be 0 or more")
         tb = a.get("turn_budget_min")
         if isinstance(tb, int) and not isinstance(tb, bool) and not 1 <= tb <= 60:
             E(where, "turn_budget_min must be between 1 and 60")

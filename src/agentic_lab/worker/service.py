@@ -21,8 +21,9 @@ from .. import github as GH
 from ..registry import load as load_lab
 from . import tasks as T
 from .approver import BrokerApprover
-from .runner import NoChannelApprover, SdkRunner
+from .runner import KEEP_FREE_GB, NoChannelApprover, SdkRunner
 from .runs import RunStore
+from ..policy.sandbox import cache_env
 from .server import Access, Caller, build_mcp, http_app, run_tasks
 from ..eventlog import EventLog
 from .usage import UsageLog, probe_loop, probe_now
@@ -76,6 +77,9 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
     env.update(GH.env_for(lab, agent_id))      # its GitHub bot, if it has one
     workdir = os.path.expanduser(a.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
+    # tools' caches in the working folder, for the agent and everything it starts (#45);
+    # the settings say so too, this also covers what doesn't read them
+    env.update(cache_env(workdir))
     broker_cfg = yaml.safe_load(_read_secret(f"{CONFIG}/broker.yaml") or "") or {}
     if broker_cfg.get("url") and broker_cfg.get("token"):
         approver = BrokerApprover(broker_cfg["url"], broker_cfg["token"])
@@ -93,7 +97,8 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
     runs = RunStore(os.path.expanduser(f"{STATE}/runs"), workdir, agent_id)
     runner = SdkRunner(agent_id, workdir, settings_for, approver=approver,
                        model=model or a.get("model"), env=env, usage=usage, events=events,
-                       prompt_extra=GH.instructions(lab, agent_id), runs=runs)
+                       prompt_extra=GH.instructions(lab, agent_id), runs=runs,
+                       keep_free_gb=a.get("keep_free_gb", KEEP_FREE_GB))
 
     async def guardrails():
         active = await approver.active_grants()

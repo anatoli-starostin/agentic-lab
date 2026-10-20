@@ -272,6 +272,14 @@ deployed, and the secretary checks in code that the person asking is an admin.
   `~/.lab-keep-awake` while they need the machine (`echo "CPU sweep until Friday" >
   ~/.lab-keep-awake`) and delete it when done; otherwise an idle machine may be stopped
   under them. The web UI shows who keeps a machine awake.
+- **Workers' warm environments**: a worker keeps what it builds in its working folder
+  (`~lab-<id>/work`): tools' caches in `.cache/` (uv, pip, torch extensions, Triton,
+  Hugging Face, CUDA), checkouts in `repos/`, virtual environments in `envs/`, listed in
+  `ENVIRONMENTS.md`, so the next task on a project starts warm. It prunes caches and old
+  environments when free disk falls below `keep_free_gb` (per worker in `lab.yaml`,
+  default 30) and says what it removed. To wipe them: ask the worker in a task ("delete
+  your caches and environments"), or at the console `sudo rm -rf ~lab-<id>/work/.cache
+  ~lab-<id>/work/envs`.
 - **Remove an agent:** PR → merge → deploy. Its Unix user and work folder stay on its host
   until removed at the console (`sudo userdel -r lab-<id>`, after archiving its work).
 - **From the console** (break glass, or if Slack is down): the same flow with the admin's
