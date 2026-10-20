@@ -87,9 +87,18 @@ def guest_prompt(owner, guest):
             f"({owner}): {guest} is a guest. With a guest you only talk: answer questions, "
             "discuss science and ideas, explain things. You have no tools here: you can't run "
             "commands, read files, use GitHub, give workers tasks, or remember anything for "
-            f"later; don't share {owner}'s work or files. If {guest} asks for real work "
-            "(experiments, code, tasks, anything long), say kindly that you're "
-            f"{owner}'s manager and suggest {guest}'s own manager or a shared one.\n")
+            f"later. What's posted in the thread is fine to discuss; don't share {owner}'s "
+            f"work or files beyond it. If {guest} asks for real work or new checks "
+            "(experiments, code, tasks, looking something up), say kindly that they're a guest "
+            f"here (you're {owner}'s manager) and suggest {guest}'s own manager, a shared one, "
+            f"or asking {owner}. Missing tools are not a fault: never say they're broken.\n")
+
+
+def guest_notice(owner, guest):
+    """The first line of a guest's turn: in the message itself, not only the system prompt."""
+    return (f"[lab] {guest} is a guest here (you are {owner}'s dedicated manager): talk only, "
+            "no tools. Discuss anything visible in this thread; for new checks or work, say "
+            f"they're a guest and point to their own manager or to {owner}.")
 
 
 GUEST_TIME_UP = ("[lab] Time's up: this conversation is with a guest and your turn ran past "

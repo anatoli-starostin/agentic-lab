@@ -393,7 +393,9 @@ Every manager and worker has an \code{access} setting in \code{lab.yaml}: \code{
 (its bot's token is left out), nothing outside the sandbox, and no memory (the member's
 private notes stay private). A guest's turns are cut off after 2 minutes. Asked for real
 work, the manager says whose manager it is and points to the guest's own manager or a
-shared one.
+shared one. In the owner's thread, a guest's turn never resumes the owner's session: it
+starts afresh from the thread as everyone sees it, and the owner's next turn gets a short
+``meanwhile in this thread'' note.
 
 \medskip
 \code{access} only says who may use an agent. It doesn't change whose Claude seat the agent

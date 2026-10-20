@@ -172,7 +172,13 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   conversation code removes every tool (commands, files, worker tasks, GitHub — the bot's
   token is left out — anything outside the sandbox, memory), and turns are cut off after
   2 minutes. Asked for real work, the manager points to the guest's own manager or a
-  shared one.
+  shared one. In the owner's thread a guest's turn **never resumes the owner's session**
+  (its tool outputs, files read, unposted details, memory): it runs in a fresh session
+  that starts from the thread as everyone sees it (first 5 and last 50 messages), with a
+  "guest" notice in the message itself, so missing tools don't look like a fault. The
+  owner's next turn starts with a short "meanwhile in this thread" note (the guest's
+  messages and the replies). In their own DM with the manager, a guest keeps that DM's
+  session (only they are in it).
 - **Turns requests into worker tasks**, follows them and reports back (progress, plots,
   summaries) in the conversation that asked.
 - **Relays approvals**: it can show what a task waits for and add a note to the request; it

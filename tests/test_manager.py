@@ -665,3 +665,59 @@ def test_power_actions_are_on_record_and_the_secretary_can_tell(monkeypatch, tmp
     assert "gpu-a" not in sec.ctx("alice").power_history("gpu-b")
     ev = [e for e in sec.events.read() if e["kind"] == "power"]
     assert ev[1]["member"] == "alice" and ev[1]["host"] == "gpu-b"
+
+
+def test_a_guest_in_the_owners_thread_gets_its_own_session(tmp_path):
+    """#36: a guest's turn in a shared thread never resumes the owner's session; it starts
+    from the thread as everyone sees it, says it's a guest turn, and the owner hears about
+    it on their next turn."""
+    from agentic_lab.manager import service as S
+    from agentic_lab.manager.state import ManagerState
+    lab = registry.load(EXAMPLE)
+    lab.humans["bob"] = {"name": "Bob", "slack_user": "U-BOB"}
+    seen = []
+
+    class Brain:
+        async def turn(self, ctx, prompt):
+            seen.append((ctx.conv.key, ctx.conv.session_id, ctx.guest, prompt))
+            if ctx.conv.session_id is None:
+                ctx.conv.session_id = f"s-{len(seen)}"
+            return f"reply {len(seen)}"
+
+    class Slack:
+        posts = []
+
+        async def react(self, *a, **k):
+            pass
+
+        async def post(self, channel, thread, text):
+            self.posts.append(text)
+
+        async def thread_history(self, channel, thread_ts, before_ts):
+            return ["alice: train the model", "you: done, loss 1.21 (posted plot)"]
+    m = S.Manager(lab, "mgr-alice", Slack(), Brain(), None, None,
+                  ManagerState(str(tmp_path)), None, str(tmp_path))
+
+    def msg(human, text, private=False):
+        return SimpleNamespace(channel="C1" if not private else "D9", thread_ts="100" if not
+                               private else None, ts="200", human=human, text=text,
+                               private=private, mentioned=True, history=[], files=[])
+    asyncio.run(m.on_message(msg("alice", "train the model")))        # the owner
+    owner_session = seen[-1][0], "s-1"
+    asyncio.run(m.on_message(msg("bob", "what did the last run show?")))
+    key, session, guest, prompt = seen[-1]
+    assert guest and key.endswith("#guest") and session is None      # not the owner's
+    assert prompt.startswith("[lab] Bob is a guest here")
+    assert "loss 1.21" in prompt and "what did the last run show?" in prompt
+    conv = m.state.conversations["C1/100"]
+    assert conv.session_id == "s-1"                                   # untouched
+    asyncio.run(m.on_message(msg("bob", "and the one before?")))
+    assert seen[-1][1] is None                                        # fresh every time
+    asyncio.run(m.on_message(msg("alice", "thanks")))
+    key, session, guest, prompt = seen[-1]
+    assert (key, session) == owner_session and not guest
+    assert prompt.startswith("[lab] Meanwhile in this thread")
+    assert "Bob (guest): what did the last run show?" in prompt and "reply 2" in prompt
+    assert m.state.conversations["C1/100"].meanwhile == []
+    asyncio.run(m.on_message(msg("bob", "hi", private=True)))        # bob's own DM: his
+    assert seen[-1][0] == "D9" and "Bob is a guest here" not in seen[-1][3]

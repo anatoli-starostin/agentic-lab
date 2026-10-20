@@ -27,10 +27,10 @@ from ..worker.approver import BrokerApprover
 from ..worker.runner import NoChannelApprover
 from ..worker.service import _read_secret
 from ..worker.usage import UsageLog, probe_loop, probe_now
-from .brain import TURN_BUDGET_S, Brain
+from .brain import TURN_BUDGET_S, Brain, guest_notice
 from .followup import finished_prompt, follow
 from .memory import Memory
-from .state import ManagerState
+from .state import Conversation, ManagerState
 from .tools import BrokerClient
 from .workers import WorkerError, Workers
 
@@ -39,11 +39,15 @@ STATE = "~/.local/state/agentic-lab"
 log = logging.getLogger("agentic_lab.manager")
 
 
-def compose(lab, msg):
-    """The prompt for one Slack message."""
+def compose(lab, msg, guest_thread=None):
+    """The prompt for one Slack message. `guest_thread`: for a guest's turn in a shared
+    thread, the thread as everyone sees it (its own session starts from that)."""
     who = (lab.humans.get(msg.human) or {}).get("name") or msg.human
     parts = []
-    if msg.history:
+    if guest_thread is not None:
+        parts.append("The thread so far (what everyone in it can see):\n" +
+                     ("\n".join(guest_thread) or "(nothing yet)"))
+    elif msg.history:
         parts.append("Earlier in this thread (before you were mentioned):\n" +
                      "\n".join(msg.history))
     parts.append(f"[{who} ({msg.human})]: {msg.text}")
@@ -54,6 +58,8 @@ def compose(lab, msg):
                      f"useful from you; otherwise reply exactly {SILENT}.)")
     return "\n\n".join(parts)
 
+
+MEANWHILE_MAX = 20      # guest lines kept for the owner's next turn
 
 BUSY = ("Still working on the previous message here; I'll read this right after "
         "(a few minutes at most).")
@@ -106,11 +112,34 @@ class Manager:
         async with lock:                # one turn at a time per conversation
             self._told_busy.discard(conv.key)
             conv.last_requester = requester
+            ctx = self._ctx(conv, requester, private)
+            if ctx.guest and not private:
+                # a guest in the owner's thread: a session of its own, from what the thread
+                # shows; never the owner's session (its tools' outputs, files, memory)
+                ctx.conv = Conversation(f"{conv.key}#guest", conv.channel, conv.thread_ts)
+                prompt = guest_notice(ctx.owner_name, ctx.guest_name) + "\n\n" + prompt
+            elif not ctx.guest and conv.meanwhile:
+                prompt = ("[lab] Meanwhile in this thread (guest turns):\n"
+                          + "\n".join(conv.meanwhile) + "\n\n" + prompt)
+                conv.meanwhile = []
+                self.state.save()
             try:
-                return await self.brain.turn(self._ctx(conv, requester, private), prompt)
+                reply = await self.brain.turn(ctx, prompt)
             except Exception as e:
                 log.exception("turn failed in %s", conv.key)
                 return f"Sorry, something went wrong on my side ({type(e).__name__})."
+            if ctx.guest and not private and reply and reply.strip() != SILENT:
+                conv.meanwhile = (conv.meanwhile + [f"you (to {ctx.guest_name}, a guest): "
+                                                    f"{reply[:500]}"])[-MEANWHILE_MAX:]
+                self.state.save()
+            return reply
+
+    async def _guest_thread(self, msg):
+        """The thread before this message, as everyone sees it (first and last messages)."""
+        history = getattr(self.slack, "thread_history", None)
+        if history is None or msg.thread_ts is None:
+            return msg.history or []
+        return await history(msg.channel, msg.thread_ts, msg.ts)
 
     async def on_message(self, msg):
         conv = self.state.conversation(msg.channel, msg.thread_ts)
@@ -120,7 +149,14 @@ class Manager:
             if lock is not None and lock.locked() and conv.key not in self._told_busy:
                 self._told_busy.add(conv.key)       # once per busy spell, not per message
                 await self.slack.post(conv.channel, conv.thread_ts, BUSY)
-        reply = await self._turn(conv, msg.human, msg.private, compose(self.lab, msg))
+        if not msg.private and self.is_guest(msg.human):     # a guest in a shared thread
+            prompt = compose(self.lab, msg, await self._guest_thread(msg))
+            who = (self.lab.humans.get(msg.human) or {}).get("name") or msg.human
+            conv.meanwhile = (conv.meanwhile + [f"{who} (guest): {msg.text[:500]}"]
+                              )[-MEANWHILE_MAX:]
+        else:
+            prompt = compose(self.lab, msg)
+        reply = await self._turn(conv, msg.human, msg.private, prompt)
         if msg.mentioned:
             await self.slack.react(msg.channel, msg.ts, "eyes", add=False)
         await self.slack.post(conv.channel, conv.thread_ts, reply)
