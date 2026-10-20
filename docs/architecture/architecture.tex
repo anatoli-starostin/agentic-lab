@@ -634,7 +634,7 @@ an agent asked to recite a token refuses.
   \item \textbf{Event logs}: each agent's service writes its own log (messages, replies,
     tool calls, approvals, task events), one JSON-lines file per day, kept 14 days, in its
     state folder. The agent can't read it.
-  \item \textbf{Reading logs}: the web UI (admins), \code{sudo lab logs <agent>} on its
+  \item \textbf{Reading logs}: the web UI (admins; members their own agents), \code{sudo lab logs <agent>} on its
     host. Workers hand their log only to the secretary's monitoring token; managers'
     status endpoint likewise.
   \item \textbf{Debugging}: \code{sudo lab debug <agent>} stops its service and opens its
