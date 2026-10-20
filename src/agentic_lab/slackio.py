@@ -138,6 +138,10 @@ class SlackIO:
         return (lines[:HISTORY_FIRST] + [f"[... {skipped} messages skipped ...]"]
                 + lines[-HISTORY_MESSAGES:])
 
+    async def thread_history(self, channel, thread_ts, before_ts):
+        """The thread as everyone sees it, before `before_ts` (a guest's turn starts here)."""
+        return await self._history(channel, thread_ts, before_ts)
+
     def _line(self, m):
         who = self.members.get(m.get("user"), m.get("username") or m.get("user") or "bot")
         if m.get("bot_id") and m.get("user") == self.me:

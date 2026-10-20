@@ -109,7 +109,10 @@ What it took:
   so neither can approve or merge.
 - **Guests run on the owner's seat**: a member talking to someone else's dedicated manager
   uses that manager's member's Claude seat. Guests get no tools and 2-minute turns (enforced
-  in code), so it stays small.
+  in code), so it stays small. In the owner's thread a guest's turn runs in a session of
+  its own, built from what the thread shows: it can't draw on the owner's session (tool
+  outputs, files read, task details never posted), and the guest's exchange doesn't enter
+  the owner's session except as a short visible "meanwhile" note.
 - **Anyone with a login on a lab machine can keep it on** (`~/.lab-keep-awake`), which
   costs money while it runs. Visible to everyone in the web UI; an admin can still power it
   off (`force_off`).

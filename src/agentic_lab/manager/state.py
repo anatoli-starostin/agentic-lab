@@ -18,6 +18,8 @@ class Conversation:
     thread_ts: str | None       # where replies go (None: top level of a DM)
     session_id: str | None = None
     last_requester: str | None = None   # the human of the latest message
+    # guest turns since the owner's last turn here, for its next one ("meanwhile...")
+    meanwhile: list = field(default_factory=list)
 
 
 @dataclass
