@@ -62,7 +62,7 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
 ## By hand
 
 1. **Allocate the secretary VM** (Admin). Small and always on, Ubuntu 24.04 or newer, on
-   the tailnet. An on-prem box or a small cloud VM.
+   the tailnet. An on-prem box or a small cloud VM (on AWS: see "Hosts on AWS" below).
 2. **Install Claude Code** (Admin) and log in with the admin's own account.
 3. **Give Claude the first message** (Admin):
    > Set up an Agentic Lab on this machine: https://github.com/anatoli-starostin/agentic-lab
@@ -199,10 +199,29 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      `lab apply` and the secretary's deploys hang. Either give the admin an *accept* rule
      in the tailnet's SSH policy, or leave Tailscale SSH off on lab hosts and use OpenSSH
      (key-only) over the tailnet.
-   - **No public IP needed.** Once a VM is on the tailnet it needs no public IP: on Nebius,
+   - **No public IP needed (Nebius).** Once a VM is on the tailnet it needs no public IP: on Nebius,
      a VM without one still reaches the internet through the default egress gateway.
      Better to create it without one: removing the public IP of a running VM left it
      without network until it was stopped and started.
+
+    **Hosts on AWS (EC2)**, for ordinary non-GPU hosts (the secretary, managers):
+   - In `lab.yaml`: `{kind: cloud, provider: aws, idle_stop_min: 0, ssh_user: ubuntu,
+     tailnet_name: ...}` (`lab init --provider aws`, and `--secretary-provider aws` when
+     the secretary's own host is an EC2 VM). `ubuntu` is the login user of the standard
+     Ubuntu AMIs.
+   - **No power control (yet).** The secretary can't start or stop AWS hosts, so there's
+     no idle stop for them (`idle_stop_min: 0`; `lab check` warns otherwise) and members
+     can't power them from Slack: start or stop them in the AWS console. Power support may
+     come later.
+   - **A public IPv4 and a security group with zero inbound rules.** The host only needs
+     outbound traffic (Tailscale, apt and pip, GitHub, the Anthropic API), and every real
+     access goes through the tailnet, so nothing is exposed. A public IPv4 costs about
+     $3.60 a month. Don't follow the "no public IP" advice above on AWS: there, a VM
+     without one needs a **NAT gateway** to reach the internet, about $32 a month plus a
+     charge per GB. That's the trap to avoid.
+   - **The root volume must be EBS**, not instance store: instance-store data is wiped on
+     every stop, which would destroy the agents' state, memory and warm-environment
+     caches.
 
 11. **Everything else** (Claude)
     - A GPU host that's stopped can't be set up: ask the secretary to power it on first

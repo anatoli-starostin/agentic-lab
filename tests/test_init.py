@@ -45,3 +45,21 @@ def test_manager_on_its_own_vm(tmp_path, monkeypatch):
     lab = registry.load(path)
     assert lab.agents["mgr-a"]["host"] == "mgr-vm"
     assert lab.hosts["mgr-vm"]["tailnet_name"] == "mgr-vm.t.ts.net"
+
+
+def test_init_on_aws(tmp_path, monkeypatch, capsys):
+    """--provider aws: cloud hosts without power control (idle_stop_min 0), Ubuntu AMIs'
+    login user; --secretary-provider aws: the secretary's own host is an EC2 VM too."""
+    monkeypatch.setattr("agentic_lab.init.tailscale_self", lambda: ("t.ts.net", "sec.t.ts.net"))
+    monkeypatch.setattr("agentic_lab.init.tailscale_login", lambda: None)
+    path = tmp_path / "lab.yaml"
+    rc = main(["init", str(path), "--name", "acme", "--admin", "anatoly",
+               "--admin-name", "Anatoly", "--slack-user", "U0123", "--tailscale-login",
+               "a@example.com", "--manager", "mgr-anatoly", "--manager-host", "mgr-vm",
+               "--provider", "aws", "--secretary-provider", "aws"])
+    out = capsys.readouterr().out
+    assert rc == 0 and "0 errors, 0 warnings" in out, out
+    lab = registry.load(path)
+    for h in ("sec", "mgr-vm"):
+        assert lab.hosts[h] == {**lab.hosts[h], "kind": "cloud", "provider": "aws",
+                                "idle_stop_min": 0, "ssh_user": "ubuntu"}
