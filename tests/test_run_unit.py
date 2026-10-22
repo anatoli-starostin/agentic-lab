@@ -17,6 +17,13 @@ def test_the_home_is_read_only_but_the_work_isnt():
     assert "InaccessiblePaths=-/home/lab-worker-a/.config/agentic-lab" in u
 
 
+def test_a_run_has_its_own_process_view():
+    u = R.unit_template("worker-a", "lab-worker-a").splitlines()
+    start = next(ln for ln in u if ln.startswith("ExecStart="))
+    assert start.startswith("ExecStart=/usr/bin/bwrap --die-with-parent --unshare-pid "
+                            "--dev-bind / / --proc /proc -- /opt/agentic-lab/venv/bin/lab ")
+
+
 @pytest.mark.skipif(not shutil.which("systemd-analyze"), reason="no systemd here")
 def test_the_unit_parses(tmp_path):
     text = "\n".join(ln for ln in R.unit_template("w", "nobody").splitlines()
