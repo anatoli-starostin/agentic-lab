@@ -257,7 +257,8 @@ def test_warm_environments(tmp_path, monkeypatch):
     tasks, runs, units = stores(tmp_path)
     r = runs.start("t-1", "env", "echo $TORCH_EXTENSIONS_DIR", requester="alice")
     R.run_exec(runs, r["id"], wrapper=NO_WRAP)
-    assert f"{tmp_path}/work/.cache/torch_extensions" in R.log_tail(r["log"])
+    assert f"{tmp_path}/work/.cache/torch_extensions" in R.log_tail(r["log"], 40,
+                                                                    str(tmp_path / "work"))
     t = tasks.submit("x", "alice", "mgr")
     prompt = RN._system_prompt("worker-a", t, keep_free_gb=77)
     assert "ENVIRONMENTS.md" in prompt and "77 GB" in prompt and "{" not in prompt

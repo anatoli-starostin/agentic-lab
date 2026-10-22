@@ -298,16 +298,13 @@ class Secretary:
     async def post_icon(self, name, role, conv, comment):
         """Draw an app icon (Claude, or a pattern if that fails) and post it in `conv`."""
         try:
-            import tempfile
             from ..icon import drawn
             data, how = await drawn(name, role, env=getattr(self.brain, "env", None),
                                     lab=self.lab.name)
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                f.write(data)
-            await self.slack.upload(conv.channel, conv.thread_ts, f.name,
+            # the bytes drawn, never a file (a path could be swapped before the upload)
+            await self.slack.upload(conv.channel, conv.thread_ts, None,
                                     f"{name}-icon.png", f"{comment}: {how}. Want another? "
-                                    "Just ask.")
-            os.unlink(f.name)
+                                    "Just ask.", data=data)
             return f"posted {name}'s icon ({how})"
         except Exception as e:
             log.exception("posting the app icon failed")
@@ -716,6 +713,8 @@ async def serve(lab_path, host, port):
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
     workdir = os.path.expanduser(sa.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
+    from .. import safefs
+    safefs.pin(workdir)         # resolved once: its file operations stay there
     brain = SecretaryBrain(lab.display_name(sec_id), lab.name, workdir,
                            lab.agent_settings(sec_id), model=sa.get("model"), env=env,
                            events=events, usage=usage)
@@ -830,6 +829,8 @@ async def ask(lab_path, human, text):
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
     workdir = os.path.expanduser(sa.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
+    from .. import safefs
+    safefs.pin(workdir)         # resolved once: its file operations stay there
     # the same event log as the service: what's done from the console is on record (#41)
     events = EventLog(os.path.expanduser(f"{STATE}/events"))
     brain = SecretaryBrain(lab.display_name(sec_id), lab.name, workdir,

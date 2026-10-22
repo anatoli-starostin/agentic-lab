@@ -76,9 +76,12 @@ class SlackIO:
             await self.web.chat_postMessage(channel=channel, thread_ts=thread_ts,
                                             text=text[i:i + MAX_TEXT], unfurl_links=False)
 
-    async def upload(self, channel, thread_ts, path, title, comment=None):
-        await self.web.files_upload_v2(channel=channel, thread_ts=thread_ts, file=path,
-                                       title=title, initial_comment=comment or None)
+    async def upload(self, channel, thread_ts, path, title, comment=None, data=None):
+        """Post a file: `data` (bytes, read safely by the caller) or the file at `path`."""
+        await self.web.files_upload_v2(channel=channel, thread_ts=thread_ts,
+                                       file=data if data is not None else path,
+                                       filename=title, title=title,
+                                       initial_comment=comment or None)
 
     async def react(self, channel, ts, name, add=True):
         try:
@@ -96,8 +99,11 @@ class SlackIO:
 
     async def _download(self, files, key):
         out = []
-        folder = os.path.join(self.inbox, re.sub(r"[^A-Za-z0-9._-]", "_", key))
-        os.makedirs(folder, exist_ok=True)
+        from . import safefs
+        # the inbox is in the agent's working folder: written there safely (safefs)
+        base = os.path.dirname(os.path.abspath(self.inbox))
+        folder = os.path.join(os.path.basename(self.inbox),
+                              re.sub(r"[^A-Za-z0-9._-]", "_", key))
         async with aiohttp.ClientSession(
                 headers={"Authorization": f"Bearer {self.bot_token}"}) as http:
             for f in files:
@@ -105,13 +111,16 @@ class SlackIO:
                 if not url or (f.get("size") or 0) > MAX_FILE_BYTES:
                     continue
                 name = os.path.basename(f.get("name") or f.get("id") or "file")
-                path = os.path.join(folder, name)
+                if name in ("", ".", ".."):
+                    name = "file"
                 async with http.get(url) as r:
                     if r.status != 200:
                         continue
-                    with open(path, "wb") as fh:
-                        fh.write(await r.read())
-                out.append(path)
+                    data = await r.read()
+                try:
+                    out.append(safefs.write(base, os.path.join(folder, name), data))
+                except OSError:
+                    continue
         return out
 
     async def _history(self, channel, thread_ts, before_ts):

@@ -32,6 +32,8 @@ import signal
 import subprocess
 import tempfile
 
+from .. import safefs
+
 SYSTEMCTL = "/usr/bin/systemctl"
 RUN_CTL = "/usr/local/libexec/agentic-lab/lab-run-ctl"
 ACTIVE = ("starting", "running")
@@ -152,8 +154,7 @@ class RunStore:
         if not os.path.isdir(cwd):
             raise RunError(f"no folder {cwd}")
         run_id = f"r-{secrets.token_hex(6)}"
-        logdir = os.path.join(self.workdir, "runs", f"{name}-{run_id}")
-        os.makedirs(logdir, exist_ok=True)
+        logdir = safefs.makedirs(self.workdir, os.path.join("runs", f"{name}-{run_id}"))
         spec = {"id": run_id, "task": task_id, "requester": requester, "name": name,
                 "command": command, "cwd": cwd, "log": os.path.join(logdir, "log"),
                 "created": _now()}
@@ -195,7 +196,7 @@ class RunStore:
                 state = "lost"
         out = {**spec, **{k: v for k, v in st.items() if k != "state"}, "state": state}
         if tail:
-            out["log_tail"] = log_tail(spec["log"], tail)
+            out["log_tail"] = log_tail(spec["log"], tail, root=self.workdir)
         return out
 
     def all(self, task_id=None):
@@ -208,12 +209,12 @@ class RunStore:
         return [r for r in self.all(task_id) if r["state"] in ACTIVE]
 
 
-def log_tail(path, lines=40):
+def log_tail(path, lines, root):
+    """The end of a run's log. It's in the agent's working folder (`root`), which the
+    agent can change at will: read only a plain file inside it (safefs)."""
     try:
-        with open(path, "rb") as f:
-            f.seek(0, 2)
-            f.seek(max(0, f.tell() - 64 * 1024))
-            return "\n".join(f.read().decode(errors="replace").splitlines()[-lines:])
+        data = safefs.tail(root, path, 64 * 1024)
+        return "\n".join(data.decode(errors="replace").splitlines()[-lines:])
     except OSError:
         return ""
 
@@ -251,7 +252,7 @@ def run_exec(store: RunStore, run_id, env=None, wrapper=job_wrapper, home=None):
     spec = store.get(run_id)
     status = store._path(run_id, ".status")
     home = home or os.path.expanduser("~")
-    with open(spec["log"], "ab") as log:
+    with os.fdopen(safefs.open_append(store.workdir, spec["log"]), "ab") as log:
         log.write(f"== {_now()} run {run_id}: {spec['command']}\n".encode())
         log.flush()
         try:
