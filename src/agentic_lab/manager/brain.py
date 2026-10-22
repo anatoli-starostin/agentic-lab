@@ -16,7 +16,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
                               ResultMessage, SystemMessage, TextBlock, ToolResultBlock,
                               ToolUseBlock, UserMessage)
 
-from ..eventlog import tool_summary
+from ..eventlog import TurnClock, tool_summary
 
 from ..policy.confine import approved_input
 from ..policy.grants import Grant
@@ -196,11 +196,13 @@ class Brain:
         async def drain(client):
             async for msg in client.receive_response():
                 if isinstance(msg, SystemMessage) and msg.subtype == "init":
+                    clock.started()
                     sid = msg.data.get("session_id")
                     if sid and sid != ctx.conv.session_id:
                         ctx.conv.session_id = sid
                         ctx.state.save()
                 elif isinstance(msg, AssistantMessage):
+                    clock.replied()
                     for b in msg.content:
                         if isinstance(b, TextBlock):
                             out["last"] = b.text
@@ -218,6 +220,7 @@ class Brain:
                     if self.usage:
                         self.usage.run(f"conv:{ctx.conv.key}", msg.model_usage)
 
+        clock = TurnClock()     # a Claude Code start-up per message (#69): measured
         async with self.client_factory(options) as client:
             await client.query(prompt)
             try:
@@ -235,5 +238,7 @@ class Brain:
                     await self._stop(client, drain)
                     out["reply"] = out["last"] = CUT_OFF
         reply, last_text = out["reply"], out["last"]
+        text, timing = clock.done()
+        log("timing", text, **timing)
         log("reply", reply or last_text or "")
         return reply or last_text or ""

@@ -126,7 +126,9 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
             },
             "credentials": {"envVars": [{"name": n, "mode": "deny"} for n in SECRET_ENV]},
         },
-        "env": {**cache_env(workdir), **({"TMPDIR": tmpdir} if tmpdir else {}),
+        # the lab's tools loaded up front, not looked up first with ToolSearch (#69)
+        "env": {**cache_env(workdir), "ENABLE_TOOL_SEARCH": "false",
+                **({"TMPDIR": tmpdir} if tmpdir else {}),
                 **({"CLAUDE_AUTOCOMPACT_PCT_OVERRIDE": str(compact_percent)}
                    if compact_percent else {})},
         "permissions": {
