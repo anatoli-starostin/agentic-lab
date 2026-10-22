@@ -75,7 +75,7 @@ def test_settings_and_prompt(tmp_path):
     assert "github.com" not in lab.agent_settings(sec)["sandbox"]["network"]["allowedDomains"]
     prompt = GH.instructions(lab, mgr, root="/r")
     assert "bot account flash-bot" in prompt and "anatoli-starostin/spiky" in prompt
-    assert "spikyclaudebot" in prompt and "GH_TOKEN=$(cat /r/<identity>/token)" in prompt
+    assert "spikyclaudebot" in prompt and "-R owner/repo" in prompt and "hosts.yml" not in prompt
     assert "never approve or merge" in prompt.lower()
 
 
@@ -88,9 +88,14 @@ def test_git_picks_the_identity_by_repository(tmp_path):
     secrets.mkdir()
     (secrets / "flash-bot.token").write_text("ghp_flash\n")
     (secrets / "spikyclaudebot.token").write_text("ghp_spiky\n")
+    lab.agents[mgr]["workdir"] = str(tmp_path / "work")
     env = GH.prepare(lab, mgr, root=str(root), secrets=str(secrets), helper=str(HELPER))
-    assert env["GH_CONFIG_DIR"] == str(root / "flash-bot" / "gh")
-    assert "oauth_token: ghp_flash" in (root / "flash-bot" / "gh" / "hosts.yml").read_text()
+    # gh's config: writable, in the working folder, no token in it (#52)
+    assert env["GH_CONFIG_DIR"] == str(tmp_path / "work" / ".config" / "gh")
+    assert (tmp_path / "work" / ".config" / "gh").is_dir()
+    assert not (root / "flash-bot" / "gh").exists()
+    assert env["PATH"].startswith(GH.SHIM + ":")
+    assert (root / "flash-bot" / "token").read_text().strip() == "ghp_flash"
     full = {**os.environ, **env, "HOME": str(tmp_path)}
 
     def git(cwd, *a, stdin=None):
@@ -140,3 +145,36 @@ def test_intake_takes_github_tokens():
     assert I.check_value("github-token", "github_pat_" + "a" * 40).startswith("github_pat_")
     with pytest.raises(I.IntakeError, match="GitHub token"):
         I.check_value("github-token", "xoxb-" + "a" * 40)
+
+
+SHIM = Path(__file__).parent.parent / "deploy" / "worker" / "gh-shim" / "gh"
+
+
+def test_gh_shim_reads_the_token_at_call_time(tmp_path):
+    """#52: the gh shim gives the real gh the current token (an App's changes hourly), the
+    identity mapped to -R owner/repo, or keeps a GH_TOKEN the agent set itself."""
+    root = tmp_path / "share"
+    for name, tok in (("flash-bot", "ghs_one"), ("spikyclaudebot", "ghp_spiky")):
+        (root / name).mkdir(parents=True)
+        (root / name / "token").write_text(tok + "\n")
+    (root / "default").write_text("flash-bot\n")
+    (root / "repos.tsv").write_text("anatoli-starostin/spiky\tspikyclaudebot\n")
+    real = tmp_path / "real-gh"
+    real.write_text('#!/bin/sh\necho "token=$GH_TOKEN args=$*"\n')
+    real.chmod(0o755)
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "LAB_GITHUB_DIR": str(root),
+           "LAB_REAL_GH": str(real)}
+
+    def gh(*args, **extra):
+        r = subprocess.run([str(SHIM), *args], capture_output=True, text=True, timeout=10,
+                           env={**env, **extra})
+        return r.returncode, r.stdout.strip()
+    assert gh("pr", "list") == (0, "token=ghs_one args=pr list")
+    (root / "flash-bot" / "token").write_text("ghs_two\n")              # the App refreshed it
+    assert gh("pr", "list")[1].startswith("token=ghs_two")
+    assert gh("pr", "list", "-R", "Anatoli-Starostin/Spiky")[1].startswith("token=ghp_spiky")
+    assert gh("--repo=anatoli-starostin/spiky", "issue", "list")[1].startswith("token=ghp_spiky")
+    assert gh("repo", "view", "-R", "acme/models")[1].startswith("token=ghs_two")
+    assert gh("pr", "list", GH_TOKEN="mine")[1].startswith("token=mine")   # the agent's own
+    env["LAB_REAL_GH"] = str(tmp_path / "missing")
+    assert gh("pr", "list")[0] == 127

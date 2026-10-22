@@ -3,7 +3,7 @@
 An app acts with short-lived installation tokens (1 hour), minted with its private key. The
 key belongs to the agent's service (~/.config/agentic-lab/github-app.pem, unreadable by the
 agent); the service mints a token, writes it where the agent's git and gh read it
-(TOKEN_DIR: a file for git's credential helper, and gh's hosts.yml), and mints the next one
+(TOKEN_DIR: a file git's credential helper and the gh shim read), and mints the next one
 before it expires. So the agent always has a working token and never the key.
 """
 import asyncio
