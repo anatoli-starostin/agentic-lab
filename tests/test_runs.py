@@ -316,7 +316,8 @@ def test_a_run_writes_only_its_own_part_of_the_state():
     lines = u.splitlines()
     assert "ReadOnlyPaths=/home/lab-worker-a" in lines
     assert ("ReadWritePaths=-/home/lab-worker-a/work "
-            "-/home/lab-worker-a/.local/state/agentic-lab/runs/%i") in lines
+            "-/home/lab-worker-a/.local/state/agentic-lab/runs/%i "
+            "-/home/lab-worker-a/.local/state/agentic-lab/run-home") in lines
     assert "InaccessiblePaths=-/home/lab-worker-a/.config/agentic-lab" in lines
 
 
