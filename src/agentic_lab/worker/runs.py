@@ -8,7 +8,7 @@ approves it (every time: a run is outside the sandbox), and the worker service s
 as its own systemd unit, `lab-run-<agent>@<run-id>.service`, as the agent's Unix user:
 
     ~/.local/state/agentic-lab/runs/<id>.json         what to run (written by the service)
-    ~/.local/state/agentic-lab/runs/<id>.status.json  state and exit code (by the run)
+    ~/.local/state/agentic-lab/runs/<id>/status.json  state and exit code (by the run)
     <workdir>/runs/<name>-<id>/log                    its output, readable by the agent
 
 The service may start and stop only its own runs: one sudo rule per worker allows only
@@ -47,12 +47,17 @@ def unit(agent_id, run_id):
     return f"lab-run-{agent_id}@{run_id}.service"
 
 
-def unit_template(agent_id, user, lab_path="/etc/agentic-lab/lab.yaml", home=None):
+STATUS_KEYS = ("started", "ended", "exit_code", "pid", "stop_requested", "error")
+
+
+def unit_template(agent_id, user, lab_path="/etc/agentic-lab/lab.yaml", home=None,
+                  workdir=None):
     """/etc/systemd/system/lab-run-<agent>@.service: one run of this worker. The run can't
     see the agent's lab secrets (its member's Claude seat token, lab tokens), and of the
-    worker's state it may write only its runs' status. The real home path: in a system unit
-    %h is root's, even with User=."""
+    home it may write only the working folder and its own status folder: the rest of the
+    home is read-only to it. The real home path: in a system unit %h is root's."""
     home = home or f"/home/{user}"
+    workdir = workdir or f"{home}/work"
     return f"""# A long run of worker {agent_id} (worker/runs.py). Started and stopped by the worker
 # service only (lab-run-ctl, /etc/sudoers.d/agentic-lab-runs); never enabled.
 [Unit]
@@ -68,8 +73,8 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 UMask=0077
 InaccessiblePaths=-{home}/.config/agentic-lab
-ReadOnlyPaths=-{home}/.local/state/agentic-lab
-ReadWritePaths=-{home}/.local/state/agentic-lab/runs
+ReadOnlyPaths={home}
+ReadWritePaths=-{workdir} -{home}/.local/state/agentic-lab/runs/%i
 KillMode=control-group
 TimeoutStopSec=60
 """
@@ -90,10 +95,21 @@ class RunStore:
     def _path(self, run_id, suffix=""):
         if not _ID.match(run_id or ""):
             raise RunError(f"bad run id {run_id!r}")
+        if suffix == ".status":     # a folder of its own: the one place its run may write
+            return os.path.join(self.root, run_id, "status.json")
         return os.path.join(self.root, f"{run_id}{suffix}.json")
 
+    def _status(self, run_id):
+        """A run's status: only its status fields (it can't change what the run is)."""
+        st = self._read(self._path(run_id, ".status"))
+        if st is None:              # a run started before its status had a folder
+            st = self._read(os.path.join(self.root, f"{run_id}.status.json"))
+        st = st if isinstance(st, dict) else {}
+        return {k: v for k, v in st.items() if k in STATUS_KEYS + ("state",)}
+
     def _write(self, path, data):
-        fd, tmp = tempfile.mkstemp(dir=self.root, prefix=".tmp-")
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp-")
         with os.fdopen(fd, "w") as f:
             json.dump(data, f, indent=1)
         os.replace(tmp, path)
@@ -118,6 +134,7 @@ class RunStore:
         spec = {"id": run_id, "task": task_id, "name": name, "command": command, "cwd": cwd,
                 "log": os.path.join(logdir, "log"), "created": _now()}
         self._write(self._path(run_id), spec)
+        os.makedirs(os.path.dirname(self._path(run_id, ".status")), mode=0o700, exist_ok=True)
         try:
             self.systemctl("start", self.agent_id, run_id)
         except (OSError, subprocess.SubprocessError) as e:
@@ -128,7 +145,7 @@ class RunStore:
     def stop(self, run_id):
         self.get(run_id)
         self.systemctl("stop", self.agent_id, run_id)
-        st = self._read(self._path(run_id, ".status")) or {}
+        st = self._status(run_id)
         if st.get("state") not in ("exited", "failed", "stopped", "lost"):
             self._write(self._path(run_id, ".status"), {**st, "stop_requested": _now()})
         return self.view(run_id)
@@ -143,16 +160,16 @@ class RunStore:
         """The run with its state: starting, running, exited (exit code), failed, stopped,
         or lost (its unit ended without a word, e.g. the machine was powered off)."""
         spec = self.get(run_id)
-        st = self._read(self._path(run_id, ".status")) or {}
+        st = self._status(run_id)
         active = False
         if (st.get("state") or "starting") in ACTIVE:
             # systemd, then the status file again: a run that ends between the two reads
             # then shows its exit, never "lost" (#59); ended runs aren't asked about
             active = self.systemctl("is-active", self.agent_id, run_id)
-            st = self._read(self._path(run_id, ".status")) or st
+            st = self._status(run_id) or st
         state = st.get("state") or "starting"
         if state in ACTIVE and not active:
-            st = self._read(self._path(run_id, ".status")) or st     # once more: just ended?
+            st = self._status(run_id) or st     # once more: just ended?
             state = st.get("state") or "starting"
         if state in ACTIVE and not active and st.get("stop_requested"):
             state = "stopped"               # stopped before it could say so itself
@@ -186,6 +203,15 @@ def log_tail(path, lines, root):
         return ""
 
 
+def home_env(workdir):
+    """A run's home is read-only to it: what tools keep in the home (settings, data, state)
+    goes into the working folder instead."""
+    w = os.path.abspath(workdir)
+    return {"XDG_CONFIG_HOME": os.path.join(w, ".config"),
+            "XDG_DATA_HOME": os.path.join(w, ".local", "share"),
+            "XDG_STATE_HOME": os.path.join(w, ".local", "state")}
+
+
 def _systemctl(verb, agent_id, run_id):
     if verb == "is-active":
         r = subprocess.run([SYSTEMCTL, "is-active", "--quiet", unit(agent_id, run_id)],
@@ -208,7 +234,8 @@ def run_exec(store: RunStore, run_id, env=None):
         p = subprocess.Popen(["/bin/bash", "-c", spec["command"]], cwd=spec["cwd"],
                              stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                              start_new_session=True,
-                             env={**os.environ, **cache_env(store.workdir), **(env or {})})
+                             env={**os.environ, **cache_env(store.workdir),
+                                  **home_env(store.workdir), **(env or {})})
         store._write(status, {"state": "running", "started": _now(), "pid": p.pid})
         stopped = {}
 
@@ -220,7 +247,7 @@ def run_exec(store: RunStore, run_id, env=None):
                 pass
         signal.signal(signal.SIGTERM, on_term)
         code = p.wait()
-        st = store._read(status) or {}
+        st = store._status(run_id)
         state = "stopped" if stopped or st.get("stop_requested") else "exited"
         store._write(status, {**st, "state": state, "ended": _now(), "exit_code": code})
         log.write(f"== {_now()} {state}, exit code {code}\n".encode())
