@@ -108,9 +108,16 @@ def test_token_kept_where_git_and_gh_read_it(tmp_path):
     def fake_mint(app_id, key, inst):
         stop.set()                                   # one round is enough here
         return "ghs_fresh", dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=1)
+    listed = []
+
+    def lister(token, app):                          # the installation's repositories (#53)
+        listed.append((token, app))
+        return ["acme/models", "acme/lab-config"]
     asyncio.run(GA.keep_token(1, "acme-flash[bot]", stop, key_path=str(keyfile),
-                              token_dir=str(tdir), mint_fn=fake_mint))
+                              token_dir=str(tdir), mint_fn=fake_mint, lister=lister))
     assert (tdir / "token").read_text() == "ghs_fresh\n"
+    assert listed == [("ghs_fresh", True)]                       # with each new token
+    assert GH.read_repos(str(tdir))[0] == ["acme/models", "acme/lab-config"]
     assert not (tdir / "gh" / "hosts.yml").exists()             # gh reads the token via its shim
     # the agent's git, with the app's token kept in its identity's folder
     lab = lab_with_both(tmp_path)

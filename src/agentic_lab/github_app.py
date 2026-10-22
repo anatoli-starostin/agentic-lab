@@ -100,8 +100,10 @@ def write_token(token, login, token_dir=TOKEN_DIR):
 
 
 async def keep_token(app_id, login, stop, installation_id=None, key_path=KEY,
-                     token_dir=TOKEN_DIR, mint_fn=mint):
-    """Beside an agent's service: keep a fresh installation token for the agent."""
+                     token_dir=TOKEN_DIR, mint_fn=mint, lister=None):
+    """Beside an agent's service: keep a fresh installation token for the agent, and with
+    each token, the installation's repositories (repos.txt; a failure keeps the last list)."""
+    from .github import list_repos, refresh_repos
     while not stop.is_set():
         wait = 60
         try:
@@ -109,6 +111,8 @@ async def keep_token(app_id, login, stop, installation_id=None, key_path=KEY,
                 key = f.read()
             token, expires = await asyncio.to_thread(mint_fn, app_id, key, installation_id)
             write_token(token, login, token_dir)
+            await asyncio.to_thread(refresh_repos, token, True,
+                                    os.path.expanduser(token_dir), lister or list_repos)
             left = (expires - dt.datetime.now(dt.timezone.utc) - REFRESH_BEFORE)
             wait = max(60, left.total_seconds())
         except FileNotFoundError:

@@ -282,7 +282,11 @@ deployed, and the secretary checks in code that the person asking is an admin.
     scope (`public_repo` for public repos, `repo` for private). A GitHub App has neither
     problem.
 
-  The agent then uses git and `gh` as that identity. An agent can also have **several,
+  The agent then uses git and `gh` as that identity, and its prompt lists the repositories
+  each of its identities can reach (an App: the repositories it's installed on; a bot: those
+  its token reaches). If an agent says it can't reach a repository, give its identity access
+  there (install the App on it, or widen the token); the list updates within the hour (an
+  App) or 6 hours (a bot), or at the next restart. An agent can also have **several,
   picked by repository**, e.g. a lab identity by default and an open-source
   project's bot for that project:
   `github: {acme-flash: default, spikyclaudebot: [anatoli-starostin/spiky]}`. **Protect `main`** in each repo (pull requests only, reviews by human

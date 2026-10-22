@@ -342,7 +342,8 @@ class SdkRunner:
             allowed_tools=list(LAB_TOOLS),
             system_prompt={"type": "preset", "preset": "claude_code",
                            "append": _system_prompt(self.agent_id, task, self.keep_free_gb)
-                           + self.prompt_extra},
+                           + (self.prompt_extra() if callable(self.prompt_extra)
+                              else self.prompt_extra)},
             model=self.model,
             env=self.env,
             cli_path=self.cli_path,
