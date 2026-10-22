@@ -56,12 +56,21 @@ DOMAINS = ["github.com", "api.github.com", "codeload.github.com", "uploads.githu
 
 
 def _write(path, text, mode=0o600):
+    """A new file, renamed into place (never written through whatever is at the path)."""
+    import tempfile
     os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        f.write(text)
-    os.chmod(tmp, mode)
-    os.replace(tmp, path)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".tmp-")
+    try:
+        with os.fdopen(fd, "w") as f:
+            f.write(text)
+        os.chmod(tmp, mode)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 def write_token(token, login, identity_dir):

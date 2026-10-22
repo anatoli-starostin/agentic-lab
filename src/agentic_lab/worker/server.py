@@ -69,7 +69,7 @@ def read_workdir_file(workdir, path):
     """A plain file in the worker's working folder (never outside it, never through a
     link: safefs), as base64."""
     from .. import safefs
-    root = os.path.realpath(workdir)
+    root = os.path.abspath(workdir)
     full = os.path.normpath(path if os.path.isabs(path) else os.path.join(root, path))
     try:
         size = safefs.size(root, full)
@@ -99,7 +99,7 @@ def write_inbox_file(workdir, name, b64):
         raise ToolError(f"the limit is {MAX_FILE_BYTES // 1_000_000} MB")
     from .. import safefs
     try:
-        path = safefs.write(os.path.realpath(workdir), os.path.join("inbox", name), data)
+        path = safefs.write(os.path.abspath(workdir), os.path.join("inbox", name), data)
     except OSError as e:
         raise ToolError(f"couldn't store it: {e}") from None
     return {"path": path, "size": len(data)}

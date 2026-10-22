@@ -67,7 +67,7 @@ def _read_own(ctx, path, limit=20 * 1024 * 1024):
     """A plain file of this manager's working folder (never through a link: safefs), or
     None."""
     try:
-        return safefs.read(os.path.realpath(ctx.workdir), path, limit=limit)
+        return safefs.read(os.path.abspath(ctx.workdir), path, limit=limit)
     except OSError:
         return None
 
@@ -213,7 +213,7 @@ def build(ctx):
         data = base64.b64decode(f["base64"])
         name = os.path.basename(f["name"]) or "file"
         try:            # a copy in the working folder, written safely (safefs)
-            local = safefs.write(os.path.realpath(ctx.workdir), os.path.join(
+            local = safefs.write(os.path.abspath(ctx.workdir), os.path.join(
                 "from-workers", os.path.basename(args["worker"]), name), data)
         except OSError as e:
             return _err(f"couldn't keep a copy: {e}")
