@@ -123,3 +123,39 @@ def test_meter_without_percentage():
 
 def test_human_numbers():
     assert web.human(888114) == "888k" and web.human(1_234_567) == "1.2M" and web.human(42) == "42"
+
+
+
+def test_only_the_member_or_an_admin_checks_a_seat(free_port):
+    """#62: reading a seat's limits spends a request on it: the member or an admin only."""
+    import threading
+    import time
+
+    import httpx2
+    import uvicorn
+    checked = []
+
+    async def check(human):
+        checked.append(human)
+
+    def run(who, human):
+        async def viewer(ip):
+            return who
+        server = uvicorn.Server(uvicorn.Config(web.app(
+            lambda: STATE, None, viewer, check_usage=check,
+            may_check=lambda m, h: m is not None and (m == h or m == "admin")),
+            host="127.0.0.1", port=free_port, log_level="error"))
+        th = threading.Thread(target=server.run, daemon=True)
+        th.start()
+        while not server.started:
+            time.sleep(0.02)
+        try:
+            return httpx2.post(f"http://127.0.0.1:{free_port}/usage/check/{human}")
+        finally:
+            server.should_exit = True
+            th.join()
+    assert run(None, "alice").status_code == 403
+    assert run("bob", "alice").status_code == 403
+    assert run("alice", "alice").status_code in (200, 303)
+    assert run("admin", "alice").status_code in (200, 303)
+    assert checked == ["alice", "alice"]

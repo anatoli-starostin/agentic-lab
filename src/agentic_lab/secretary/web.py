@@ -372,14 +372,22 @@ def render_logs(state, agent, hours, events, error=None, scope="all"):
             f"</span></header>{body}</body></html>")
 
 
-def app(get_state, get_events=None, viewer=None, check_usage=None, access=None):
+def app(get_state, get_events=None, viewer=None, check_usage=None, access=None,
+        may_check=None):
     """`get_events(agent, hours, member)` (async) -> events (only `member`'s own entries
     when given); `viewer(client_ip)` (async) -> the member behind that address, or None;
     `access(member, agent)` -> "all" | "own" | None (log_access); `check_usage(human)`
     (async): read that seat's limits now."""
     async def check(request):
+        """Read a seat's limits now: only for the member themselves (or an admin), whom
+        the request's Tailscale identity names (#62); it spends a request on that seat."""
+        human = request.path_params["human"]
+        member = await viewer(request.client.host) if viewer is not None else None
+        if may_check is None or not may_check(member, human):
+            return HTMLResponse("<!doctype html><p>Only that member (or an admin) can check "
+                                "their seat.</p>", status_code=403, headers=HEADERS)
         if check_usage is not None:
-            await check_usage(request.path_params["human"])
+            await check_usage(human)
         return RedirectResponse("/", status_code=303)
 
     async def icon(request):

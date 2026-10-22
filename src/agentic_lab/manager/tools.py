@@ -54,6 +54,14 @@ def _err(e):
     return {"content": [{"type": "text", "text": f"error: {e}"}], "is_error": True}
 
 
+def _pending_visible(ctx, r):
+    """A pending approval request this conversation may see: of a task it may see, or the
+    member's own request in their DM (#62)."""
+    t = ctx.state.tasks.get(r.get("task_id") or "")
+    return (t is not None and visible(ctx, t)) or (
+        t is None and ctx.private and r.get("human") == ctx.requester)
+
+
 def visible(ctx, task):
     """May the current conversation see this tracked task? In a private conversation (DM):
     the member's own tasks. In a channel thread: the tasks submitted from that thread."""
@@ -146,13 +154,9 @@ def build(ctx):
             pending = await ctx.broker.pending()
         except WorkerError as e:
             return _err(e)
-        shown = []
-        for r in pending:
-            t = ctx.state.tasks.get(r.get("task_id") or "")
-            if (t is not None and visible(ctx, t)) or (
-                    t is None and ctx.private and r.get("human") == ctx.requester):
-                shown.append({k: r[k] for k in ("id", "agent", "task_id", "human", "detail",
-                                                "options", "expires", "context")})
+        shown = [{k: r[k] for k in ("id", "agent", "task_id", "human", "detail", "options",
+                                    "expires", "context")}
+                 for r in pending if _pending_visible(ctx, r)]
         return _text(str(shown) if shown else "nothing pending")
 
     @tool("add_approval_note", "Add a note to a pending approval request, shown to the "
@@ -162,6 +166,10 @@ def build(ctx):
         if ctx.broker is None:
             return _text("no approval broker is configured")
         try:
+            # only a request this conversation may see (a shared manager: the member's own)
+            if not any(r.get("id") == args["request_id"] and _pending_visible(ctx, r)
+                       for r in await ctx.broker.pending()):
+                return _err(f"no pending request {args['request_id']} here")
             await ctx.broker.add_context(args["request_id"], args["note"])
         except WorkerError as e:
             return _err(e)

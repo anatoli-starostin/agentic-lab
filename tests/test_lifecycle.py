@@ -208,3 +208,27 @@ def test_parallel_approvals_and_recovery(tmp_path):
 
 async def _record(log, rid):
     log.append(rid)
+
+
+
+def test_notes_only_on_requests_this_conversation_may_see(tmp_path, monkeypatch):
+    """#62: a shared manager can't annotate another member's pending request."""
+    state = ManagerState(tmp_path)
+    conv = state.conversation("C1", "1.0")
+    state.track("t-1", "worker-a", conv.key, "alice")
+    notes = []
+
+    class Broker:
+        async def pending(self):
+            return [{"id": "r-mine", "task_id": "t-1", "human": "alice"},
+                    {"id": "r-bob", "task_id": "t-bob", "human": "bob"}]
+
+        async def add_context(self, rid, text):
+            notes.append(rid)
+    ctx = SimpleNamespace(workers=None, broker=Broker(), state=state, conv=conv,
+                          requester="alice", private=False)
+    h = manager_tools(ctx, monkeypatch)
+    assert not asyncio.run(h["add_approval_note"]({"request_id": "r-mine", "note": "x"})).get(
+        "is_error")
+    assert asyncio.run(h["add_approval_note"]({"request_id": "r-bob", "note": "x"}))["is_error"]
+    assert notes == ["r-mine"]

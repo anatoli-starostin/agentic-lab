@@ -800,7 +800,10 @@ async def serve(lab_path, host, port):
     from .web import log_access
     server = uvicorn.Server(uvicorn.Config(app(state_with_checks, get_events, viewer,
                                                check_usage,
-                                               access=lambda m, a: log_access(lab, m, a)),
+                                               access=lambda m, a: log_access(lab, m, a),
+                                               may_check=lambda m, h: m is not None and (
+                                                   m == h or bool((lab.humans.get(m) or {})
+                                                                  .get("admin")))),
                                            host=host, port=port, log_level="warning"))
     log.info("secretary: watching %d worker(s), slack=%s, web UI on http://%s:%d/",
              len(workers.known()), sec.slack is not None, host, port)
