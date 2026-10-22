@@ -37,6 +37,8 @@ class TrackedTask:
     wrapup_reply: str | None = None     # the wrap-up written, not yet delivered
     wrapup_tries: int = 0               # failed wrap-up attempts
     wrapup_next: float = 0.0            # not before this (time.time()), after a failure
+    register_tries: int = 0             # failed registrations with the broker
+    register_next: float = 0.0          # retried not before this
 
 
 class ManagerState:

@@ -257,7 +257,10 @@ B=$(cd "$(dirname "$0")" && pwd)
 say() {{ echo "== $*"; }}
 TIP=$(tailscale ip -4 2>/dev/null | head -1 || true)
 [ -n "$TIP" ] || {{ echo "this host isn't on the tailnet"; exit 1; }}
+"""
 
+# everything from here on changes the host
+SCRIPT_BODY = r"""
 say "framework -> /opt/agentic-lab"
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh >/dev/null 2>&1
 mkdir -p /opt/agentic-lab /etc/agentic-lab
@@ -292,7 +295,7 @@ def busy_check(plan):
     Read as each worker's own user."""
     lines = ['say "active work (a catch-up waits for it)"']
     for u in sorted(set((plan.get("run_units") or {}).values())):
-        check = ('grep -lsE \'"state": "(running|queued|awaiting_approval)"\' '
+        check = ('grep -lsE \'"state": "(running|queued|awaiting_approval|waiting)"\' '
                  f"/home/{u}/.local/state/agentic-lab/tasks/*.json")
         lines.append(f"if runuser -u {u} -- sh -c {shlex.quote(check)} >/dev/null; then "
                      f"echo '  {u} has active tasks: not now'; exit {BUSY}; fi")
@@ -301,8 +304,9 @@ def busy_check(plan):
 
 def script(plan):
     lines = [SCRIPT_HEAD.format(host=plan["host"])]
-    if plan.get("catch_up"):
+    if plan.get("catch_up"):    # before anything here changes (#61)
         lines += busy_check(plan)
+    lines.append(SCRIPT_BODY)
     lines.append('say "users"')
     for u in dict.fromkeys(plan["users"]):
         lines.append(f"/opt/agentic-lab/src/deploy/worker/create-agent-user.sh {u} >/dev/null")
@@ -406,23 +410,26 @@ def readers_script(readers, readable):
              "members=''"]
     for r in readers:
         lines.append(f"if id {q(r)} >/dev/null 2>&1; then members=\"$members,{r}\"; "
-                     f"else echo '  no user {r} here: skipped'; fi")
+                     f"else echo {q(f'  no user {r} here: skipped')}; fi")
     lines.append('gpasswd -M "${members#,}" lab-readers >/dev/null')
     for user, work in sorted(readable.items()):
         home = f"/home/{user}"
         if os.path.dirname(work) != home:
-            lines.append(f"echo '  {user}: its working folder {work} is not directly in its "
-                         "home: not shared'")
+            lines.append("echo " + q(f"  {user}: its working folder {work} is not directly "
+                                     "in its home: not shared"))
             continue
         lines += [
             # all inside the home as its owner: root never walks paths the agent owns
             f"runuser -u {q(user)} -- install -d -m 700 {q(work)} {q(work + '/tmp')}",
             # everything in the home but the working folder: the agent's alone
             f"runuser -u {q(user)} -- find -P {q(home)} -mindepth 1 -maxdepth 1 "
-            f"! -path {q(work)} ! -type l -exec chmod go-rwx {{}} +",
+            f"! -path {q(work)} ! -type l -exec chmod go-rwx {{}} + 2>/dev/null || "
+            f"echo {q(f'  {user}: some files in its home are not its own: left as they are')}",
             f"[ -L {q(home)} ] || setfacl -m g:lab-readers:x {q(home)}",
-            f"runuser -u {q(user)} -- setfacl -R -P -m g:lab-readers:rX {q(work)}",
-            f"runuser -u {q(user)} -- setfacl -R -P -d -m g:lab-readers:rX {q(work)}",
+            f"runuser -u {q(user)} -- setfacl -R -P -m g:lab-readers:rX {q(work)} 2>/dev/null "
+            f"|| echo {q(f'  {user}: some files in {work} are not its own: not shared')}",
+            f"runuser -u {q(user)} -- setfacl -R -P -d -m g:lab-readers:rX {q(work)} "
+            "2>/dev/null || true",
         ]
     lines.append('echo "  lab-readers: ${members#,} (they may need to log in again)"')
     return lines
@@ -467,8 +474,8 @@ def self_admin_script(sa):
         "echo '  sudo rule refused by visudo'; }",
     ]
     if sa.get("github"):        # its GitHub identity: HTTPS, its service clones (no deploy key)
-        return rule + [f"echo '  config repo: the secretary uses its GitHub identity "
-                       f"{sa['github']} (HTTPS, its service clones; no deploy key)'"]
+        return rule + ["echo " + q(f"  config repo: the secretary uses its GitHub identity "
+                                   f"{sa['github']} (HTTPS, its service clones; no deploy key)")]
     ssh = ("ssh -i ~/.config/agentic-lab/config-repo-key -o IdentitiesOnly=yes "
            "-o StrictHostKeyChecking=accept-new")
     return rule + [
@@ -484,7 +491,7 @@ def self_admin_script(sa):
         f"core.sshCommand {q(ssh)} && echo '  config repo: cloned for the secretary' || {{ "
         "echo '  the secretary cannot reach the config repo yet. Add this deploy key to it, "
         "WITH write access (it pushes branches, never merges), then sudo lab apply again:'; "
-        f"sed 's/^/    /' ~{u}/.config/agentic-lab/config-repo-key.pub; }}",
+        f"runuser -u {u} -- sed 's/^/    /' /home/{u}/.config/agentic-lab/config-repo-key.pub; }}",
     ]
 
 
@@ -551,9 +558,14 @@ def describe(plan):
     return "\n".join(out)
 
 
+def no_answer(stderr):
+    """Did ssh fail because nothing answered (a stopped VM), not for another reason?"""
+    return any(s in (stderr or "").lower() for s in _NO_ANSWER)
+
+
 def applied_on(plan, local, admin):
-    """The host's /etc/agentic-lab/applied.yaml (what it runs), {} if it has none, or
-    UNREACHABLE."""
+    """The host's /etc/agentic-lab/applied.yaml (what it runs), {} if it has none,
+    UNREACHABLE (nothing answered) or SSH_FAILED (it answered, ssh failed)."""
     path = "/etc/agentic-lab/applied.yaml"
     if local:
         try:
@@ -566,7 +578,7 @@ def applied_on(plan, local, admin):
     r = subprocess.run(as_admin + ["ssh", *SSH_OPTS, "--", target, f"cat {path}"],
                        capture_output=True, text=True)
     if r.returncode == 255:
-        return UNREACHABLE
+        return UNREACHABLE if no_answer(r.stderr) else SSH_FAILED
     try:
         return yaml.safe_load(r.stdout) or {} if r.returncode == 0 else {}
     except ValueError:
@@ -592,7 +604,7 @@ def run_bundle(plan, local, admin):
         probe = subprocess.run(as_admin + ["ssh", *SSH_OPTS, "--", target, "true"],
                                capture_output=True, text=True)
         if probe.returncode == 255:
-            if any(s in (probe.stderr or "").lower() for s in _NO_ANSWER):
+            if no_answer(probe.stderr):
                 return UNREACHABLE
             print(f"  ssh to {target} failed: {(probe.stderr or '').strip()[-400:]}")
             return SSH_FAILED
@@ -600,6 +612,7 @@ def run_bundle(plan, local, admin):
                                        f"{target}:{remote}"])
         if r.returncode:
             return r.returncode
-        return subprocess.run(as_admin + ["ssh", *SSH_OPTS, "--", target,
-                                          f"sudo bash {remote}/apply.sh; rc=$?; "
-                                          f"rm -rf {remote}; exit $rc"]).returncode
+        rc = subprocess.run(as_admin + ["ssh", *SSH_OPTS, "--", target,
+                                        f"sudo bash {remote}/apply.sh; rc=$?; "
+                                        f"rm -rf {remote}; exit $rc"]).returncode
+        return SSH_FAILED if rc == 255 else rc      # lost mid-apply: a failure, not a skip

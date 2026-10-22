@@ -357,7 +357,6 @@ class SdkRunner:
                     if tool_name in ALWAYS_ASK:     # approved this once, never as a grant
                         return PermissionResultAllow()
                     tool_grants.update({g["value"]: g.get("expires") for g in d.grants})
-                    session["narrow_at"] = _earliest(d.grants, session.get("narrow_at"))
                     return PermissionResultAllow()
                 session["restart_for"] = d.grants
                 return PermissionResultDeny(interrupt=True, message=(
@@ -406,12 +405,15 @@ class SdkRunner:
             prompt = ("The worker restarted while you were on this task. Continue it from where "
                       "you were; check the state of your working folder (and run_status) first.")
         result_msg, last_text = None, None
-        restarts = 0
+        restarts = expiries = 0
         while True:
-            grants = await self._grants_for(task)
+            # grants already past their expiry here aren't used (the broker's clock may lag)
+            grants = [g for g in await self._grants_for(task)
+                      if not g.get("expires") or dt.datetime.fromisoformat(g["expires"]) > _now()]
             # a timed grant ends the session when it expires: the next one goes without it
             session = {"violations": [], "restart_for": None, "expired": False,
-                       "narrow_at": _earliest(grants)}
+                       # tool grants are checked on each call: no restart for them
+                       "narrow_at": _earliest([g for g in grants if g["kind"] != "tool"])}
             try:
                 result_msg, last_text = await self._session(
                     task, store, outcome, session, grants, prompt)
@@ -442,7 +444,8 @@ class SdkRunner:
                 if restarts <= MAX_SESSION_RESTARTS:
                     continue
             elif session["expired"] and not ({"result", "wait"} & outcome.keys()) \
-                    and not store.get(task.id).cancel_requested:
+                    and not store.get(task.id).cancel_requested \
+                    and (expiries := expiries + 1) <= MAX_SESSION_RESTARTS:
                 prompt = ("A time-limited grant expired, so your session was restarted without "
                           "it (that's why your last action may show as not run). Continue the "
                           "task from where you were; check your working folder first.")

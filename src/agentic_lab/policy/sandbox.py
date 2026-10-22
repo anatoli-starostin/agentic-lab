@@ -100,6 +100,8 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
     for g in live:
         if g.kind == "tool" and not G.grantable_tool(g.value):
             continue
+        if g.kind == "write" and G.resolved_refused(g.value):
+            continue        # where it leads here isn't grantable (a link): not applied
         {"domain": domains, "write": writes, "tool": tools}[g.kind].append(g.value)
     fs = filesystem(workdir, writes, gpu)
     writable = fs["allowWrite"]

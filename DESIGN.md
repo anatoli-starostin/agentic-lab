@@ -589,9 +589,11 @@ up when they're back (#61): every agent's health reading says what its host runs
 host, the secretary runs `lab apply-main --catch-up`, which deploys the commit of `main` the
 secretary's host runs (never a newer one, never an `--unreviewed` apply) to the hosts on an
 **older** reviewed commit of `main`. A host on a newer or unreviewed commit is left alone
-(shown as "ahead", never rolled back). Not while a worker there has tasks running, queued
-or awaiting approval: the secretary waits for that, and the host checks again itself right
-before it applies (as each worker's user). Only a failed deploy counts as an attempt (a
+(shown as "ahead", never rolled back). Not while a worker there has tasks running, queued,
+awaiting approval or waiting on their runs: the secretary waits for that, and the host
+checks again itself first thing, before anything on it changes (as each worker's user); a
+host busy for over 6 hours is announced once and asked every 15 minutes. Only a failed
+deploy (ssh failing on a host that answers counts, a host not answering doesn't) counts as an attempt (a
 host not reachable yet while it boots, or busy, doesn't): at most 3 per host and commit (5
 and 20 minutes apart), then the host stays stale and the admins are told; failures older
 than a day are forgotten, so it tries again. A catch-up that never reports back is given up

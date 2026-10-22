@@ -102,8 +102,8 @@ def grant_options(tool, tool_input, violations):
     elif tool in ("Write", "Edit", "NotebookEdit"):
         path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
         folder = os.path.dirname(path)
-        if folder not in ("", "/") and folder != os.path.expanduser("~"):
-            add("write", folder)
+        if folder.startswith(("/", "~/")) and not G.write_refused(folder):
+            add("write", folder)            # only what a write grant may name at all
     elif tool in ("WebFetch", "WebSearch") or (tool.startswith("mcp__") and
                                                  G.grantable_tool(tool)):
         add("tool", tool)
@@ -114,17 +114,47 @@ MAX_DETAIL = 20000          # characters shown; a longer request can only be den
 TRUNCATED = "⚠ TRUNCATED"   # marks a detail that isn't shown in full
 
 
-def visible(text):
-    """Text made reviewable: runs of spaces or tabs shown with their count, control
-    characters as escapes, long runs of blank lines counted."""
+# characters that print as nothing (or as a blank) though they're "printable"
+BLANKS = {0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x034F, 0x17B4, 0x17B5, 0x180E, 0x2060,
+          0x3000, 0x00A0, 0x00AD, 0xFEFF, 0x061C, 0x200B, 0x200C, 0x200D, 0x11A3, 0x11A4,
+          0x11A5, 0x11A6, 0x11A7, 0x1D159, 0x1D173, 0x1D174, 0x1D175, 0x1D176, 0x1D177,
+          0x1D178, 0x1D179, 0x1D17A, 0xFFFC, 0xFFFD, 0x2028, 0x2029, 0x202F, 0x205F}
+
+
+def _shown(c, ascii_only):
+    import unicodedata
+    o = ord(c)
+    if c == "\n" or 0x20 <= o < 0x7F:
+        return c
+    if ascii_only or o in BLANKS or unicodedata.category(c)[0] in "CMZ":
+        return f"\\x{o:02x}" if o < 0x80 else f"\\u{{{o:x}}}"   # \u{…}: never ambiguous
+    return c
+
+
+def _non_ascii_note(text):
+    """A line before file content that holds non-ASCII letters (which can look like ASCII
+    ones): how many, and the first few, escaped."""
+    odd = [c for c in text if ord(c) >= 0x80]
+    if not odd:
+        return ""
+    first = " ".join(f"\\u{{{ord(c):x}}}" for c in dict.fromkeys(odd[:200]))
+    return (f"⚠ the content has {len(odd)} non-ASCII characters (look-alikes of ASCII "
+            f"letters among them?): {first[:200]}\n")
+
+
+def visible(text, ascii_only=False):
+    """Text made reviewable: runs of spaces or tabs shown with their count, long runs of
+    blank lines counted, and every character that could hide something (controls, marks,
+    blanks and fillers that print as nothing) as an escape. `ascii_only`: everything
+    outside ASCII escaped (commands, paths, addresses)."""
     import re as _re
-    text = _re.sub(r"[ \t]{8,}", lambda m: f" ⟨{len(m.group())} blanks⟩ ", text)
-    text = _re.sub(r"\n{4,}", lambda m: f"\n⟨{len(m.group())} line breaks⟩\n", text)
-    return "".join(c if c in "\n" or c.isprintable() else f"\\x{ord(c):02x}" for c in text)
+    text = "".join(_shown(c, ascii_only) for c in text)     # first: the markers stay as is
+    text = _re.sub(r" {8,}", lambda m: f" ⟨{len(m.group())} blanks⟩ ", text)
+    return _re.sub(r"\n{4,}", lambda m: f"\n⟨{len(m.group())} line breaks⟩\n", text)
 
 
-def _full(text):
-    text = visible(text)
+def _full(text, ascii_only=False):
+    text = visible(text, ascii_only)
     if len(text) > MAX_DETAIL:
         return (text[:MAX_DETAIL]
                 + f"\n{TRUNCATED}: {len(text) - MAX_DETAIL} more characters not shown")
@@ -134,25 +164,27 @@ def _full(text):
 def describe(tool, tool_input):
     """What the agent wants to do, in full (nothing approved is hidden)."""
     if tool == "Bash":
-        return _full(tool_input.get("command", ""))
+        return _full(tool_input.get("command", ""), ascii_only=True)
+    path = visible(str(tool_input.get("file_path") or tool_input.get("notebook_path")),
+                   ascii_only=True)
     if tool == "Write":
-        return _full(f"Write {tool_input.get('file_path')}:\n{tool_input.get('content', '')}")
+        content = str(tool_input.get("content", ""))
+        return _full(f"Write {path}:\n{_non_ascii_note(content)}{content}")
     if tool == "Edit":
-        return _full(f"Edit {tool_input.get('file_path')}:\n--- replace:\n"
-                     f"{tool_input.get('old_string', '')}\n--- with:\n"
-                     f"{tool_input.get('new_string', '')}")
+        new = str(tool_input.get("new_string", ""))
+        return _full(f"Edit {path}:\n{_non_ascii_note(new)}--- replace:\n"
+                     f"{tool_input.get('old_string', '')}\n--- with:\n{new}")
     if tool in ("MultiEdit", "NotebookEdit"):
-        return _full(f"{tool} {tool_input.get('file_path') or tool_input.get('notebook_path')}"
-                     f":\n{json.dumps(tool_input, indent=1)}")
+        return _full(f"{tool} {path}:\n{json.dumps(tool_input, indent=1)}")
     if tool == "WebFetch":
-        return f"fetch {tool_input.get('url', '')}"
+        return _full(f"fetch {tool_input.get('url', '')}", ascii_only=True)
     if tool == "WebSearch":
-        return f"search: {tool_input.get('query', '')}"
+        return _full(f"search: {tool_input.get('query', '')}")
     if tool == "mcp__lab__start_run":
         return _full(f"start a long run as the agent, until it ends or is stopped; the "
                      f"agent's file rules, network not limited ({tool_input.get('name', 'run')})"
                      + (f" [in {tool_input['cwd']}]" if tool_input.get("cwd") else "")
-                     + f":\n{tool_input.get('command', '')}")
+                     + f":\n{tool_input.get('command', '')}", ascii_only=True)
     return _full(f"{tool} {json.dumps(tool_input, indent=1)}")
 
 

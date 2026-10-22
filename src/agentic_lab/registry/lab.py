@@ -29,6 +29,18 @@ _AGENT_ID = re.compile(r"^[a-z][a-z0-9-]*$")
 _UNIX_USER = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 _HOST_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 _DNS_NAME = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,62})(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}))*$")
+_WORKDIR = re.compile(r"^(~/|/)[A-Za-z0-9._/-]*$")
+
+
+def _in_home_settings(workdir):
+    parts = [p for p in os.path.normpath(workdir).split("/") if p]
+    if parts[:1] == ["~"]:
+        rest = parts[1:]
+    elif parts[:1] == ["home"]:
+        rest = parts[2:]
+    else:
+        return False
+    return not rest or rest[0].startswith(".")
 READERS_GROUP = "lab-readers"
 CHANNEL_TYPES = ("slack_dm",)   # first version: Slack DM only (DESIGN.md §7)
 ACCESS = ("shared", "dedicated")
@@ -353,8 +365,13 @@ def check(lab: Lab, today: dt.date | None = None):
         if isinstance(cp, int) and not isinstance(cp, bool) and not 1 <= cp <= 100:
             E(where, "compact_percent must be between 1 and 100")
         workdir = a.get("workdir", DEFAULT_WORKDIR)
-        if isinstance(workdir, str) and not workdir.startswith(("/", "~/")):
-            E(where, f"workdir must be an absolute or ~/ path, got {workdir!r}")
+        if isinstance(workdir, str) and (not _WORKDIR.match(workdir)
+                                         or ".." in workdir.split("/")):
+            E(where, f"workdir must be an absolute or ~/ path of letters, digits and . _ - / "
+                     f"(no ..), got {workdir!r}")
+        elif isinstance(workdir, str) and _in_home_settings(workdir):
+            E(where, f"workdir {workdir!r} is the home itself or one of its dot folders "
+                     "(settings, keys, the lab's own): use a plain folder, e.g. ~/work")
         for j, m in enumerate(a.get("grants") or []):
             try:
                 g = G.from_mapping(m)

@@ -93,6 +93,7 @@ UMask=0077
 InaccessiblePaths=-{home}/.config/agentic-lab -{home}/.nebius
 ReadOnlyPaths={home}
 ReadWritePaths=-{workdir}{extra} -{home}/.local/state/agentic-lab/runs/%i
+PrivatePIDs=yes
 KillMode=control-group
 TimeoutStopSec=60
 """

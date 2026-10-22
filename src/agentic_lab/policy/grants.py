@@ -53,9 +53,9 @@ def validate(kind, value):
     if kind == "write":
         if not (value.startswith("/") or value.startswith("~/")):
             raise GrantError(f"write grant must be an absolute or ~/ path, got {value!r}")
-        if os.path.normpath(os.path.expanduser(value)) in ("/", os.path.expanduser("~")):
-            raise GrantError(f"write grant too broad: {value!r}")
-        _not_the_labs_own(value)
+        why = write_refused(value)
+        if why:
+            raise GrantError(f"write grant {why}: {value!r}")
     if kind == "tool" and not _TOOL.match(value):
         raise GrantError(f"not a tool name or anchored mcp__server__ glob: {value!r}")
     if kind == "tool" and value == "mcp__lab__start_run":
@@ -65,34 +65,57 @@ def validate(kind, value):
                          "governed by the sandbox and the approvals")
 
 
-NOT_GRANTABLE = ("Bash",)
+# Bash: sandboxed commands need no grant, unsandboxed ones always ask; the file tools run
+# in the agent's process, outside the sandbox: writes are granted by path (`write`)
+NOT_GRANTABLE = ("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Read")
 LAB_SERVER = "mcp__lab__"
+
+
+def write_refused(value):
+    """Why a folder can't be granted for writing (None if it can). Judged on the path as
+    the system reads it (repeated slashes, `.`, trailing slashes don't matter): never `/`
+    or a whole home; in the agent's home (`~/…`) nothing whose first part starts with a dot
+    (services' config and state, shell and tool settings, keys); never another home
+    (`~user`, `/home/…`: the agent's own folders are written as `~/…`); never the
+    system's own views of processes and devices (`/proc`, `/dev`, `/sys`, `/run`: their
+    paths lead elsewhere, e.g. a process's root or open files). Where the path leads on the
+    host is checked again when the sandbox is set up (`resolved_refused`)."""
+    if ".." in value.split("/"):
+        return "with '..'"
+    path = os.path.normpath(re.sub(r"/{2,}", "/", value))
+    parts = [p for p in path.split("/") if p]
+    if path == "/" or parts == ["~"]:
+        return "too broad"
+    if parts and parts[0].startswith("~"):
+        if parts[0] != "~":
+            return "into another user's home"
+        if parts[1].startswith("."):
+            return "into the home's own settings and the lab's folders"
+        return None
+    if parts and parts[0] == "home":
+        return "into a home by its absolute path (use ~/… for the agent's own)"
+    if parts and parts[0] in PSEUDO:
+        return "into the system's views of processes and devices"
+    return None
+
+
+PSEUDO = ("proc", "dev", "sys", "run")
+
+
+def resolved_refused(value, home=None):
+    """write_refused for where the path really leads on this host (links followed): e.g. a
+    granted folder that is a link into the home's settings."""
+    home = os.path.realpath(home or os.path.expanduser("~"))
+    real = os.path.realpath(os.path.expanduser(value) if value.startswith("~/") else value)
+    if real == home or real.startswith(home + "/"):
+        real = "~" + real[len(home):]
+    return write_refused(real)
 
 
 def grantable_tool(value):
     """Tools a grant may name: never the lab's own tools (some must always ask) or Bash
     (sandboxed commands need no grant; unsandboxed ones always ask)."""
     return value not in NOT_GRANTABLE and not value.startswith(LAB_SERVER)
-
-
-def _in_home(value):
-    """~/x for ~/x and /home/<user>/x, else None."""
-    if value.startswith("~/"):
-        return "~" + os.path.normpath(value[1:])
-    parts = os.path.normpath(value).split("/")
-    return "~/" + "/".join(parts[3:]) if len(parts) > 3 and parts[1] == "home" else None
-
-
-def _not_the_labs_own(value):
-    """A write grant may not reach the lab's own folders (its secrets, state, GitHub setup),
-    nor contain them: a folder above a hidden one, made writable, would let it be moved."""
-    from .sandbox import NEBIUS, SECRETS, STATE
-    g = _in_home(value)
-    if g is None:
-        return
-    for own in (SECRETS, STATE, NEBIUS, "~/.local/share/agentic-lab"):
-        if g == own or g.startswith(own + "/") or own.startswith(g + "/"):
-            raise GrantError(f"write grant overlaps the lab's own {own}: {value!r}")
 
 
 def from_mapping(m, granted_by=None):

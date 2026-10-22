@@ -310,8 +310,8 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
 
     from . import configrepo as CR
     from . import lock
-    from .apply import (BUSY, UNREACHABLE, ApplyError, applied_on, describe, has_work,
-                        plan_all, run_bundle, secretary_host)
+    from .apply import (BUSY, SSH_FAILED, UNREACHABLE, ApplyError, applied_on, describe,
+                        has_work, plan_all, run_bundle, secretary_host)
     from .doctor import this_host
     errors = [i for i in registry.check(registry.load(lab_path)) if i.level == "error"]
     if errors:                     # never deploy (or even plan) a lab.yaml lab check refuses
@@ -343,6 +343,9 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
             if cur == UNREACHABLE:
                 said, why = "unreachable", "skipped: unreachable"
                 skipped.append(p["host"])
+            elif cur == SSH_FAILED:
+                said, why = "failed", "ssh failed (see above)"
+                failed += 1
             elif (cur.get("config_commit"), cur.get("framework_commit")) == (
                     record.get("config_commit"), record.get("framework_commit")) \
                     and not cur.get("unreviewed"):
@@ -425,11 +428,20 @@ def cmd_apply_main(args):
             sys.exit("lab apply-main: a deploy is already running")
         if held:
             os.close(held)          # free again for the deploy itself
-        os.makedirs(LOG_DIR, mode=0o755, exist_ok=True)
+        os.makedirs(LOG_DIR, mode=0o750, exist_ok=True)
+        import pwd
+        try:                        # root and the secretary (it reads the result) only
+            gid = pwd.getpwnam(cfg["config_owner"]).pw_gid
+            os.chown(LOG_DIR, 0, gid)
+            os.chmod(LOG_DIR, 0o750)
+        except (KeyError, OSError):
+            gid = None
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
         log = os.path.join(LOG_DIR, f"apply-{stamp}.log")
         open(log, "w").close()
-        os.chmod(log, 0o644)
+        os.chmod(log, 0o640 if gid is not None else 0o600)
+        if gid is not None:
+            os.chown(log, 0, gid)
         subprocess.run(["systemd-run", f"--unit=lab-apply-{stamp}", "--collect", "--quiet",
                         f"--property=StandardOutput=append:{log}",
                         f"--property=StandardError=append:{log}",

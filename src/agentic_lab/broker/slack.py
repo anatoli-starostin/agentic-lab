@@ -18,7 +18,7 @@ from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 from slack_sdk.web.async_client import AsyncWebClient
 
-from .core import PENDING, TRUNCATED, Broker, BrokerError, Request
+from .core import PENDING, TRUNCATED, Broker, BrokerError, Request, visible
 
 log = logging.getLogger("agentic_lab.broker.slack")
 
@@ -28,8 +28,9 @@ LABELS = {"once": "✅ allowed once", "hour": "✅ granted for 1 hour",
 
 
 def _grant_text(options):
-    return ", ".join(f"{o['value']}" if o["kind"] == "domain" else
-                     f"writes to {o['value']}" if o["kind"] == "write" else o["value"]
+    v = lambda o: visible(str(o["value"]), ascii_only=True)     # noqa: E731
+    return ", ".join(v(o) if o["kind"] == "domain" else
+                     f"writes to {v(o)}" if o["kind"] == "write" else v(o)
                      for o in options)
 
 

@@ -121,6 +121,9 @@ def run_checks(aid, user):
         out.append(Result(FAIL, f"no sudo rule for {user}'s long runs", "sudo lab apply"))
     elif ok:
         out.append(Result(OK, "long runs: sudo rule"))
+    if not os.access("/usr/bin/bwrap", os.X_OK):
+        out.append(Result(FAIL, "long runs can't start: no /usr/bin/bwrap (they run in a "
+                          "process namespace of their own)", "sudo lab apply"))
     return out
 
 

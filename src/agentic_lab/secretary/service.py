@@ -847,6 +847,25 @@ async def serve(lab_path, host, port):
                           repo=os.path.expanduser(SA.CLONE))
         except Exception:
             log.exception("catching up hosts failed")
+        await intake_watch()
+
+    intake_failed = {"said": False}
+
+    async def intake_watch():
+        """The intake dying while a code is open strands that code: say so, once."""
+        try:
+            p = await asyncio.create_subprocess_exec(
+                "systemctl", "is-failed", "--quiet", "lab-intake",
+                stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
+            failed = await asyncio.wait_for(p.wait(), 10) == 0
+        except (OSError, asyncio.TimeoutError):
+            return
+        if failed and not intake_failed["said"]:
+            log.error("the secret intake failed")
+            await sec.announce(":warning: the secret intake stopped with an error; one-time "
+                               "links handed out just before don't work: ask for new ones "
+                               "(admins: sudo journalctl -u lab-intake on the secretary host).")
+        intake_failed["said"] = failed
 
     async def collector():
         while not stop.is_set():
