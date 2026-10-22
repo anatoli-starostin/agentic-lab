@@ -14,7 +14,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
                               ResultMessage, SystemMessage, TextBlock, ToolUseBlock,
                               create_sdk_mcp_server, tool)
 
-from ..eventlog import tool_summary
+from ..eventlog import TurnClock, tool_summary
 
 from ..manager.workers import WorkerError
 from ..worker.runner import allowed_without_asking
@@ -246,13 +246,16 @@ class SecretaryBrain:
                            "append": system_prompt(self.name, self.lab_name)},
             model=self.model, env=self.env, resume=conv.session_id)
         reply, last = None, None
+        clock = TurnClock()     # a Claude Code start-up per message (#69): measured
         async with ClaudeSDKClient(options) as client:
             await client.query(prompt)
             async for msg in client.receive_response():
                 if isinstance(msg, SystemMessage) and msg.subtype == "init":
+                    clock.started()
                     conv.session_id = msg.data.get("session_id") or conv.session_id
                     ctx.save()
                 elif isinstance(msg, AssistantMessage):
+                    clock.replied()
                     for b in msg.content:
                         if isinstance(b, TextBlock):
                             last = b.text
@@ -264,6 +267,8 @@ class SecretaryBrain:
                     reply = msg.result
                     if self.usage:
                         self.usage.run(f"conv:{conv.key}", msg.model_usage)
+        text, timing = clock.done()
+        log("timing", text, **timing)
         log("reply", reply or last or "")
         return reply or last or ""
 
