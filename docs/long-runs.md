@@ -1,33 +1,29 @@
 # Long runs: what works, what doesn't
 
-A long run (`start_run`, DESIGN.md §4.2) is the agent's command, approved by a human, running
-for hours as its own systemd unit outside the sandbox. It can do almost anything the agent's
-Unix user can. This page lists the few things it can't, and how to work around each. Agents
-get the short version in their instructions; this is the full list, for admins and for anyone
-setting up a project.
+A long run (`start_run`, DESIGN.md §4.2) is the agent's command, approved by a human, that
+outlives the agent's session. It is held to **the same rules as the agent's short
+commands**; only its lifetime differs. Claude Code's sandbox applies those rules to a short
+command and ends with the session, so for a run the lab applies them itself, from the same
+policy (`policy/sandbox.filesystem`), and keeps it going until it ends or is stopped.
 
-## What a run sees
+## What a run sees, the same as a short command
 
-| | Inside a run |
+| | A short command and a run |
 |---|---|
-| Its home (`~`, `$HOME` unchanged) | **a home of its own**, one per member (the task's requester), kept between that member's runs: writable, and empty of anything of the lab's |
-| The working folder (`workdir`, `~/work` by default) | the agent's real working folder, read-write (a link to another disk is fine) |
-| The agent's GitHub setup | read-only: `git push` and `gh` work as in a task |
-| The lab's secrets and state | not there at all |
-| `/tmp` | a private one, emptied when the run ends |
-| Processes | only its own (a PID namespace): `ps`, `top`, `kill` see nothing else |
-| Privileges | none gained (`NoNewPrivileges`): no `sudo`, no setuid or setgid helpers |
-| Everything else | as the agent's user: other disks (`/data`, `/mnt/...`), the network, the GPUs |
+| Files | reads what the agent's user can read, except what's hidden below |
+| Writes | only the working folder (`workdir`, `~/work` by default; a link to another disk is fine), `/tmp`, and folders granted for writing |
+| Hidden | the lab's secrets (`~/.config/agentic-lab`), the service's state (`~/.local/state/agentic-lab`), `/run` (except the GPU's socket) |
+| Processes | only its own: `ps`, `top`, `kill` see nothing else |
+| Caches | shared, in `work/.cache` (below) |
+| The agent's GitHub setup | readable: `git push` and `gh` work |
 
-Because the home is the run's own and writable, tools that keep things in `~` just work:
-`pip install --user`, `git config --global` (in the run's home, on top of the lab's
-setup), `~/.netrc` and `wandb login`, `huggingface-cli login`, `docker login`,
-`~/.ssh/known_hosts`, npm, cargo, Go, conda and mamba (`conda create` in the home or the
-working folder), IPython, Jupyter, Keras, `~/.bashrc`. What a run keeps there stays for that
-member's next runs; another member's runs on the same worker don't see it.
+Tools installed in the home (a uv-managed Python under `~/.local/share/uv`, pyenv, a conda
+install) are readable, so environments built on them start in a run as they do in a command.
+A run, like a command, can't *install* into the home: do that in the working folder or ask
+for a write grant.
 
-Caches are shared with the agent's own commands, so a run reuses what a short trial in the
-sandbox already downloaded or built (models, wheels, compiled extensions):
+Caches are shared with the agent's own commands, so a run reuses what a short trial already
+downloaded or built (models, wheels, compiled extensions):
 
 | Variable | Points to |
 |---|---|
@@ -36,16 +32,28 @@ sandbox already downloaded or built (models, wheels, compiled extensions):
 | `HF_HOME` | `work/.cache/huggingface` |
 | `TORCH_EXTENSIONS_DIR`, `TRITON_CACHE_DIR`, `CUDA_CACHE_PATH` | `work/.cache/torch_extensions`, `work/.cache/triton`, `work/.cache/nv` |
 
+## What differs from a short command
+
+| | Short command | Run |
+|---|---|---|
+| Lifetime | ends with the command and the session | until it ends or is stopped |
+| Approval | inside the sandbox: none | every run, by a human |
+| Network | the sandbox's allowlist (tailnet, granted domains) | not limited by the lab |
+| `/tmp` | the session's | its own, emptied when it ends |
+| Timed write grants into the home | applied | applied by the job's own layer; the unit's layer underneath knows only standing ones, so such a grant doesn't reach a run |
+| `sudo`, setuid helpers | refused | refused (`NoNewPrivileges`) |
+
 ## What doesn't work, and what to do instead
 
-| What | Why | Instead |
-|---|---|---|
-| Something an admin installed into the agent's real home (e.g. `~/miniconda3` put there by hand) | the run has a home of its own | Install shared tools system-wide (`/opt`, `/usr/local`), or in the working folder. |
-| Files in the agent's real home outside the working folder | same | Keep what a run needs in the working folder. |
-| Files in `/tmp` meant for later | the run's `/tmp` is its own and disappears with it | Write them to the working folder (`work/tmp` is a good place). |
-| Seeing or signalling other processes (another run, the agent's commands, a job started elsewhere) | its own PID namespace | Use the lab's tools: `run_status`, `stop_run`. |
-| `sudo`, `crontab`, `newgrp`, other setuid or setgid helpers | no privileges can be gained | Ask an admin for anything system-wide; for recurring work, a task that starts a run. |
-| The lab's secrets and state | not in the run's home, by design | A run never needs them. |
+These are the sandbox's limits, the same for a command and a run.
+
+| What | Instead |
+|---|---|
+| Writing to the home outside the working folder (`pip install --user`, `git config --global`, `~/.netrc`, `wandb login`, a conda env in `~/miniconda3`) | Install into the working folder (`uv venv work/envs/x`, `conda create -p work/envs/x`); repository-local git config; pass credentials in the environment (`WANDB_API_KEY`, `HF_TOKEN`). |
+| Writing outside the working folder elsewhere (`/data`, `/mnt/...`) | A write grant for that folder. |
+| Seeing or signalling other processes | `run_status`, `stop_run`. |
+| Files in a run's `/tmp` after it ends | Write them to the working folder. |
+| `sudo`, `crontab` | Ask an admin. |
 
 If a run fails on one of these, its log is in `work/runs/<name>-<id>/log`.
 
@@ -57,7 +65,8 @@ left. That minute is the job's chance to save a checkpoint and exit. The lab its
 each process one TERM, but your own launcher may pass it on again (`torchrun`,
 `accelerate`, `mpirun`, a shell script that traps and forwards), so a worker process can
 see it twice. Make the handler idempotent: note the request, and let the training loop
-save and exit once.
+save and exit once. A stopped run records when its job really ended; its exit code isn't
+recorded (`null`).
 
 ```python
 import signal, sys

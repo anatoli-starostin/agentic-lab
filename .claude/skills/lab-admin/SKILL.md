@@ -164,9 +164,9 @@ asking before each one. The whole lab, one host, or one agent.
   `~/work/runs/<name>-<id>/log` (`sudo cat`); stop one with
   `sudo systemctl stop lab-run-<agent>@<id>` (or cancel its task: that stops its runs).
   A run that won't start: `lab doctor` (its unit template and sudo rule come from
-  `lab apply`). A run sees a home of its own (per member,
-  `~/.local/state/agentic-lab/run-home/<member>` on the host), not the agent's real home:
-  docs/long-runs.md lists what that means and what doesn't work in runs.
+  `lab apply`). A run has the same filesystem rules as the agent's sandboxed commands
+  (writes only in the working folder, /tmp and write grants): docs/long-runs.md lists what
+  that means and what doesn't work in runs.
 - **A machine wasn't stopped when idle** (or the secretary refuses to power it off): it's
   *busy*. The secretary says why: a worker task running, queued, awaiting approval or
   waiting on its long runs; a long run going; a

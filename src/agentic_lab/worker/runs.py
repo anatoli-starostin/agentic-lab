@@ -9,14 +9,16 @@ as its own systemd unit, `lab-run-<agent>@<run-id>.service`, as the agent's Unix
 
     ~/.local/state/agentic-lab/runs/<id>.json         what to run (written by the service)
     ~/.local/state/agentic-lab/runs/<id>/status.json  state and exit code (by run-exec)
-    ~/.local/state/agentic-lab/run-home/<member>/     the job's home (one per member)
     <workdir>/runs/<name>-<id>/log                    its output, readable by the agent
 
-The unit's main process is `lab worker run-exec` (ours): it reads the spec, writes the
-status, and starts only the job under bwrap, in a process namespace of its own, with a home
-of its own: the member's run home mounted over the real home, the working folder bound back
-on top, the agent's GitHub setup read-only. The lab's secrets and state aren't in that home
-at all, and every tool that writes to ~ just works there (docs/long-runs.md).
+A run is held to the same rules as the agent's short commands; only its lifetime differs.
+Claude Code's sandbox applies them to a command and ends with the session, so for a run we
+apply them ourselves: the unit's main process is `lab worker run-exec` (ours), which reads
+the spec, writes the status, and starts only the job under bwrap with the sandbox's own
+filesystem policy (policy/sandbox.filesystem, written into the spec by the service): it
+reads what a command reads, writes only where a command may write (the working folder,
+/tmp, write grants), doesn't see what a command doesn't (the lab's secrets and state, /run),
+and has a process view of its own (docs/long-runs.md).
 
 The service may start and stop only its own runs: one sudo rule per worker allows only
 deploy/worker/lab-run-ctl, which checks its arguments and takes the agent from SUDO_USER
@@ -55,21 +57,21 @@ def unit(agent_id, run_id):
 
 
 BWRAP = "/usr/bin/bwrap"
-GITHUB = "~/.local/share/agentic-lab/github"    # the agent's git setup: read-only in a run
-_MEMBER = re.compile(r"^[a-z][a-z0-9-]*$")
 STATUS_KEYS = ("started", "ended", "exit_code", "pid", "stop_requested", "error")
 
 
 def unit_template(agent_id, user, lab_path="/etc/agentic-lab/lab.yaml", home=None,
-                  workdir=None):
+                  workdir=None, writable=()):
     """/etc/systemd/system/lab-run-<agent>@.service: one run of this worker. Two layers:
-    run-exec gives the job a home of its own under bwrap (the main protection, see
-    run_exec); underneath, the unit itself keeps the real home read-only (only the working
-    folder, the run's status and the run homes writable) and the lab's secrets hidden, so a
-    mistake in the job's mounts falls back to that, never below. The real home path: in a
-    system unit %h is root's."""
+    run-exec holds the job to the sandbox's policy under bwrap (the main protection, see
+    run_exec); underneath, the unit itself keeps the home read-only (only the working
+    folder, standing write grants and the run's own status writable) and the lab's secrets
+    hidden, so a mistake in the job's mounts falls back to that, never below. `writable`:
+    the agent's standing write grants (deploy-time; a timed grant into the home reaches
+    the job's own layer only). The real home path: in a system unit %h is root's."""
     home = home or f"/home/{user}"
     workdir = workdir or f"{home}/work"
+    extra = "".join(f" -{w}" for w in writable)
     return f"""# A long run of worker {agent_id} (worker/runs.py). Started and stopped by the worker
 # service only (lab-run-ctl, /etc/sudoers.d/agentic-lab-runs); never enabled.
 [Unit]
@@ -80,16 +82,15 @@ Type=simple
 User={user}
 Group={user}
 WorkingDirectory=~
-# run-exec starts the job itself, under bwrap (a home and a process view of its own)
+# run-exec starts the job itself, under bwrap: the sandbox's rules, a process view of its own
 ExecStart=/opt/agentic-lab/venv/bin/lab --lab {lab_path} worker run-exec {agent_id} %i
 NoNewPrivileges=yes
 PrivateTmp=yes
 UMask=0077
+# the layer underneath the job's own (run_exec): the same limits, set by systemd
 InaccessiblePaths=-{home}/.config/agentic-lab
 ReadOnlyPaths={home}
-# all of run-home/ is writable here; what keeps one member's runs out of another's run
-# home is bwrap (each job sees only its member's), this directive is the layer underneath
-ReadWritePaths=-{workdir} -{home}/.local/state/agentic-lab/runs/%i -{home}/.local/state/agentic-lab/run-home
+ReadWritePaths=-{workdir}{extra} -{home}/.local/state/agentic-lab/runs/%i
 KillMode=control-group
 TimeoutStopSec=60
 """
@@ -136,21 +137,13 @@ class RunStore:
         except (OSError, ValueError):
             return None
 
-    def run_home(self, member):
-        """The home a member's runs see (one per member: what a run keeps there, e.g. a
-        login, stays theirs on a shared worker). Next to the runs, never in the workdir
-        (the agent's sandbox writes that, and readers read it)."""
-        if not _MEMBER.match(member or ""):
-            raise RunError(f"bad member {member!r}")
-        return os.path.join(os.path.dirname(os.path.abspath(self.root)), "run-home", member)
-
-    def start(self, task_id, name, command, cwd=None, requester=None):
+    def start(self, task_id, name, command, cwd=None, requester=None, policy=None):
         """Start a run (already approved) for task `task_id` of member `requester` (from the
-        task, never from the job). Returns its view. Without a member its job won't start
-        (run_exec fails closed)."""
+        task, never from the job), under `policy`: the agent's sandbox filesystem policy as
+        its session has it (policy/sandbox.filesystem). Returns its view. Without a policy
+        its job won't start (run_exec fails closed)."""
         if not (command or "").strip():
             raise RunError("a run needs a command")
-        home = self.run_home(requester) if requester is not None else None
         name = _NAME.sub("-", (name or "run").strip())[:40].strip("-") or "run"
         cwd = os.path.normpath(os.path.join(self.workdir, os.path.expanduser(cwd or ".")))
         if not os.path.isdir(cwd):
@@ -159,10 +152,8 @@ class RunStore:
         logdir = safefs.makedirs(self.workdir, os.path.join("runs", f"{name}-{run_id}"))
         spec = {"id": run_id, "task": task_id, "requester": requester, "name": name,
                 "command": command, "cwd": cwd, "log": os.path.join(logdir, "log"),
-                "created": _now()}
+                "policy": policy, "created": _now()}
         self._write(self._path(run_id), spec)
-        if home:
-            os.makedirs(home, mode=0o700, exist_ok=True)
         os.makedirs(os.path.dirname(self._path(run_id, ".status")), mode=0o700, exist_ok=True)
         try:
             self.systemctl("start", self.agent_id, run_id)
@@ -232,20 +223,27 @@ def log_tail(path, lines, root):
         return ""
 
 
-def job_wrapper(home, run_home, workdir, cwd, github=None):
-    """bwrap's arguments for the job (before its command). Order matters: the member's run
-    home goes over the real home first, then the real working folder is bound back on top
-    (bwrap takes sources from the host, so this is the real one even inside the home), then
-    the git setup read-only. The lab's secrets and state aren't in the run home: protected
-    by absence. No --die-with-parent: a stop's TERM reaches the job (KillMode=control-group
-    signals every process of the unit), which then has its grace period."""
-    home, workdir = os.path.abspath(home), os.path.abspath(workdir)
-    github = github or GITHUB.replace("~", home, 1)
-    return [BWRAP, "--unshare-pid", "--dev-bind", "/", "/", "--proc", "/proc",
-            "--bind", run_home, home,
-            "--bind", os.path.realpath(workdir), workdir,
-            "--ro-bind-try", github, github,
-            "--chdir", cwd, "--"]
+def job_wrapper(policy, cwd):
+    """bwrap's arguments for the job (before its command): the sandbox's filesystem policy
+    (policy/sandbox.filesystem). Everything is read-only, devices as they are, a /proc of
+    its own (its own processes only); then writable again where a command may write (bwrap
+    takes sources from the host, so a link to another disk is bound from where it really
+    is); then what a command may not read is covered, with what it may (the GPU socket)
+    shown again. The home being read-only is also what keeps those covers in place (nothing
+    above them can be renamed); moving the lab's secrets out of the home will retire the
+    covers for them. No --die-with-parent: a stop's TERM reaches the job
+    (KillMode=control-group signals every process of the unit), which then has its grace
+    period."""
+    args = [BWRAP, "--unshare-pid", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev",
+            "--proc", "/proc"]
+    for w in policy["allowWrite"]:
+        args += ["--bind-try", os.path.realpath(w), w]
+    for d in policy["denyRead"]:
+        if os.path.isdir(d) and not os.path.islink(d):
+            args += ["--tmpfs", d]
+    for r in policy.get("allowRead") or []:
+        args += ["--ro-bind-try", r, r]
+    return args + ["--chdir", cwd, "--"]
 
 
 STOP_POLL_S = 0.5
@@ -295,24 +293,24 @@ def _systemctl(verb, agent_id, run_id):
     return True
 
 
-def run_exec(store: RunStore, run_id, env=None, wrapper=job_wrapper, home=None,
+def run_exec(store: RunStore, run_id, env=None, wrapper=job_wrapper,
              procs_file=own_cgroup_procs):
-    """The unit's main process (as the agent's user, outside the sandbox): start the job
-    under bwrap (`wrapper`, job_wrapper), output to its log, and record how it ended. It
-    never runs a job unwrapped: no bwrap, no member, no run home, no job."""
+    """The unit's main process (as the agent's user): start the job under bwrap with the
+    sandbox's policy (`wrapper`, job_wrapper), output to its log, and record how it ended.
+    It never runs a job unwrapped: no bwrap or no policy, no job."""
     spec = store.get(run_id)
     status = store._path(run_id, ".status")
-    home = home or os.path.expanduser("~")
     with os.fdopen(safefs.open_append(store.workdir, spec["log"]), "ab") as log:
         log.write(f"== {_now()} run {run_id}: {spec['command']}\n".encode())
         log.flush()
         try:
-            run_home = store.run_home(spec.get("requester"))
-            if not os.path.isdir(run_home):
-                raise RunError(f"no run home {run_home}")
+            policy = spec.get("policy")
+            if not (isinstance(policy, dict) and policy.get("allowWrite")
+                    and policy.get("denyRead")):
+                raise RunError("no sandbox policy in its spec")
             if wrapper is job_wrapper and not os.access(BWRAP, os.X_OK):
                 raise RunError(f"{BWRAP} is missing: a run never starts without it")
-            wrap = wrapper(home, run_home, store.workdir, spec["cwd"])
+            wrap = wrapper(policy, spec["cwd"])
         except RunError as e:
             store._write(status, {"state": "failed", "ended": _now(), "error": str(e)})
             log.write(f"== {_now()} not started: {e}\n".encode())

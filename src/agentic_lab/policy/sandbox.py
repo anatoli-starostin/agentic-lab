@@ -41,6 +41,15 @@ NEBIUS = "~/.nebius"
 GPU_VISIBLE = ["/run/nvidia-persistenced"]
 
 
+def filesystem(workdir, writes=(), gpu=False):
+    """What anything running as the agent may write and may not read: its short commands
+    (Claude Code's sandbox, `settings`) and its long runs (worker/runs.py, which apply it
+    themselves because a run outlives the session). One place, so the two can't drift."""
+    return {"allowWrite": _dedup([_abs(workdir), TMP] + [_abs(w) for w in writes]),
+            "denyRead": list(HIDDEN) + [_abs(SECRETS), _abs(STATE), _abs(NEBIUS)],
+            "allowRead": list(GPU_VISIBLE) if gpu else []}
+
+
 def cache_env(workdir):
     """Every common tool's cache inside the working folder (#45): ~/.cache isn't writable
     in the sandbox, and a cache in /tmp is lost on every restart. Kept across tasks, so the
@@ -90,10 +99,10 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
         domains.append(f"*.{tailnet}")
     for g in live:
         {"domain": domains, "write": writes, "tool": tools}[g.kind].append(g.value)
-    writable = [_abs(workdir), TMP] + [_abs(w) for w in writes]
+    fs = filesystem(workdir, writes, gpu)
+    writable = fs["allowWrite"]
     # caches go to the working folder (cache_env): writable, kept between tasks
-    secrets = _abs(SECRETS)
-    private = [secrets, _abs(STATE), _abs(NEBIUS)]
+    private = [d for d in fs["denyRead"] if d not in HIDDEN]
 
     return {
         "sandbox": {
@@ -109,9 +118,7 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
                 "allowAllUnixSockets": gpu,     # CUDA needs Unix sockets (see above)
             },
             "filesystem": {
-                "allowWrite": _dedup(writable),
-                "denyRead": list(HIDDEN) + private,
-                "allowRead": list(GPU_VISIBLE) if gpu else [],
+                **fs,
             },
             "credentials": {"envVars": [{"name": n, "mode": "deny"} for n in SECRET_ENV]},
         },
