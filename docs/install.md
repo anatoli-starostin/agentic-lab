@@ -28,8 +28,10 @@ configuration repository.
 On the secretary host the framework is checked out in `~/agentic-lab` (set up with
 `uv venv && uv pip install -e .`) and the configuration in `~/lab-config`. Until the first
 `lab apply`, `lab` means the checkout's own, `~/agentic-lab/.venv/bin/lab`, also under sudo.
-`lab apply` then puts `lab` on every lab host's PATH (`/usr/local/bin/lab`), where it reads
-`/etc/agentic-lab/lab.yaml` by default; that's what commands run as the lab's users use.
+`lab apply` then puts `lab` on every lab host's PATH (`/usr/local/bin/lab`). Without
+`--lab`, it reads `./lab.yaml` if there's one in the current folder, else
+`/etc/agentic-lab/lab.yaml` (the deployed one): that's what commands run as the lab's users
+use. Pass `--lab` when in doubt.
 **Always run `lab plan` / `lab apply` from the checkout, on the config repo's lab.yaml**,
 so they ship the pinned code:
 `cd ~/agentic-lab && sudo .venv/bin/lab --lab ~/lab-config/lab.yaml plan`.
@@ -199,6 +201,10 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      `lab apply` and the secretary's deploys hang. Either give the admin an *accept* rule
      in the tailnet's SSH policy, or leave Tailscale SSH off on lab hosts and use OpenSSH
      (key-only) over the tailnet.
+   - **Turn off what the image runs but the lab doesn't need.** Cloud GPU images may run
+     services on all interfaces (e.g. `rpcbind` on port 111); sandboxed agents can reach
+     every tailnet host, so disable them (`sudo systemctl disable --now rpcbind
+     rpcbind.socket`) and check with `sudo ss -tlnp`.
    - **No public IP needed (Nebius).** Once a VM is on the tailnet it needs no public IP: on Nebius,
      a VM without one still reaches the internet through the default egress gateway.
      Better to create it without one: removing the public IP of a running VM left it
@@ -269,7 +275,8 @@ deployed, and the secretary checks in code that the person asking is an admin.
     in the organisation's settings, permissions, install it on the lab's repos) and a
     one-time link for its private key → you say "done" with the App ID → it checks the
     app and proposes the `lab.yaml` change → merge → deploy. Console:
-    `lab secret request service:github-<slug> github-app`, `sudo lab github-app-check
+    `sudo -u lab-secretary lab secret request service:github-<slug> github-app --url
+    http://<secretary host>:8771`, `sudo lab github-app-check
     <slug> --app-id N` (prints the `lab.yaml` lines).
   - **A full bot account** (a GitHub user with its own email, e.g. `flash-bot`, added to
     the org with access to the lab's repos only): the secretary adds it to `lab.yaml` →

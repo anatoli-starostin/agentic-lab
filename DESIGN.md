@@ -5,7 +5,8 @@ members talk to **manager** agents in Slack, managers delegate work to **worker*
 GPU machines, and a **secretary** agent keeps the lab running. Humans stay in control of
 anything that crosses a boundary, through a permission channel that **agents cannot spoof**.
 
-> Status (2026-10-18): implemented and on `main`; rehearsed end to end on a single GPU VM.
+> Status (2026-10-22): implemented and on `main`; running at a first lab (secretary, managers,
+> GPU workers on several VMs).
 > `docs/architecture/architecture.pdf` is the illustrated reference; this file is the
 > design with its reasoning and the decisions log (§13). Section numbers are stable: the
 > code refers to them.
@@ -427,6 +428,8 @@ agents:
     human: alice                         # whose Claude seat it runs on
     host: sec-01
     display_name: Iris
+    model: claude-haiku-5-5              # lab init's choice for the secretary; any agent
+                                         #   may set model (default: Claude Code's)
   mgr-flash:
     role: manager
     human: alice
@@ -442,6 +445,10 @@ agents:
     access: shared
     grants:                              # standing grants (§6.2)
       - {domain: pypi.org}
+    # gpu: true                          # the GPU in its sandbox (default: workers yes)
+    # port: 8780                         # its MCP port (default 8770 for workers, 8773
+    #                                    #   for managers): set one per agent of a role
+    #                                    #   on the same host (lab check rejects clashes)
 hosts:
   sec-01: {kind: onprem}
   mgr-01: {kind: cloud, provider: aws, idle_stop_min: 0, ssh_user: ubuntu}
@@ -627,24 +634,30 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-17 | **Auto-compaction per agent**: managers at 17%; others at Claude's default. |
 | 2026-10-17 | **Agents can't read their lab secrets** (§6.4). |
 | 2026-10-17 | **No spend limits.** Transparency through the web UI instead. |
-| 2026-10-17 | **Agents' logs are for admins only** (`admin: true` + Tailscale identity). |
+| 2026-10-17 | ~~**Agents' logs are for admins only** (`admin: true` + Tailscale identity).~~ Superseded 2026-10-20. |
 | 2026-10-20 | **Members see their own agents' logs**: dedicated ones whole, their own entries of shared agents and the secretary (Tailscale identity). Admins see all. |
 | 2026-10-17 | **Usage percentages from a probe** of the seat's rate-limit headers, only while a window is open; "Check now" in the web UI. |
 | 2026-10-17 | **Admin-only actions, checked in code**: powering off a busy machine (after confirming), asking for someone else's token. **Busy** includes any process on a GPU or any GPU utilization (idle only after 0% in several readings in a row). |
 | 2026-10-17 | **Private config repository**: `lab.yaml` + `framework.lock` (the framework pinned by commit). **Only `main` is deployed**; every change is a reviewed PR. |
 | 2026-10-17 | **Administering from Slack**: the secretary proposes PRs and deploys `main` on an admin's click, with one sudo command (`lab apply-main`). The console is for the install and emergencies. |
-| 2026-10-18 | **GitHub for agents**: one bot account per agent (may be shared), its token in the agent's environment; safety from GitHub (private repos, fine-grained tokens, branch protection: bots never approve or merge). |
+| 2026-10-18 | **GitHub for agents**: one bot account per agent (may be shared); safety from GitHub (private repos, fine-grained tokens, branch protection: bots never approve or merge). Its token was in the agent's environment; since 2026-10-22 it's a file read by git's credential helper and the `gh` shim. |
 | 2026-10-18 | **No experiment tracker in the framework**: project tools are a lab's extensions. |
 | 2026-10-18 | **Managers run on any host**: the secretary host, a VM of their own, or a GPU VM next to their workers. |
 | 2026-10-18 | **Managers stay reachable**: a work-size rule, a per-turn time limit (`turn_budget_min`, default 5), and a "still working" reply. |
 | 2026-10-18 | **A worker's event log goes only to the secretary's monitoring token.** |
 | 2026-10-18 | **Anyone in the lab may talk to any manager.** On a dedicated manager, other members are guests: conversation only, no tools, no work, no memory, 2-minute turns. |
 | 2026-10-18 | **`~/.lab-keep-awake`**: anyone working on a lab machine directly keeps it from being stopped. |
+| 2026-10-18 | **Approval requests have no timeout by default** (a member may set `timeout_s`); a request the agent stops waiting for is withdrawn. |
 | 2026-10-19 | **Several GitHub identities per agent, picked by repository** (e.g. a lab identity by default, an open-source project's bot for that project). |
 | 2026-10-19 | **GitHub Apps as agents' identities**, alongside full bot accounts: `<slug>[bot]`, nothing to create but the app; the service mints its hourly tokens. |
 | 2026-10-19 | **The secretary may have a GitHub identity** (its service's, for the config repo): HTTPS instead of a deploy key, PRs opened by it, a `Lab-Agent:` trailer on its commits. Without one, the deploy key as before. |
+| 2026-10-19 | **`power:` removed**: `idle_stop_min` is the only switch (required on cloud hosts; `0` = never). Managers don't keep a host on unless it says `idle_stop_with_managers: false`. |
 | 2026-10-19 | **Long runs**: jobs that outlive the session run as their own units, outside the sandbox, approved one at a time by a human; the task waits (parked) and the worker takes other tasks meanwhile. Not a second sandbox runtime (`srt` would mean Node and another versioned copy of the sandbox to maintain). |
-| 2026-10-18 | **Approval requests have no timeout by default** (a member may set `timeout_s`); a request the agent stops waiting for is withdrawn. |
+| 2026-10-20 | **Guests in a member's thread get a session of their own**, built from what the thread shows; never the owner's session. |
+| 2026-10-20 | **Warm environments**: tools' caches in the working folder, checkouts and environments reused; `keep_free_gb` bounds the disk they take. |
+| 2026-10-20 | **Host `readers`**: Linux users who may read a host's agents' working folders (a group and ACLs), never their secrets or state. |
+| 2026-10-21 | **AWS EC2 hosts**, without power control for now (public IPv4 with no inbound, EBS root). |
+| 2026-10-22 | **`gh` through a shim** that reads the identity's current token at call time; gh's config in the working folder. Each identity's **reachable repositories** are listed in the agent's prompt. |
 
 ## 14. Open questions
 
