@@ -192,6 +192,7 @@ def test_a_catch_up_deploys_only_older_hosts(monkeypatch, capsys):
     monkeypatch.setattr(A, "plan_all", lambda *a, **k: (
         SimpleNamespace(), SimpleNamespace(save=lambda: None), plans))
     monkeypatch.setattr(cli.registry, "check", lambda lb: [])
+    monkeypatch.setattr(cli.registry, "load", lambda path: SimpleNamespace())
     monkeypatch.setattr(lock, "current", lambda src: (None, FW))
     monkeypatch.setattr(A, "secretary_host", lambda lb: ("sec-host", "secretary"))
     monkeypatch.setattr(doctor, "this_host", lambda lb: "sec-host")
