@@ -336,7 +336,8 @@ sandbox violations that explain it.
   \item \textbf{Long runs} (training for hours): nothing the agent starts in its session
     outlives it (a sandboxed command's processes die when it returns, the rest with the
     session or a service restart). So the agent calls \code{start\_run}; a human approves
-    \emph{each} run, since it runs outside the sandbox, as the agent's user, as its own
+    \emph{each} run, since it outlives the session with its network not limited (its
+    file rules are the agent's own), as the agent's user, as its own
     unit \code{lab-run-<agent>@<id>}, with its output in a log in the working folder. With
     \code{wait\_for\_runs} the task becomes \code{waiting}: still in progress, parked, and
     the worker takes other tasks meanwhile. It resumes when a run ends or at a check-in
