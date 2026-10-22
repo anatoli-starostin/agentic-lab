@@ -89,6 +89,8 @@ def settings(workdir, tailnet=None, trust_tailnet=True, grant_list=(), now=None,
     if trust_tailnet and tailnet:
         domains.append(f"*.{tailnet}")
     for g in live:
+        if g.kind == "tool" and not G.grantable_tool(g.value):
+            continue
         {"domain": domains, "write": writes, "tool": tools}[g.kind].append(g.value)
     writable = [_abs(workdir), TMP] + [_abs(w) for w in writes]
     # caches go to the working folder (cache_env): writable, kept between tasks

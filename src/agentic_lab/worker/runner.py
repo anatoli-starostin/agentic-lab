@@ -32,7 +32,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
 
 from ..eventlog import tool_summary
 
-from ..policy.grants import Grant
+from ..policy.grants import Grant, grantable_tool
 from . import runs as R
 from . import tasks as T
 
@@ -299,11 +299,17 @@ class SdkRunner:
         return [g for g in gs if g.get("task_id") in (None, task.id)]
 
     def _options(self, task, store, outcome, session, grants):
-        tool_grants = {g["value"] for g in grants if g["kind"] == "tool"}
+        tool_grants = {g["value"]: g.get("expires") for g in grants if g["kind"] == "tool"}
+
+        def granted(tool_name, tool_input):
+            until = tool_grants.get(tool_name, False)
+            return (until is not False and tool_name not in ALWAYS_ASK
+                    and grantable_tool(tool_name)
+                    and not (tool_input or {}).get("dangerouslyDisableSandbox")
+                    and (until is None or _now() < dt.datetime.fromisoformat(until)))
 
         async def can_use_tool(tool_name, tool_input, context):
-            if allowed_without_asking(tool_name, tool_input) or (
-                    tool_name in tool_grants and tool_name not in ALWAYS_ASK):
+            if allowed_without_asking(tool_name, tool_input) or granted(tool_name, tool_input):
                 return PermissionResultAllow()
             if store.get(task.id).cancel_requested:
                 return PermissionResultDeny(message="The task was cancelled.", interrupt=True)
@@ -337,7 +343,8 @@ class SdkRunner:
                 if all(g["kind"] == "tool" for g in d.grants):
                     if tool_name in ALWAYS_ASK:     # approved this once, never as a grant
                         return PermissionResultAllow()
-                    tool_grants.update(g["value"] for g in d.grants)
+                    tool_grants.update({g["value"]: g.get("expires") for g in d.grants})
+                    session["narrow_at"] = _earliest(d.grants, session.get("narrow_at"))
                     return PermissionResultAllow()
                 session["restart_for"] = d.grants
                 return PermissionResultDeny(interrupt=True, message=(
@@ -380,9 +387,12 @@ class SdkRunner:
             prompt = ("The worker restarted while you were on this task. Continue it from where "
                       "you were; check the state of your working folder (and run_status) first.")
         result_msg, last_text = None, None
-        for _ in range(MAX_SESSION_RESTARTS + 1):
-            session = {"violations": [], "restart_for": None}
+        restarts = 0
+        while True:
             grants = await self._grants_for(task)
+            # a timed grant ends the session when it expires: the next one goes without it
+            session = {"violations": [], "restart_for": None, "expired": False,
+                       "narrow_at": _earliest(grants)}
             try:
                 result_msg, last_text = await self._session(
                     task, store, outcome, session, grants, prompt)
@@ -409,6 +419,14 @@ class SdkRunner:
                           ". (Your session was restarted to apply it; that's why the action "
                           "showed as not run.) Retry what you were doing, inside the sandbox "
                           "(without dangerouslyDisableSandbox).")
+                restarts += 1
+                if restarts <= MAX_SESSION_RESTARTS:
+                    continue
+            elif session["expired"] and not ({"result", "wait"} & outcome.keys()) \
+                    and not store.get(task.id).cancel_requested:
+                prompt = ("A time-limited grant expired, so your session was restarted without "
+                          "it (that's why your last action may show as not run). Continue the "
+                          "task from where you were; check your working folder first.")
                 continue
             break
         self._finish(task, store, outcome, result_msg, last_text)
@@ -419,7 +437,7 @@ class SdkRunner:
     async def _session(self, task, store, outcome, session, grants, prompt):
         last_text, result_msg = None, None
         async with ClaudeSDKClient(self._options(task, store, outcome, session, grants)) as client:
-            watcher = asyncio.create_task(self._watch_cancel(task, store, client))
+            watcher = asyncio.create_task(self._watch_cancel(task, store, client, session))
             try:
                 await client.query(prompt)
                 async for msg in client.receive_response():
@@ -507,12 +525,30 @@ class SdkRunner:
             store.update(task.id, state=T.FAILED,
                          error=f"agent ended with an error: {err or result_msg.subtype}")
 
-    async def _watch_cancel(self, task, store, client):
+    async def _watch_cancel(self, task, store, client, session=None):
+        """Interrupts the session when the task is cancelled or a timed grant expires."""
         while True:
             await asyncio.sleep(CANCEL_POLL_S)
             if store.get(task.id).cancel_requested:
                 await client.interrupt()
                 return
+            at = (session or {}).get("narrow_at")
+            if at and _now() >= at:
+                session["expired"] = True
+                await client.interrupt()
+                return
+
+
+def _now():
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def _earliest(grants, current=None):
+    """The earliest expiry among timed grants (None: none expire)."""
+    times = [dt.datetime.fromisoformat(g["expires"]) for g in grants if g.get("expires")]
+    if current:
+        times.append(current)
+    return min(times) if times else None
 
 
 def _text(text, error=False):

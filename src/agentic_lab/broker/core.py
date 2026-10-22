@@ -25,6 +25,8 @@ import threading
 from dataclasses import asdict, dataclass, field
 from urllib.parse import urlparse
 
+from ..policy import grants as G
+
 PENDING, DECIDED = "pending", "decided"
 ACTIONS = ("once", "hour", "task", "deny")
 TASK_GRANT_MAX = dt.timedelta(hours=24)      # a "this task" grant never outlives a day
@@ -101,7 +103,8 @@ def grant_options(tool, tool_input, violations):
         folder = os.path.dirname(path)
         if folder not in ("", "/") and folder != os.path.expanduser("~"):
             add("write", folder)
-    elif tool in ("WebFetch", "WebSearch") or tool.startswith("mcp__"):
+    elif tool in ("WebFetch", "WebSearch") or (tool.startswith("mcp__") and
+                                                 G.grantable_tool(tool)):
         add("tool", tool)
     return opts
 
