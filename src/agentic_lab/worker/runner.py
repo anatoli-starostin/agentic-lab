@@ -155,6 +155,9 @@ Long jobs (training, big evaluations, anything over ~10 minutes):
   your working folder, /tmp and granted folders, sees only its own processes), with its
   own /tmp and no network limit. Caches are shared with your commands. A stop gives the
   job a TERM and a minute to save.
+- The cache variables set for you are defaults: a run's command can export its own, and a
+  tool not covered should cache in work/.cache/<tool> ($XDG_CACHE_HOME/<tool>), so runs
+  and commands share it.
 
 Warm environments: setting up a project often takes longer than the experiment, so keep
 what you build and reuse it.

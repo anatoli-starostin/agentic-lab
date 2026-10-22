@@ -32,6 +32,10 @@ downloaded or built (models, wheels, compiled extensions):
 | `HF_HOME` | `work/.cache/huggingface` |
 | `TORCH_EXTENSIONS_DIR`, `TRITON_CACHE_DIR`, `CUDA_CACHE_PATH` | `work/.cache/torch_extensions`, `work/.cache/triton`, `work/.cache/nv` |
 
+These are defaults, not a fixed set: a run's command can export its own. For a tool not
+listed, point its cache at `work/.cache/<tool>` (`export FOO_CACHE=$XDG_CACHE_HOME/foo`)
+so its runs and commands share it the same way.
+
 ## What differs from a short command
 
 | | Short command | Run |
