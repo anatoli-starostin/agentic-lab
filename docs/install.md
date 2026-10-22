@@ -198,9 +198,8 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      (a form with the service account id, key id and private key PEM).
 
 10. **GPU hosts** (Admin + Claude, per host)
-   - Create the VM (Nebius console, Ubuntu with NVIDIA drivers; 26.04 or another release
-     with systemd 257 or newer isolates long runs fully, `lab doctor` warns otherwise), join
-     it to the tailnet, and let the admin SSH in with passwordless sudo. If the image's login user
+   - Create the VM (Nebius console, Ubuntu 24.04 or newer with NVIDIA drivers), join it to
+     the tailnet, and let the admin SSH in with passwordless sudo. If the image's login user
      isn't the admin's name, add `ssh_user: <user>` to the host in `lab.yaml`.
    - **SSH must not wait for a browser.** With Tailscale SSH on and the tailnet's default
      SSH rule (action *check*), `ssh` to the host waits for a confirmation in a browser, so

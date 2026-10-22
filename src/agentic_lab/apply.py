@@ -435,11 +435,7 @@ def run_units_script(run_units, workdirs=None):
     """Workers' long runs (worker/runs.py): a unit template per worker, and the sudo rule
     that lets each worker's service start and stop its own runs."""
     from .worker.runs import sudo_rule, unit_template
-    lines = ['say "long runs"',
-             # older systemd ignores some of the runs' settings (it says which): flagged
-             'v=$(systemctl --version | sed -n "1s/[^0-9]*\\([0-9]*\\).*/\\1/p"); '
-             '[ "${v:-0}" -ge 257 ] || echo "  note: systemd ${v:-?} here; runs are less '
-             'isolated before 257 (lab doctor)"']
+    lines = ['say "long runs"']
     for aid, user in sorted(run_units.items()):
         lines.append(f"cat > /etc/systemd/system/lab-run-{aid}@.service <<'UNIT'\n"
                      f"{unit_template(aid, user, workdir=(workdirs or {}).get(aid))}UNIT")

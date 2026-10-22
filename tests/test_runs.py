@@ -314,6 +314,9 @@ def test_a_run_writes_only_its_own_part_of_the_state():
     assert "ReadOnlyPaths=/home/lab-worker-a" in lines
     assert ("ReadWritePaths=-/home/lab-worker-a/work "
             "-/home/lab-worker-a/.local/state/agentic-lab/runs/%i") in lines
+    start = next(ln for ln in lines if ln.startswith("ExecStart="))
+    assert start.startswith("ExecStart=/usr/bin/bwrap --die-with-parent --unshare-pid "
+                            "--dev-bind / / --proc /proc -- /opt/agentic-lab/venv/bin/lab ")
     assert "InaccessiblePaths=-/home/lab-worker-a/.config/agentic-lab" in lines
 
 
