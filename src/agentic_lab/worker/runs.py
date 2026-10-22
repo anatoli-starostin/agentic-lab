@@ -4,7 +4,8 @@ Anything the agent starts in a sandboxed command dies when the command returns (
 is a PID namespace) or when the task's session ends (`--die-with-parent`); anything under
 the worker service dies when the service restarts (its cgroup). So a long job (training
 for hours) is a *run*: the agent asks for it with the `start_run` lab tool, a human
-approves it (every time: a run is outside the sandbox), and the worker service starts it
+approves it (every time: a run outlives the session, its network isn't limited), and the
+worker service starts it
 as its own systemd unit, `lab-run-<agent>@<run-id>.service`, as the agent's Unix user:
 
     ~/.local/state/agentic-lab/runs/<id>.json         what to run (written by the service)
