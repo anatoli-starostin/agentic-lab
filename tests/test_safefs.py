@@ -89,3 +89,35 @@ def test_the_manager_posts_only_its_own_plain_files(folders):
     assert MT._read_own(ctx, "plain") == b"hello\n"
     (work / "alias").symlink_to(other / "kept")
     assert MT._read_own(ctx, "alias") is None and MT._read_own(ctx, "../other/kept") is None
+
+
+def test_the_folder_itself_is_never_a_link(tmp_path, folders):
+    work, other = folders
+    moved = tmp_path / "moved"
+    work.rename(moved)
+    work.symlink_to(other)
+    with pytest.raises(OSError):
+        safefs.read(work, "kept")
+
+
+def test_only_files_with_a_single_name(folders):
+    import os
+    work, other = folders
+    os.link(other / "kept", work / "second")
+    with pytest.raises(OSError):
+        safefs.read(work, "second")
+    with pytest.raises(OSError):
+        safefs.open_append(work, "second")
+
+
+def test_special_files_are_never_waited_on(folders):
+    import os
+    import threading
+    work, _ = folders
+    os.mkfifo(work / "log")
+    done = []
+    t = threading.Thread(target=lambda: done.append(
+        pytest.raises(OSError, safefs.open_append, work, "log")), daemon=True)
+    t.start()
+    t.join(2)
+    assert done, "opening it blocked"

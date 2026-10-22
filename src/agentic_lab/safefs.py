@@ -2,9 +2,11 @@
 
 An agent may create, rename and link anything in its working folder. A service that opens
 a path there (a run's log, a file to hand a member, an attachment to store) must stay in
-that folder whatever the agent did to it, even while it changes: every component is
-opened relative to its parent and never through a symbolic link (O_NOFOLLOW), only
-regular files are read, and a file is written as a new file renamed into place.
+that folder whatever the agent did to it, even while it changes: the folder itself and
+every component in it are opened relative to their parent and never through a symbolic
+link (O_NOFOLLOW), only plain files with a single name are used (never a device, a pipe,
+or a second name of a file kept elsewhere), and a file is written as a new file renamed
+into place.
 """
 import errno
 import os
@@ -32,7 +34,12 @@ def _parts(root, path):
 
 def _dir(root, parts, create=False):
     """A descriptor of the folder `root`/`parts`, every step without following a link."""
-    fd = os.open(os.path.realpath(root), DIR)
+    try:
+        fd = os.open(os.path.abspath(root), DIR)    # the folder itself: never a link
+    except OSError as e:
+        if e.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise UnsafePath(f"{root} is not a plain folder") from None
+        raise
     try:
         for p in parts:
             try:
@@ -75,10 +82,18 @@ def open_read(root, path):
         raise
     finally:
         os.close(d)
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
+    _plain(fd, path)
+    return fd
+
+
+def _plain(fd, path):
+    """A regular file with one name, read and written without blocking (else UnsafePath)."""
+    import fcntl
+    st = os.fstat(fd)
+    if not stat.S_ISREG(st.st_mode) or st.st_nlink != 1:
         os.close(fd)
         raise UnsafePath(f"{path} is not a plain file")
-    return fd
+    fcntl.fcntl(fd, fcntl.F_SETFL, fcntl.fcntl(fd, fcntl.F_GETFL) & ~os.O_NONBLOCK)
 
 
 def read(root, path, limit=None):
@@ -136,14 +151,12 @@ def open_append(root, path, mode=0o666):
     d = _dir(root, parts[:-1], create=True)
     try:
         fd = os.open(parts[-1], os.O_WRONLY | os.O_APPEND | os.O_CREAT | os.O_NOFOLLOW
-                     | os.O_CLOEXEC, mode, dir_fd=d)
+                     | os.O_CLOEXEC | os.O_NONBLOCK, mode, dir_fd=d)
     except OSError as e:
         if e.errno == errno.ELOOP:
             raise UnsafePath(f"{path} is not a plain file") from None
         raise
     finally:
         os.close(d)
-    if not stat.S_ISREG(os.fstat(fd).st_mode):
-        os.close(fd)
-        raise UnsafePath(f"{path} is not a plain file")
+    _plain(fd, path)
     return fd
