@@ -27,18 +27,35 @@ def test_the_command_itself_is_unchanged(tmp_path):
 def test_only_the_labs_own_things_are_taken_away(tmp_path):
     h = home(tmp_path)
     argv = shlex.split(CF.confined(CMD, h))
-    assert argv[:argv.index("--")][:8] == ["/usr/bin/bwrap", "--die-with-parent",
-                                           "--unshare-pid", "--dev-bind", "/", "/",
-                                           "--proc", "/proc"]
+    assert argv[:8] == ["/usr/bin/bwrap", "--die-with-parent", "--unshare-pid",
+                        "--dev-bind", "/", "/", "--proc", "/proc"]
     opts = argv[8:argv.index("--")]
-    assert ["--tmpfs", f"{h}/.config/agentic-lab"] == opts[0:2]
-    assert ["--tmpfs", f"{h}/.local/state/agentic-lab"] == opts[2:4]
-    assert ["--ro-bind", "/dev/null", f"{h}/.local/share/agentic-lab/github/bot/token"] \
-        == opts[4:7]
-    assert opts[7:] == ["--unsetenv", "CLAUDE_CODE_OAUTH_TOKEN"]
+    pairs = [(opts[i], opts[i + 1]) for i in range(len(opts)) if opts[i] == "--tmpfs"]
+    assert {d for _, d in pairs} == {f"{h}/.config/agentic-lab",
+                                     f"{h}/.local/state/agentic-lab",
+                                     f"{h}/.local/share/agentic-lab/github/bot"}
+    assert opts[-2:] == ["--unsetenv", "CLAUDE_CODE_OAUTH_TOKEN"]
     # nothing else: the machine, files, network and environment as approved
-    assert {o for o in opts if o.startswith("--")} == {"--tmpfs", "--ro-bind", "--unsetenv"}
+    assert {o for o in opts if o.startswith("--")} == {"--bind", "--tmpfs", "--unsetenv"}
     assert "gitconfig" not in " ".join(opts)
+
+
+def test_what_holds_the_covered_folders_stays_in_place(tmp_path):
+    """Every folder above a covered one, up to the home, is bound onto itself (it stays
+    writable), before the covering, so none of them can be moved."""
+    h = home(tmp_path)
+    argv = shlex.split(CF.confined(CMD, h))
+    opts = argv[8:argv.index("--")]
+    binds = [opts[i + 1] for i in range(len(opts)) if opts[i] == "--bind"]
+    for b in binds:
+        i = opts.index(b)
+        assert opts[i - 1] == "--bind" and opts[i + 1] == b          # onto itself
+    assert set(binds) == {f"{h}/.config", f"{h}/.local", f"{h}/.local/state",
+                          f"{h}/.local/share", f"{h}/.local/share/agentic-lab",
+                          f"{h}/.local/share/agentic-lab/github"}
+    assert max(i for i, o in enumerate(opts) if o == "--bind") < \
+        min(i for i, o in enumerate(opts) if o == "--tmpfs")
+    assert h not in binds                                            # the home: as it is
 
 
 def test_only_commands_that_leave_the_sandbox_change():
