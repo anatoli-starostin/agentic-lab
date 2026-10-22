@@ -6,8 +6,8 @@
 # agent's working folder (gh writes there on many commands).
 #
 # Which identity: GH_TOKEN if the agent already set it; else the one lab.yaml maps to the
-# repository given with -R/--repo (repos.tsv, as git's credential helper does); else the
-# agent's default identity.
+# repository given with -R/--repo, or else to the clone we're in (its origin remote)
+# (repos.tsv, as git's credential helper does); else the agent's default identity.
 real=${LAB_REAL_GH:-/usr/bin/gh}
 if [ ! -x "$real" ]; then
     echo "gh isn't installed on this host (apt-get install gh)" >&2
@@ -23,6 +23,11 @@ if [ -z "${GH_TOKEN:-}" ] && [ -f "$root/default" ]; then
         case $a in --repo=*) repo=${a#--repo=} ;; -R?*) repo=${a#-R} ;; esac
         prev=$a
     done
+    if [ -z "$repo" ]; then         # no -R: the clone we're in (its origin), as gh does
+        repo=$(git remote get-url origin 2>/dev/null)
+        repo=${repo#git@github.com:}
+        case $repo in https://github.com/*|github.com/*) ;; *:*|*@*) repo="" ;; esac
+    fi
     repo=${repo#https://github.com/}
     repo=${repo#github.com/}
     repo=${repo%.git}

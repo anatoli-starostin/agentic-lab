@@ -101,7 +101,7 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
     runs = RunStore(os.path.expanduser(f"{STATE}/runs"), workdir, agent_id)
     runner = SdkRunner(agent_id, workdir, settings_for, approver=approver,
                        model=model or a.get("model"), env=env, usage=usage, events=events,
-                       prompt_extra=GH.instructions(lab, agent_id), runs=runs,
+                       prompt_extra=lambda: GH.instructions(lab, agent_id), runs=runs,
                        keep_free_gb=a.get("keep_free_gb", KEEP_FREE_GB))
 
     async def guardrails():

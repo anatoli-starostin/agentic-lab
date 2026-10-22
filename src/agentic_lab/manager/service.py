@@ -213,7 +213,7 @@ async def serve(lab_path, agent_id, host=None, port=None):
 
     brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
                   approver=approver, model=a.get("model"), env=env, usage=usage, events=events,
-                  prompt_extra=GH.instructions(lab, agent_id),
+                  prompt_extra=lambda: GH.instructions(lab, agent_id),
                   turn_budget_s=60 * a.get("turn_budget_min", TURN_BUDGET_S // 60))
     members = {(h or {}).get("slack_user"): hid for hid, h in lab.humans.items()
                if (h or {}).get("slack_user")}
@@ -308,7 +308,7 @@ async def ask(lab_path, agent_id, human, text, wait_s=900):
 
     brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
                   approver=approver or NoChannelApprover(), model=a.get("model"), env=env,
-                  prompt_extra=GH.instructions(lab, agent_id),
+                  prompt_extra=lambda: GH.instructions(lab, agent_id),
                   turn_budget_s=60 * a.get("turn_budget_min", TURN_BUDGET_S // 60))
     io = ConsoleIO()
     mgr = Manager(lab, agent_id, io, brain, workers, broker, state, memory, workdir)

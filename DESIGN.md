@@ -219,7 +219,18 @@ git's conditional config for the commit author; the service writes the agent's g
 `-R owner/repo`, else the default; a `GH_TOKEN` the agent sets wins) and runs the real
 `gh`. gh's own config, which it writes on many commands, is in the agent's working folder
 (`<workdir>/.config/gh`, `GH_CONFIG_DIR`); the tokens stay where the agent can read but not
-write them.
+write them. Without `-R`, it takes the identity from the clone it runs in (its `origin`).
+
+**Which repositories each identity can reach** (#53): the service lists them, an App's
+installation repositories with each new token (hourly) and a bot token's repositories at
+start and every 6 hours, into `<identity>/repos.txt` next to the token (readable, not
+writable). The GitHub paragraph of the agent's prompt is rebuilt at every session: it names
+the reachable `owner/repo`s per identity (as of when), points to the files as the current
+version, says to clone `https://github.com/<owner>/<repo>.git` with exact names and never
+guess an owner, and that `repos.tsv` lists only repositories mapped to a *non-default*
+identity (empty: one identity for everything, not "no access"). A failed listing (no
+network, revoked token, rate limit) keeps the last list and never touches the agent's
+access.
 Several agents may share an identity. Identities live in `github.accounts`; two kinds, side
 by side:
 - **A GitHub App** (`app_id`; `installation_id` too if the app is installed in several
