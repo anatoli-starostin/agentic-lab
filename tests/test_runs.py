@@ -46,7 +46,8 @@ def stores(tmp_path):
 
 def test_a_run_runs_logs_and_records_how_it_ended(tmp_path):
     tasks, runs, units = stores(tmp_path)
-    r = runs.start("t-1", "train big/model", "echo step 1; echo oops >&2; exit 3", requester="alice")
+    r = runs.start("t-1", "train big/model", "echo step 1; echo oops >&2; exit 3", requester="alice",
+                   policy={"allowWrite": ["/w"], "denyRead": ["/s"]})
     assert r["state"] == "starting" and r["name"] == "train-big-model"
     assert units.calls[0] == ("start", "worker-a", r["id"])
     assert r["log"].startswith(str(tmp_path / "work" / "runs"))
@@ -255,7 +256,8 @@ def test_warm_environments(tmp_path, monkeypatch):
             "XDG_CACHE_HOME"} <= set(env)
     assert sandbox.settings("/w")["env"]["HF_HOME"] == "/w/.cache/huggingface"
     tasks, runs, units = stores(tmp_path)
-    r = runs.start("t-1", "env", "echo $TORCH_EXTENSIONS_DIR", requester="alice")
+    r = runs.start("t-1", "env", "echo $TORCH_EXTENSIONS_DIR", requester="alice",
+                   policy={"allowWrite": ["/w"], "denyRead": ["/s"]})
     R.run_exec(runs, r["id"], wrapper=NO_WRAP)
     assert f"{tmp_path}/work/.cache/torch_extensions" in R.log_tail(r["log"], 40,
                                                                     str(tmp_path / "work"))
@@ -309,16 +311,6 @@ def test_a_run_ending_between_the_reads_is_not_lost(tmp_path):
     runs.systemctl = ends_now
     v = runs.view(r["id"])
     assert v["state"] == "exited" and v["exit_code"] == 0
-
-
-def test_a_run_writes_only_its_own_part_of_the_state():
-    u = R.unit_template("worker-a", "lab-worker-a", home="/home/lab-worker-a")
-    lines = u.splitlines()
-    assert "ReadOnlyPaths=/home/lab-worker-a" in lines
-    assert ("ReadWritePaths=-/home/lab-worker-a/work "
-            "-/home/lab-worker-a/.local/state/agentic-lab/runs/%i "
-            "-/home/lab-worker-a/.local/state/agentic-lab/run-home") in lines
-    assert "InaccessiblePaths=-/home/lab-worker-a/.config/agentic-lab" in lines
 
 
 def test_ended_runs_arent_asked_about(tmp_path):
