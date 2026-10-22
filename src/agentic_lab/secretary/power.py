@@ -2,7 +2,7 @@
 
 Nebius, through its CLI, authenticated as a service account (only the secretary holds the
 key). A host can be powered if lab.yaml gives it `kind: cloud`, `provider: nebius` and its
-`instance` id. The secretary's own host is never powered off by it.
+`instance` id. Other providers' hosts (AWS) work as lab hosts, without power control. The secretary's own host is never powered off by it.
 
 Idle stop: a host with `idle_stop_min` above 0 that runs workers is stopped once all
 its workers have had nothing running, queued or waiting, and its GPUs nothing on them
@@ -55,8 +55,14 @@ def powerable(lab, host):
     h = lab.hosts.get(host)
     if h is None:
         return False, f"no host {host!r} in lab.yaml"
-    if h.get("kind") != "cloud" or h.get("provider") != "nebius" or not h.get("instance"):
-        return False, f"{host} isn't a Nebius VM with an instance id in lab.yaml"
+    if h.get("kind") != "cloud":
+        return False, f"{host} isn't a cloud VM: the lab can't power it"
+    if h.get("provider") != "nebius":
+        name = {"aws": "AWS"}.get(h.get("provider"), h.get("provider") or "an unknown provider")
+        return False, (f"{host} is on {name}: the lab has no power control for it (yet); "
+                       "start or stop it in the provider's console")
+    if not h.get("instance"):
+        return False, f"{host} needs its Nebius instance id in lab.yaml (instance:) to be powered"
     sec_host = next((a.get("host") for a in lab.agents.values() if a.get("role") == "secretary"),
                     None)
     if host == sec_host:

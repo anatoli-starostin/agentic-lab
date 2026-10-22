@@ -45,7 +45,7 @@ def test_single_vm_example():
     issues = registry.check(lab, TODAY)
     assert errors(issues) == []
     # the only warning: the secretary isn't on an on-prem host
-    assert [i.where for i in issues if i.level == "warning"] == ["agents.secretary"]
+    assert [i.where for i in issues if i.level == "warning"] == []
     assert {lab.agents[a]["host"] for a in lab.agents} == {"dev-vm"}
 
 
@@ -153,10 +153,11 @@ def test_credential_expiry(lab_dir):
 
 def test_warnings(lab_dir):
     issues = edit(lab_dir, lambda d: (d["agents"]["mgr-alice"].pop("slack_app"),
-                                      d["hosts"]["nuc-01"].update(kind="cloud", provider="nebius")))
+                                      d["hosts"]["nuc-01"].update(kind="cloud", provider="nebius",
+                                                                  idle_stop_min=0)))
     warns = [i.message for i in issues if i.level == "warning"]
     assert not any("slack_app" in w for w in warns)     # filled in by lab slack-verify
-    assert any("on-prem" in w for w in warns)
+    assert not any("on-prem" in w for w in warns)       # a cloud secretary host is fine
 
 
 def test_dedicated_worker_without_manager_warns(lab_dir):
@@ -187,3 +188,23 @@ def test_cli_settings(capsys):
 
 def test_shared_manager_ok(lab_dir):
     assert errors(edit(lab_dir, lambda d: d["agents"]["mgr-alice"].update(access="shared"))) == []
+
+
+def test_providers(tmp_path):
+    """Known providers (nebius, aws); unknown ones and idle stop on unpowered ones warn."""
+    import yaml
+    from agentic_lab.secretary.power import powerable
+    d = yaml.safe_load((EXAMPLE / "lab.yaml").read_text())
+    d["hosts"]["gpu-a"] = {"kind": "cloud", "provider": "aws", "idle_stop_min": 0}
+    d["hosts"]["gpu-b"] = {"kind": "cloud", "provider": "acmecloud", "idle_stop_min": 30}
+    p = tmp_path / "lab.yaml"
+    p.write_text(yaml.safe_dump(d))
+    lab = registry.load(p)
+    issues = [str(i) for i in registry.check(lab)]
+    assert not any("hosts.gpu-a" in i for i in issues)            # aws, no idle stop: fine
+    assert any("hosts.gpu-b" in i and "isn't one the lab knows" in i for i in issues)
+    assert any("hosts.gpu-b" in i and "idle_stop_min has no effect" in i for i in issues)
+    assert not any(i.startswith("ERROR") for i in issues if "gpu-" in i)
+    ok, why = powerable(lab, "gpu-a")
+    assert not ok and "on AWS" in why and "no power control" in why
+    assert "isn't a cloud VM" in powerable(lab, "nuc-01")[1]

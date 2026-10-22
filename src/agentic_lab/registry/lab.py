@@ -31,6 +31,8 @@ READERS_GROUP = "lab-readers"
 CHANNEL_TYPES = ("slack_dm",)   # first version: Slack DM only (DESIGN.md §7)
 ACCESS = ("shared", "dedicated")
 HOST_KINDS = ("onprem", "cloud")
+PROVIDERS = ("nebius", "aws")       # cloud providers lab.yaml knows
+POWERED = ("nebius",)               # ...and those the secretary can power (idle stop, on/off)
 EXPIRY_WARN_DAYS = 14
 
 # key -> (type, required). Types are checked; unknown keys are errors.
@@ -266,6 +268,14 @@ def check(lab: Lab, today: dt.date | None = None):
             E(where, f"kind must be one of {HOST_KINDS}, got {h.get('kind')!r}")
         if h.get("kind") == "cloud" and not h.get("provider"):
             E(where, "a cloud host needs a provider")
+        prov = h.get("provider")
+        if h.get("kind") == "cloud" and prov and prov not in PROVIDERS:
+            W(where, f"provider {prov!r} isn't one the lab knows ({', '.join(PROVIDERS)}): the "
+                     "host works, but the secretary can't power it")
+        if (h.get("kind") == "cloud" and prov and prov not in POWERED
+                and isinstance(h.get("idle_stop_min"), int) and h["idle_stop_min"] > 0):
+            W(where, f"no power control for {prov} hosts (yet): idle_stop_min has no effect; "
+                     "set it to 0")
         stop = h.get("idle_stop_min")
         if h.get("kind") == "cloud" and stop is None:
             E(where, "a cloud host needs idle_stop_min: minutes idle before the secretary "
@@ -319,8 +329,6 @@ def check(lab: Lab, today: dt.date | None = None):
         # (slack_app is informational: `lab slack-verify <manager>` prints the line for it)
         if role == "secretary":
             host = lab.hosts.get(a.get("host")) or {}
-            if host.get("kind") == "cloud":
-                W(where, "the secretary is meant to run on an always-on on-prem host")
             if host.get("idle_stop_min"):
                 E(where, "the secretary's host is never stopped: give it idle_stop_min: 0")
         cp = a.get("compact_percent")

@@ -61,10 +61,21 @@ def parse_worker(spec, tailnet):
     return wid, host, name or (f"{host}.{tailnet}" if tailnet else None)
 
 
+def cloud_host(provider, idle_stop_min):
+    """A cloud host's stanza. AWS hosts have no power control (yet): never idle-stopped, and
+    Ubuntu AMIs log in as `ubuntu`."""
+    if provider == "aws":
+        return {"kind": "cloud", "provider": "aws", "idle_stop_min": 0, "ssh_user": "ubuntu"}
+    return {"kind": "cloud", "provider": provider, "idle_stop_min": idle_stop_min}
+
+
 def build(lab_name, tailnet, admin_id, admin_name, slack_user, secretary_host,
           secretary_name, manager=None, workers=(), provider="nebius", admin_login=None,
-          manager_host=None):
-    hosts = {secretary_host: {"kind": "onprem"}}
+          manager_host=None, secretary_provider=None):
+    """`provider`: the cloud of the manager's and workers' VMs; `secretary_provider`: the
+    secretary's own host is a cloud VM there (default: on-prem)."""
+    hosts = {secretary_host: cloud_host(secretary_provider, 0) if secretary_provider
+             else {"kind": "onprem"}}
     if secretary_name:
         hosts[secretary_host]["tailnet_name"] = secretary_name
     human = {"name": admin_name, "channels": [
@@ -79,7 +90,7 @@ def build(lab_name, tailnet, admin_id, admin_name, slack_user, secretary_host,
     if manager:
         mhost, mname = manager_host or (secretary_host, None)
         if mhost not in hosts:
-            hosts[mhost] = {"kind": "cloud", "provider": provider, "idle_stop_min": 0}
+            hosts[mhost] = cloud_host(provider, 0)
             if mname:
                 hosts[mhost]["tailnet_name"] = mname
         agents[manager] = {"role": "manager", "human": admin_id, "host": mhost,
@@ -87,7 +98,7 @@ def build(lab_name, tailnet, admin_id, admin_name, slack_user, secretary_host,
                            "grants": [{"tool": "WebFetch"}, {"tool": "WebSearch"}]}
     for wid, host, name in workers:
         if host not in hosts:
-            hosts[host] = {"kind": "cloud", "provider": provider, "idle_stop_min": 30}
+            hosts[host] = cloud_host(provider, 30)
             if name:
                 hosts[host]["tailnet_name"] = name
         agents[wid] = {"role": "worker", "human": admin_id, "host": host, "access": "shared",
@@ -124,7 +135,8 @@ def run(path, args):
         mhost = (h, n)
     data = build(lab_name, tailnet, admin_id, admin_name, slack_user, sec_host, sec_name,
                  manager=args.manager, workers=workers,
-                 admin_login=args.tailscale_login or tailscale_login(), manager_host=mhost)
+                 admin_login=args.tailscale_login or tailscale_login(), manager_host=mhost,
+                 provider=args.provider, secretary_provider=args.secretary_provider)
     for spec in args.display or []:          # the names humans see: asked, never assumed
         aid, sep, name = spec.partition("=")
         if not sep or aid not in data["agents"] or not name.strip():

@@ -281,7 +281,7 @@ def test_idle_watch():
     w2.candidates(lab, snap({"running": 1}), now=t0)
     assert "gpu-a" not in w2.candidates(lab, snap({"running": 1}), now=later)
     ok, why = powerable(lab, "nuc-01")
-    assert not ok and "Nebius VM" in why
+    assert not ok and "isn't a cloud VM" in why
     assert powerable(lab, "gpu-a")[0]
 
 

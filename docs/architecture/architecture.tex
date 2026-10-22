@@ -116,6 +116,10 @@ mechanisms that bind them together, and the conventions the framework relies on.
     says where; several agents on one host still each have their own Unix user.
   \item \textbf{GPU hosts}: cloud VMs (Nebius in this version), stopped once idle for
     \code{idle\_stop\_min} minutes (required on cloud hosts; 0: never).
+  \item \textbf{AWS EC2} for ordinary hosts (the secretary, managers): \code{provider: aws},
+    without power control for now (\code{idle\_stop\_min: 0}); a public IPv4 with a
+    security group allowing no inbound (a VM without one needs a costly NAT gateway), and
+    an EBS root volume (instance store is wiped on every stop).
   \item All hosts are on one \textbf{Tailscale tailnet}; services talk to each other only
     over it.
 \end{itemize}
@@ -489,7 +493,7 @@ Section & Contents \\
   workers yes), \code{port} (workers, managers), \code{compact\_percent},
   \code{slack\_app}, \code{turn\_budget\_min} (managers), \code{keep\_free\_gb} (workers:
   free disk below which it prunes its caches and environments; default 30). \\
-\code{hosts} & \code{kind} (onprem/cloud), \code{provider}, \code{instance},
+\code{hosts} & \code{kind} (onprem/cloud), \code{provider} (nebius, aws), \code{instance},
   \code{idle\_stop\_min} (required on cloud hosts; 0: never), \code{readers} (Linux users
   who may read its agents' working folders), \code{tailnet\_name}, \code{ssh\_user}, \code{idle\_stop\_with\_managers}. \\
 \code{github} & \code{accounts}: the agents' identities: bot accounts (commit
@@ -727,7 +731,7 @@ Command & Purpose \\
   \item Permission channels other than Slack DM; approvals in the web UI (it monitors only).
   \item Picking a GitHub identity per task or per member (identities are picked by
     repository).
-  \item Cloud providers other than Nebius for VM power.
+  \item VM power for cloud providers other than Nebius (AWS hosts work, unpowered).
   \item An uninstall command (\code{docs/uninstall.md} describes the steps).
   \item Project tools such as experiment trackers: extensions a lab builds itself.
 \end{itemize}

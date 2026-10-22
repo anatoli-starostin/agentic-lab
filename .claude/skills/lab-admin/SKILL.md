@@ -62,7 +62,7 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 | What a host runs | `sudo lab doctor` (config + framework commits, reviewed or not) |
 | Upgrade the framework | `git -C ~/agentic-lab pull` → `lab apply --update-framework` (rewrites `framework.lock` only) → PR |
 | A Slack app manifest | `lab --lab ~/lab-config/lab.yaml slack-manifest <manager or secretary>` / `slack-manifest approvals` |
-| VM power | after the admin's one Nebius browser login: `sudo lab --lab ~/lab-config/lab.yaml nebius connect --project <id> [--forget-admin]` |
+| VM power | after the admin's one Nebius browser login: `sudo lab --lab ~/lab-config/lab.yaml nebius connect --project <id> [--forget-admin]` (Nebius only; AWS hosts have no power control yet) |
 | Talk to an agent without Slack | `sudo -u lab-<id> lab manager ask <id> --as <member> "..."` (or `secretary ask --as <member> "..."`) |
 | An agent's log | web UI `/logs/<agent>` (admins; members: their own agents), or `sudo lab logs <agent> [--hours N]` on its host |
 | Talk to an agent in the classic console | `sudo lab debug <agent>` (`--print "q"` for one question) |
@@ -150,6 +150,11 @@ asking before each one. The whole lab, one host, or one agent.
   `sandbox.bwrapPath` at `/usr/local/libexec/agentic-lab/bwrap-gpu`.
 - **`cuInit` returns 304 inside the sandbox:** the agent's settings lack
   `allowAllUnixSockets` (set automatically for agents with `gpu: true`).
+- **A host on AWS (EC2)** (non-GPU: the secretary, managers): `provider: aws,
+  idle_stop_min: 0, ssh_user: ubuntu` in `lab.yaml`; no power control (start/stop in the
+  AWS console). Advise a public IPv4 with a security group allowing no inbound at all
+  (outbound is all a host needs; a VM without a public IP needs a NAT gateway, ~$32/month
+  plus per-GB) and an EBS root volume (instance store is wiped on every stop).
 - **Someone on a host wants to see an agent's files without sudo:** add their Linux user to
   the host's `readers:` in `lab.yaml` (PR → merge → deploy); they then read the agents'
   working folders and their `tmp` (never secrets or state), after logging in again.

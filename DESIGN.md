@@ -50,7 +50,8 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 - A **Slack workspace** where the admin can create apps: one app per Slack-facing agent (the
   secretary, each manager) plus one **Lab Approvals** app for the broker.
 - A **Claude seat** (Team or Max) for each member whose agents will run.
-- A **cloud account** (Nebius first) for GPU workers, and any VMs for managers.
+- A **cloud account** (Nebius first) for GPU workers, and any VMs for managers. Ordinary
+  hosts may also be AWS EC2 VMs (`provider: aws`), without power control for now.
 - An **always-on host** for the secretary (small, no GPU).
 - A **GitHub** account or organisation for the lab's **private config repository**, and
   optionally bot accounts for agents (§4.4).
@@ -106,7 +107,8 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   as that bot account or GitHub App, over HTTPS, and it opens the pull requests itself.
   Without one, a deploy key (write access) and the admin opens the PR from its link. §4.4.
 - **State**: workers over MCP (a read-only monitoring token), managers' status endpoints,
-  the broker's overview, local systemd units, machine power states (Nebius).
+  the broker's overview, local systemd units, machine power states (Nebius; AWS hosts have
+  no power control yet).
 - **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
   (a worker task running, queued, awaiting approval or waiting on its long runs; a long
   run going, even CPU-only; any process on a GPU, anyone's; a GPU
@@ -424,6 +426,9 @@ agents:
       - {domain: pypi.org}
 hosts:
   sec-01: {kind: onprem}
+  mgr-01: {kind: cloud, provider: aws, idle_stop_min: 0, ssh_user: ubuntu}
+                                   # AWS: no power control (yet); public IPv4 with zero
+                                   #   inbound, EBS root (docs/install.md)
   gpu-a:  {kind: cloud, provider: nebius, instance: computeinstance-...,
            idle_stop_min: 30, tailnet_name: gpu-a.example.ts.net}
                                    # + idle_stop_with_managers: false, if a manager
