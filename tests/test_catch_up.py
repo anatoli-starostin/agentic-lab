@@ -254,3 +254,52 @@ def test_the_secretary_may_run_the_catch_up():
     assert out.splitlines() == [
         "lab-secretary ALL=(root) NOPASSWD: /usr/local/bin/lab apply-main",
         "lab-secretary ALL=(root) NOPASSWD: /usr/local/bin/lab apply-main --catch-up"]
+
+
+def test_a_host_busy_for_long_is_said_once(tmp_path):
+    cu, d, lb = CU.CatchUp(str(tmp_path / "c.json")), Deploys(tmp_path), lab()
+    busy = state(queue={"waiting": 1})                     # parked on its runs: busy too
+    run(cu, lb, busy, d)
+    run(cu, lb, busy, d, now=later(60 * (CU.BUSY_NOTICE_H + 1)))
+    run(cu, lb, busy, d, now=later(60 * (CU.BUSY_NOTICE_H + 2)))
+    assert d.started == 0 and len([s for s in d.said if "busy for over" in s]) == 1
+
+
+def test_current_hosts_arent_stale_when_the_lab_runs_something_unreviewed(monkeypatch):
+    st = state(applied=NEW)
+    st["applied"]["unreviewed"] = True
+    monkeypatch.setattr(CU, "main_commit", lambda repo: NEW)
+    assert CU.stale_info(st, "sec-host", "repo") == {}
+
+
+def test_ssh_that_answers_but_fails_isnt_unreachable(monkeypatch):
+    plan = {"name": "gpu-a", "ssh_user": None}
+    err = {"text": "Host key verification failed."}
+    monkeypatch.setattr(A.subprocess, "run", lambda argv, **kw: subprocess.CompletedProcess(
+        argv, 255, "", err["text"]))
+    monkeypatch.setattr(A.os, "geteuid", lambda: 1000)
+    assert A.applied_on(plan, local=False, admin="admin") == A.SSH_FAILED
+    err["text"] = "ssh: connect to host gpu-a port 22: Connection timed out"
+    assert A.applied_on(plan, local=False, admin="admin") == A.UNREACHABLE
+
+
+def test_tool_grants_dont_restart_the_session(tmp_path, monkeypatch):
+    from agentic_lab.worker import tasks as T
+    from agentic_lab.worker.runner import SdkRunner
+    soon = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(minutes=5)).isoformat()
+
+    class Approver:
+        async def active_grants(self):
+            return [{"kind": "tool", "value": "WebFetch", "expires": soon}]
+    store = T.TaskStore(tmp_path / "tasks")
+    t = store.update(store.submit("x", "alice", "m").id, state=T.RUNNING)
+    r = SdkRunner("w", str(tmp_path), lambda g: {}, approver=Approver())
+    seen = []
+
+    async def session(task, store_, outcome, sess, grants, prompt):
+        seen.append(sess["narrow_at"])
+        outcome.update(result={"summary": "ok", "artifacts": []}, success=True)
+        return None, None
+    monkeypatch.setattr(r, "_session", session)
+    asyncio.run(r.run(t, store))
+    assert seen == [None]                   # checked on each call instead

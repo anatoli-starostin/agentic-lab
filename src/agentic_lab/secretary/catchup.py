@@ -33,7 +33,9 @@ PAUSE_MIN = (5, 20)         # minutes before the 2nd and 3rd attempt
 FORGET_AFTER_H = 24         # failed attempts this old don't count any more
 RUN_TIMEOUT_MIN = 30        # a catch-up deploy that hasn't reported by then is over
 MIN_GAP_S = 120             # between two catch-up deploys (e.g. while a host boots)
-ACTIVE = ("running", "queued", "awaiting_approval")     # a deploy would restart these
+ACTIVE = ("running", "queued", "awaiting_approval", "waiting")   # a deploy restarts these
+BUSY_NOTICE_H = 6           # a host busy this long is said (once), and asked less often
+BUSY_GAP_MIN = 15           # then
 OUTCOME = re.compile(r"^CATCH-UP (\S+) (\w+)", re.M)     # deploy() prints one per host
 
 
@@ -61,7 +63,8 @@ def differing(state, sec_host, want=None):
         ap, host = a.get("applied"), a.get("host")
         if not (a.get("up") and ap and host) or host == sec_host:
             continue
-        if (ap.get("config_commit"), ap.get("framework_commit")) != want or ap.get("unreviewed"):
+        theirs = (ap.get("config_commit"), ap.get("framework_commit") if want[1] else None)
+        if theirs != tuple(want) or ap.get("unreviewed"):
             out[host] = ap
     return out
 
@@ -171,6 +174,7 @@ class CatchUp:
         self.gave_up = d.get("gave_up") or {}      # host -> the commit it gave up on
         self.last_start = d.get("last_start")
         self.awaiting = d.get("awaiting") or {}    # host -> commit deployed, not yet seen
+        self.busy = d.get("busy") or {}            # host -> {"since", "last", "said"}
 
     def save(self):
         os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
@@ -178,7 +182,7 @@ class CatchUp:
         with os.fdopen(fd, "w") as f:
             json.dump({"attempts": self.attempts, "running": self.running,
                        "gave_up": self.gave_up, "last_start": self.last_start,
-                       "awaiting": self.awaiting}, f)
+                       "awaiting": self.awaiting, "busy": self.busy}, f)
         os.replace(tmp, self.path)
 
     def _attempt(self, host, commit, now):
@@ -190,6 +194,11 @@ class CatchUp:
         return a
 
     def due(self, host, commit, now):
+        b = self.busy.get(host)
+        if b and b.get("last") and now - dt.datetime.fromisoformat(b["since"]) > \
+                dt.timedelta(hours=BUSY_NOTICE_H) and now - dt.datetime.fromisoformat(
+                    b["last"]) < dt.timedelta(minutes=BUSY_GAP_MIN):
+            return False                        # long busy: asked less often
         a = self._attempt(host, commit, now)
         if a is None or a["n"] == 0:
             return True
@@ -230,6 +239,9 @@ async def step(cu, lab, state, sec_host, start, result, announce, repo=None, now
             return                              # still deploying
         said = outcomes(cu.running["log"])
         for h in cu.running["hosts"]:           # only a real failure counts as an attempt
+            if said.get(h) == "busy":           # the host itself said "not now"
+                b = cu.busy.setdefault(h, {"since": started.isoformat(timespec="seconds")})
+                b["last"] = now.isoformat(timespec="seconds")
             if said.get(h, "failed") == "failed":
                 cu.failed(h, cu.running["target"], started)
             elif said.get(h) == "done":
@@ -251,7 +263,22 @@ async def step(cu, lab, state, sec_host, start, result, announce, repo=None, now
             await announce(f":warning: {host} missed deploys and {MAX_ATTEMPTS} attempts to "
                            f"bring it up to {commit[:7]} failed: it stays stale (see the web "
                            f"UI). Admins ({admins}): deploy it by hand once it's fixed.")
-    todo = [h for h in stale if cu.due(h, commit, now) and not active_work(lab, h, state)]
+    todo = []
+    for h in stale:
+        why = active_work(lab, h, state)
+        if not why:
+            cu.busy.pop(h, None)
+        else:
+            b = cu.busy.setdefault(h, {"since": now.isoformat(timespec="seconds")})
+            if now - dt.datetime.fromisoformat(b["since"]) > dt.timedelta(hours=BUSY_NOTICE_H) \
+                    and not b.get("said"):
+                b["said"] = True
+                await announce(f":hourglass: {h} missed a deploy and has been busy for over "
+                               f"{BUSY_NOTICE_H} h ({why}): it's brought up to date once "
+                               "it's free.")
+            continue
+        if cu.due(h, commit, now):
+            todo.append(h)
     recent = cu.last_start and now - dt.datetime.fromisoformat(cu.last_start) < \
         dt.timedelta(seconds=MIN_GAP_S)
     if not todo or recent:

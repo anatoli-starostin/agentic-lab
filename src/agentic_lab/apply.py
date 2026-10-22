@@ -292,7 +292,7 @@ def busy_check(plan):
     Read as each worker's own user."""
     lines = ['say "active work (a catch-up waits for it)"']
     for u in sorted(set((plan.get("run_units") or {}).values())):
-        check = ('grep -lsE \'"state": "(running|queued|awaiting_approval)"\' '
+        check = ('grep -lsE \'"state": "(running|queued|awaiting_approval|waiting)"\' '
                  f"/home/{u}/.local/state/agentic-lab/tasks/*.json")
         lines.append(f"if runuser -u {u} -- sh -c {shlex.quote(check)} >/dev/null; then "
                      f"echo '  {u} has active tasks: not now'; exit {BUSY}; fi")
@@ -554,9 +554,14 @@ def describe(plan):
     return "\n".join(out)
 
 
+def no_answer(stderr):
+    """Did ssh fail because nothing answered (a stopped VM), not for another reason?"""
+    return any(s in (stderr or "").lower() for s in _NO_ANSWER)
+
+
 def applied_on(plan, local, admin):
-    """The host's /etc/agentic-lab/applied.yaml (what it runs), {} if it has none, or
-    UNREACHABLE."""
+    """The host's /etc/agentic-lab/applied.yaml (what it runs), {} if it has none,
+    UNREACHABLE (nothing answered) or SSH_FAILED (it answered, ssh failed)."""
     path = "/etc/agentic-lab/applied.yaml"
     if local:
         try:
@@ -569,7 +574,7 @@ def applied_on(plan, local, admin):
     r = subprocess.run(as_admin + ["ssh", *SSH_OPTS, "--", target, f"cat {path}"],
                        capture_output=True, text=True)
     if r.returncode == 255:
-        return UNREACHABLE
+        return UNREACHABLE if no_answer(r.stderr) else SSH_FAILED
     try:
         return yaml.safe_load(r.stdout) or {} if r.returncode == 0 else {}
     except ValueError:
@@ -595,7 +600,7 @@ def run_bundle(plan, local, admin):
         probe = subprocess.run(as_admin + ["ssh", *SSH_OPTS, "--", target, "true"],
                                capture_output=True, text=True)
         if probe.returncode == 255:
-            if any(s in (probe.stderr or "").lower() for s in _NO_ANSWER):
+            if no_answer(probe.stderr):
                 return UNREACHABLE
             print(f"  ssh to {target} failed: {(probe.stderr or '').strip()[-400:]}")
             return SSH_FAILED
@@ -603,6 +608,7 @@ def run_bundle(plan, local, admin):
                                        f"{target}:{remote}"])
         if r.returncode:
             return r.returncode
-        return subprocess.run(as_admin + ["ssh", *SSH_OPTS, "--", target,
-                                          f"sudo bash {remote}/apply.sh; rc=$?; "
-                                          f"rm -rf {remote}; exit $rc"]).returncode
+        rc = subprocess.run(as_admin + ["ssh", *SSH_OPTS, "--", target,
+                                        f"sudo bash {remote}/apply.sh; rc=$?; "
+                                        f"rm -rf {remote}; exit $rc"]).returncode
+        return SSH_FAILED if rc == 255 else rc      # lost mid-apply: a failure, not a skip

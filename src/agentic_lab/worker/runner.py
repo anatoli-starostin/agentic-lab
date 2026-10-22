@@ -347,7 +347,6 @@ class SdkRunner:
                     if tool_name in ALWAYS_ASK:     # approved this once, never as a grant
                         return PermissionResultAllow()
                     tool_grants.update({g["value"]: g.get("expires") for g in d.grants})
-                    session["narrow_at"] = _earliest(d.grants, session.get("narrow_at"))
                     return PermissionResultAllow()
                 session["restart_for"] = d.grants
                 return PermissionResultDeny(interrupt=True, message=(
@@ -402,7 +401,8 @@ class SdkRunner:
                       if not g.get("expires") or dt.datetime.fromisoformat(g["expires"]) > _now()]
             # a timed grant ends the session when it expires: the next one goes without it
             session = {"violations": [], "restart_for": None, "expired": False,
-                       "narrow_at": _earliest(grants)}
+                       # tool grants are checked on each call: no restart for them
+                       "narrow_at": _earliest([g for g in grants if g["kind"] != "tool"])}
             try:
                 result_msg, last_text = await self._session(
                     task, store, outcome, session, grants, prompt)

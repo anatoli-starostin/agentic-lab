@@ -307,8 +307,8 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
 
     from . import configrepo as CR
     from . import lock
-    from .apply import (BUSY, UNREACHABLE, ApplyError, applied_on, describe, has_work,
-                        plan_all, run_bundle, secretary_host)
+    from .apply import (BUSY, SSH_FAILED, UNREACHABLE, ApplyError, applied_on, describe,
+                        has_work, plan_all, run_bundle, secretary_host)
     from .doctor import this_host
     errors = [i for i in registry.check(registry.load(lab_path)) if i.level == "error"]
     if errors:                     # never deploy (or even plan) a lab.yaml lab check refuses
@@ -340,6 +340,9 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
             if cur == UNREACHABLE:
                 said, why = "unreachable", "skipped: unreachable"
                 skipped.append(p["host"])
+            elif cur == SSH_FAILED:
+                said, why = "failed", "ssh failed (see above)"
+                failed += 1
             elif (cur.get("config_commit"), cur.get("framework_commit")) == (
                     record.get("config_commit"), record.get("framework_commit")) \
                     and not cur.get("unreviewed"):
