@@ -309,6 +309,40 @@ def test_registration_already_done_counts(tmp_path):
     assert state.tasks["t-1"].registered
 
 
+def test_registration_is_retried_until_a_definite_answer(tmp_path):
+    state = ManagerState(tmp_path)
+    conv = state.conversation("C1", "1.0")
+    state.track("t-1", "worker-a", conv.key, "alice", registered=False)
+    answers = []
+
+    class Workers:
+        async def call(self, worker, tool, args=None):
+            return {"state": "running", "progress": []}
+
+    async def register(t):
+        status = answers.pop(0)
+        if status is None:
+            raise OSError("connection refused")
+        e = WorkerError(f"broker: {status}")
+        e.status = status
+        raise e
+
+    async def post(c, text):
+        pass
+
+    def round_():
+        state.tasks["t-1"].register_next = 0
+        asyncio.run(followup.check_once(state, Workers(), post, None, register=register))
+    for status in (None, 500, 503, 401):         # not reachable, failing, token rotating
+        answers.append(status)
+        round_()
+        assert not state.tasks["t-1"].registered
+    assert state.tasks["t-1"].register_next > 0  # with a pause before the next try
+    answers.append(404)                          # a definite no
+    round_()
+    assert state.tasks["t-1"].registered
+
+
 def test_old_requests_are_withdrawn_until_the_broker_answers(tmp_path):
     from agentic_lab.worker.server import withdraw_stale
     store = T.TaskStore(tmp_path / "tasks")

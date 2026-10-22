@@ -33,7 +33,13 @@ class BrokerClient:
         async with httpx2.AsyncClient(headers=self.headers, timeout=20) as c:
             r = await c.request(method, f"{self.url}{path}", **kw)
             if r.status_code >= 400:
-                raise WorkerError(f"broker: {r.json().get('error', r.status_code)}")
+                try:
+                    msg = r.json().get("error", r.status_code)
+                except ValueError:
+                    msg = r.status_code
+                e = WorkerError(f"broker: {msg}")
+                e.status = r.status_code
+                raise e
             return r.json()
 
     async def register_task(self, worker, task_id, requester):

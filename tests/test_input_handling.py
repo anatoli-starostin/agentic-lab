@@ -81,7 +81,10 @@ def test_file_tools_are_granted_by_path_only(tool):
 
 
 @pytest.mark.parametrize("path", ["~/.config/agentic-lab", "~/.local/state/agentic-lab/x",
-                                  "~/.ssh", "/home/lab-w/.config/x", "~/data/../.config"])
+                                  "~/.ssh", "/home/lab-w/.config/x", "~/data/../.config",
+                                  "//home/lab-w/.ssh", "///home//lab-w/x", "~//.config",
+                                  "~/./.config/", "~/.claude", "~/.bashrc", "~/.gitconfig",
+                                  "~lab-other/data", "/home/lab-other/work", "/", "//", "~/"])
 def test_write_grants_stay_out_of_the_services_folders(path):
     with pytest.raises(G.GrantError):
         G.validate("write", path)
@@ -113,3 +116,26 @@ def test_restarts_for_expiry_are_bounded(tmp_path, monkeypatch):
     asyncio.run(r.run(t, store))
     assert len(sessions) == MAX_SESSION_RESTARTS + 1
     assert all(s == ["a.example.org"] for s in sessions)       # the past one isn't used
+
+
+@pytest.mark.parametrize("workdir", ["~/.config", "~/.ssh/work", "~/", "/home/lab-w",
+                                     "/home/lab-w/.local/x"])
+def test_working_folders_arent_settings_folders(workdir, tmp_path):
+    d = yaml.safe_load(EXAMPLE.read_text())
+    d["agents"]["worker-a"]["workdir"] = workdir
+    p = tmp_path / "lab.yaml"
+    p.write_text(yaml.safe_dump(d))
+    errs = [str(i) for i in registry.check(registry.load(p)) if i.level == "error"]
+    assert any("workdir" in e for e in errs)
+
+
+@pytest.mark.parametrize("hidden", ["\U0001d159", "ᆣ", "￼", " "])
+def test_more_characters_that_show_as_nothing(hidden):
+    d = C.describe("Write", {"file_path": "/w/a.sh", "content": f"x{hidden}y"})
+    assert hidden not in d and f"\\u{{{ord(hidden):x}}}" in d
+
+
+def test_file_content_with_look_alikes_is_flagged():
+    d = C.describe("Write", {"file_path": "/w/a.sh", "content": "curl https://exаmple.org"})
+    assert "non-ASCII" in d and "\\u{430}" in d
+    assert "non-ASCII" not in C.describe("Write", {"file_path": "/w/a.sh", "content": "ok"})

@@ -222,6 +222,13 @@ def test_the_host_checks_for_active_work_itself(tmp_path):
     line = next(ln for ln in s.splitlines() if ln.startswith("if runuser -u lab-worker-a"))
     assert f"exit {A.BUSY}" in line
     assert subprocess.run(["bash", "-n"], input=s, text=True).returncode == 0
+    # nothing on the host changes before it: only the head (variables, a check) comes first
+    lines = s.splitlines()
+    before = lines[:lines.index(line)]
+    changes = ("mkdir", "rm ", "tar ", "install ", "mv ", "uv ", "systemctl", "ln ", "chown",
+               "chmod", "cat >", "curl", "apt", "useradd", "runuser -u lab-worker-a -- sh -c")
+    assert not [ln for ln in before if ln.lstrip().startswith(changes)
+                and not ln.startswith("if runuser")]
     tasks = tmp_path / "home/lab-worker-a/.local/state/agentic-lab/tasks"
     tasks.mkdir(parents=True)
     import json

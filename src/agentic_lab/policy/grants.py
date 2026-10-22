@@ -53,13 +53,9 @@ def validate(kind, value):
     if kind == "write":
         if not (value.startswith("/") or value.startswith("~/")):
             raise GrantError(f"write grant must be an absolute or ~/ path, got {value!r}")
-        if os.path.normpath(os.path.expanduser(value)) in ("/", os.path.expanduser("~")):
-            raise GrantError(f"write grant too broad: {value!r}")
-        parts = os.path.normpath(value).split(os.sep)
-        if ".." in value.split("/") or (parts[0] == "~" and len(parts) > 1
-                                        and parts[1] in SERVICE_DIRS) or any(
-                p in SERVICE_DIRS for p in parts[3:4] if parts[1:2] == ["home"]):
-            raise GrantError(f"write grant into the lab's own folders: {value!r}")
+        why = write_refused(value)
+        if why:
+            raise GrantError(f"write grant {why}: {value!r}")
     if kind == "tool" and not _TOOL.match(value):
         raise GrantError(f"not a tool name or anchored mcp__server__ glob: {value!r}")
     if kind == "tool" and value == "mcp__lab__start_run":
@@ -72,8 +68,30 @@ def validate(kind, value):
 # Bash: sandboxed commands need no grant, unsandboxed ones always ask; the file tools run
 # in the agent's process, outside the sandbox: writes are granted by path (`write`)
 NOT_GRANTABLE = ("Bash", "Write", "Edit", "MultiEdit", "NotebookEdit", "Read")
-SERVICE_DIRS = (".config", ".local", ".ssh", ".gnupg")   # in a home: the services' own
 LAB_SERVER = "mcp__lab__"
+
+
+def write_refused(value):
+    """Why a folder can't be granted for writing (None if it can). Judged on the path as
+    the system reads it (repeated slashes, `.`, trailing slashes don't matter): never `/`
+    or a whole home; in the agent's home (`~/…`) nothing whose first part starts with a dot
+    (services' config and state, shell and tool settings, keys); never another home
+    (`~user`, `/home/…`: the agent's own folders are written as `~/…`)."""
+    if ".." in value.split("/"):
+        return "with '..'"
+    path = os.path.normpath(re.sub(r"/{2,}", "/", value))
+    parts = [p for p in path.split("/") if p]
+    if path == "/" or parts == ["~"]:
+        return "too broad"
+    if parts and parts[0].startswith("~"):
+        if parts[0] != "~":
+            return "into another user's home"
+        if parts[1].startswith("."):
+            return "into the home's own settings and the lab's folders"
+        return None
+    if parts and parts[0] == "home":
+        return "into a home by its absolute path (use ~/… for the agent's own)"
+    return None
 
 
 def grantable_tool(value):

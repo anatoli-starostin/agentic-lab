@@ -394,16 +394,13 @@ class Secretary:
     async def post_icon(self, name, role, conv, comment):
         """Draw an app icon (Claude, or a pattern if that fails) and post it in `conv`."""
         try:
-            import tempfile
             from ..icon import drawn
             data, how = await drawn(name, role, env=getattr(self.brain, "env", None),
                                     lab=self.lab.name)
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as f:
-                f.write(data)
-            await self.slack.upload(conv.channel, conv.thread_ts, f.name,
+            # the bytes drawn, never a file (a path could be swapped before the upload)
+            await self.slack.upload(conv.channel, conv.thread_ts, None,
                                     f"{name}-icon.png", f"{comment}: {how}. Want another? "
-                                    "Just ask.")
-            os.unlink(f.name)
+                                    "Just ask.", data=data)
             return f"posted {name}'s icon ({how})"
         except Exception as e:
             log.exception("posting the app icon failed")

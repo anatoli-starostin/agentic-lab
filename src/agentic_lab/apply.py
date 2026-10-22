@@ -251,7 +251,10 @@ B=$(cd "$(dirname "$0")" && pwd)
 say() {{ echo "== $*"; }}
 TIP=$(tailscale ip -4 2>/dev/null | head -1 || true)
 [ -n "$TIP" ] || {{ echo "this host isn't on the tailnet"; exit 1; }}
+"""
 
+# everything from here on changes the host
+SCRIPT_BODY = r"""
 say "framework -> /opt/agentic-lab"
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh >/dev/null 2>&1
 mkdir -p /opt/agentic-lab /etc/agentic-lab
@@ -295,8 +298,9 @@ def busy_check(plan):
 
 def script(plan):
     lines = [SCRIPT_HEAD.format(host=plan["host"])]
-    if plan.get("catch_up"):
+    if plan.get("catch_up"):    # before anything here changes (#61)
         lines += busy_check(plan)
+    lines.append(SCRIPT_BODY)
     lines.append('say "users"')
     for u in dict.fromkeys(plan["users"]):
         lines.append(f"/opt/agentic-lab/src/deploy/worker/create-agent-user.sh {u} >/dev/null")

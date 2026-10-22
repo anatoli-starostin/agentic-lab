@@ -21,6 +21,8 @@ _wrapping = set()               # task ids whose wrap-up is running (not started
 GIVE_UP_AFTER = 15              # rounds a worker doesn't know a task before we stop following
 WRAPUP_TRIES = 5                # failed wrap-ups before giving up on one
 WRAPUP_PAUSE_S = (30, 120, 600, 1800)   # between them
+REFUSED = (400, 404, 409)       # the broker's definite "no" to a registration
+REGISTER_PAUSE_MAX_S = 600      # retries back off up to this
 
 
 async def _wrapup(state, finished, post, conv, t, view):
@@ -61,19 +63,24 @@ async def check_once(state, workers, post, finished, mention=lambda human: human
     for t in state.open_tasks():
         if t.task_id in _wrapping or t.wrapup_next > time.time():
             continue
-        if not t.registered and register is not None:
+        if not t.registered and register is not None and t.register_next <= time.time():
             try:
                 await register(t)
                 t.registered = True
                 state.save()
             except Exception as e:
+                status = getattr(e, "status", None)
                 if "already registered" in str(e):     # an earlier try got through
                     t.registered = True
-                elif str(e).startswith("broker:"):     # refused: retrying won't help
+                elif status in REFUSED:                # a definite no: retrying won't help
                     log.error("the broker refused registering %s: %s", t.task_id, e)
                     t.registered = True
-                else:
-                    log.warning("registering %s with the broker: %s", t.task_id, e)
+                else:       # unreachable, 5xx, a token being rotated...: until it works
+                    t.register_tries += 1
+                    t.register_next = time.time() + min(
+                        REGISTER_PAUSE_MAX_S, POLL_S * 2 ** min(t.register_tries, 10))
+                    log.warning("registering %s with the broker (try %d): %s", t.task_id,
+                                t.register_tries, e)
                 state.save()
         try:
             view = await workers.call(t.worker, "task_result", {"task_id": t.task_id})

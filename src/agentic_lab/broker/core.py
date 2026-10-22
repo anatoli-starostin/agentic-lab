@@ -101,8 +101,8 @@ def grant_options(tool, tool_input, violations):
     elif tool in ("Write", "Edit", "NotebookEdit"):
         path = tool_input.get("file_path") or tool_input.get("notebook_path") or ""
         folder = os.path.dirname(path)
-        if folder not in ("", "/") and folder != os.path.expanduser("~"):
-            add("write", folder)
+        if folder.startswith(("/", "~/")) and not G.write_refused(folder):
+            add("write", folder)            # only what a write grant may name at all
     elif tool in ("WebFetch", "WebSearch") or (tool.startswith("mcp__") and
                                                  G.grantable_tool(tool)):
         add("tool", tool)
@@ -115,7 +115,9 @@ TRUNCATED = "⚠ TRUNCATED"   # marks a detail that isn't shown in full
 
 # characters that print as nothing (or as a blank) though they're "printable"
 BLANKS = {0x115F, 0x1160, 0x3164, 0xFFA0, 0x2800, 0x034F, 0x17B4, 0x17B5, 0x180E, 0x2060,
-          0x3000, 0x00A0, 0x00AD, 0xFEFF, 0x061C, 0x200B, 0x200C, 0x200D}
+          0x3000, 0x00A0, 0x00AD, 0xFEFF, 0x061C, 0x200B, 0x200C, 0x200D, 0x11A3, 0x11A4,
+          0x11A5, 0x11A6, 0x11A7, 0x1D159, 0x1D173, 0x1D174, 0x1D175, 0x1D176, 0x1D177,
+          0x1D178, 0x1D179, 0x1D17A, 0xFFFC, 0xFFFD, 0x2028, 0x2029, 0x202F, 0x205F}
 
 
 def _shown(c, ascii_only):
@@ -124,8 +126,19 @@ def _shown(c, ascii_only):
     if c == "\n" or 0x20 <= o < 0x7F:
         return c
     if ascii_only or o in BLANKS or unicodedata.category(c)[0] in "CMZ":
-        return f"\\x{o:02x}" if o < 0x100 else f"\\u{o:04x}"
+        return f"\\x{o:02x}" if o < 0x80 else f"\\u{{{o:x}}}"   # \u{…}: never ambiguous
     return c
+
+
+def _non_ascii_note(text):
+    """A line before file content that holds non-ASCII letters (which can look like ASCII
+    ones): how many, and the first few, escaped."""
+    odd = [c for c in text if ord(c) >= 0x80]
+    if not odd:
+        return ""
+    first = " ".join(f"\\u{{{ord(c):x}}}" for c in dict.fromkeys(odd[:200]))
+    return (f"⚠ the content has {len(odd)} non-ASCII characters (look-alikes of ASCII "
+            f"letters among them?): {first[:200]}\n")
 
 
 def visible(text, ascii_only=False):
@@ -154,11 +167,12 @@ def describe(tool, tool_input):
     path = visible(str(tool_input.get("file_path") or tool_input.get("notebook_path")),
                    ascii_only=True)
     if tool == "Write":
-        return _full(f"Write {path}:\n{tool_input.get('content', '')}")
+        content = str(tool_input.get("content", ""))
+        return _full(f"Write {path}:\n{_non_ascii_note(content)}{content}")
     if tool == "Edit":
-        return _full(f"Edit {path}:\n--- replace:\n"
-                     f"{tool_input.get('old_string', '')}\n--- with:\n"
-                     f"{tool_input.get('new_string', '')}")
+        new = str(tool_input.get("new_string", ""))
+        return _full(f"Edit {path}:\n{_non_ascii_note(new)}--- replace:\n"
+                     f"{tool_input.get('old_string', '')}\n--- with:\n{new}")
     if tool in ("MultiEdit", "NotebookEdit"):
         return _full(f"{tool} {path}:\n{json.dumps(tool_input, indent=1)}")
     if tool == "WebFetch":
