@@ -11,6 +11,7 @@ import os
 import httpx2
 from claude_agent_sdk import create_sdk_mcp_server, tool
 
+from .. import safefs
 from .workers import WorkerError
 
 TOOL_NAMES = ("list_workers", "submit_task", "my_tasks", "task_status", "task_result",
@@ -60,6 +61,15 @@ def _pending_visible(ctx, r):
     t = ctx.state.tasks.get(r.get("task_id") or "")
     return (t is not None and visible(ctx, t)) or (
         t is None and ctx.private and r.get("human") == ctx.requester)
+
+
+def _read_own(ctx, path, limit=20 * 1024 * 1024):
+    """A plain file of this manager's working folder (never through a link: safefs), or
+    None."""
+    try:
+        return safefs.read(os.path.realpath(ctx.workdir), path, limit=limit)
+    except OSError:
+        return None
 
 
 def visible(ctx, task):
@@ -181,12 +191,12 @@ def build(ctx):
                                             "comment": {"type": "string"}},
            "required": ["path"]})
     async def post_file(args):
-        root = os.path.realpath(ctx.workdir)
-        full = os.path.realpath(os.path.join(root, args["path"]))
-        if not full.startswith(root + os.sep) or not os.path.isfile(full):
-            return _err("only existing files in your working folder can be posted")
-        await ctx.slack.upload(ctx.conv.channel, ctx.conv.thread_ts, full,
-                               os.path.basename(full), args.get("comment"))
+        data = _read_own(ctx, args["path"])
+        if data is None:
+            return _err("only existing plain files in your working folder can be posted")
+        name = os.path.basename(os.path.normpath(args["path"]))
+        await ctx.slack.upload(ctx.conv.channel, ctx.conv.thread_ts, None, name,
+                               args.get("comment"), data=data)
         return _text("posted")
 
     @tool("post_worker_file", "Fetch a file from a worker's working folder (e.g. a task's "
@@ -200,13 +210,15 @@ def build(ctx):
             f = await ctx.workers.call(args["worker"], "read_file", {"path": args["path"]})
         except WorkerError as e:
             return _err(e)
-        inbox = os.path.join(ctx.workdir, "from-workers", args["worker"])
-        os.makedirs(inbox, exist_ok=True)
-        local = os.path.join(inbox, os.path.basename(f["name"]))
-        with open(local, "wb") as out:
-            out.write(base64.b64decode(f["base64"]))
-        await ctx.slack.upload(ctx.conv.channel, ctx.conv.thread_ts, local, f["name"],
-                               args.get("comment"))
+        data = base64.b64decode(f["base64"])
+        name = os.path.basename(f["name"]) or "file"
+        try:            # a copy in the working folder, written safely (safefs)
+            local = safefs.write(os.path.realpath(ctx.workdir), os.path.join(
+                "from-workers", os.path.basename(args["worker"]), name), data)
+        except OSError as e:
+            return _err(f"couldn't keep a copy: {e}")
+        await ctx.slack.upload(ctx.conv.channel, ctx.conv.thread_ts, None, f["name"],
+                               args.get("comment"), data=data)
         return _text(f"posted {f['name']} (a copy is in {local})")
 
     @tool("send_file_to_worker", "Send a file from your working folder (e.g. a member's "
@@ -214,12 +226,11 @@ def build(ctx):
           "is on the worker: mention that path in the task's instruction. Up to 20 MB.",
           {"worker": str, "path": str})
     async def send_file_to_worker(args):
-        root = os.path.realpath(ctx.workdir)
-        full = os.path.realpath(os.path.join(root, args["path"]))
-        if not full.startswith(root + os.sep) or not os.path.isfile(full):
-            return _err("only existing files in your working folder can be sent")
-        with open(full, "rb") as f:
-            data = base64.b64encode(f.read()).decode()
+        raw = _read_own(ctx, args["path"])
+        if raw is None:
+            return _err("only existing plain files in your working folder can be sent")
+        full = os.path.normpath(args["path"])
+        data = base64.b64encode(raw).decode()
         try:
             r = await ctx.workers.call(args["worker"], "write_file",
                                        {"name": os.path.basename(full), "base64_data": data})
