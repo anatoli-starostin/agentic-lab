@@ -87,6 +87,8 @@ PrivateTmp=yes
 UMask=0077
 InaccessiblePaths=-{home}/.config/agentic-lab
 ReadOnlyPaths={home}
+# all of run-home/ is writable here; what keeps one member's runs out of another's run
+# home is bwrap (each job sees only its member's), this directive is the layer underneath
 ReadWritePaths=-{workdir} -{home}/.local/state/agentic-lab/runs/%i -{home}/.local/state/agentic-lab/run-home
 KillMode=control-group
 TimeoutStopSec=60
@@ -235,6 +237,43 @@ def job_wrapper(home, run_home, workdir, cwd, github=None):
             "--chdir", cwd, "--"]
 
 
+STOP_POLL_S = 0.5
+STOP_WAIT_MAX_S = 600       # systemd's TimeoutStopSec ends it long before; just a bound
+
+
+def own_cgroup_procs():
+    """The cgroup.procs file of this process's cgroup (cgroup v2), or None."""
+    try:
+        with open("/proc/self/cgroup") as f:
+            for line in f:
+                if line.startswith("0::"):
+                    return os.path.join("/sys/fs/cgroup", line[3:].strip().lstrip("/"),
+                                        "cgroup.procs")
+    except OSError:
+        pass
+    return None
+
+
+def wait_alone(procs_file, me=None, poll=STOP_POLL_S, limit=STOP_WAIT_MAX_S, sleep=None):
+    """Wait until this process is the only one left in its cgroup (the job and everything
+    it started have ended). Returns True if so, False if it can't tell (no or unreadable
+    file: the caller records at once) or the bound passed."""
+    import time
+    me, sleep = me or os.getpid(), sleep or time.sleep
+    waited = 0.0
+    while waited <= limit:
+        try:
+            with open(procs_file) as f:
+                pids = {int(x) for x in f.read().split()}
+        except (OSError, ValueError, TypeError):
+            return False
+        if pids <= {me}:
+            return True
+        sleep(poll)
+        waited += poll
+    return False
+
+
 def _systemctl(verb, agent_id, run_id):
     if verb == "is-active":
         r = subprocess.run([SYSTEMCTL, "is-active", "--quiet", unit(agent_id, run_id)],
@@ -245,7 +284,8 @@ def _systemctl(verb, agent_id, run_id):
     return True
 
 
-def run_exec(store: RunStore, run_id, env=None, wrapper=job_wrapper, home=None):
+def run_exec(store: RunStore, run_id, env=None, wrapper=job_wrapper, home=None,
+             procs_file=own_cgroup_procs):
     """The unit's main process (as the agent's user, outside the sandbox): start the job
     under bwrap (`wrapper`, job_wrapper), output to its log, and record how it ended. It
     never runs a job unwrapped: no bwrap, no member, no run home, no job."""
@@ -282,6 +322,15 @@ def run_exec(store: RunStore, run_id, env=None, wrapper=job_wrapper, home=None):
         signal.signal(signal.SIGTERM, on_term)
         code = p.wait()
         st = store._status(run_id)
+        if stopped:
+            # A stop: bwrap ends at the first TERM, but the job is still saving. If we ended
+            # now, systemd would see the main process gone and TERM the rest of the unit
+            # again (the job would get it twice). So we stay until the job is gone too:
+            # the run is "stopped" meanwhile, "ended" is when the job really ended.
+            store._write(status, {**st, "state": "stopped"})
+            wait_alone(procs_file() if callable(procs_file) else procs_file)
+            # the job's own exit code isn't ours to see once bwrap is gone (its init has it)
+            code = None if code < 0 else code
         state = "stopped" if stopped or st.get("stop_requested") else "exited"
         store._write(status, {**st, "state": state, "ended": _now(), "exit_code": code})
         log.write(f"== {_now()} {state}, exit code {code}\n".encode())
