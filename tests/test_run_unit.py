@@ -18,7 +18,8 @@ def test_underneath_the_home_stays_read_only():
     assert "ReadOnlyPaths=/home/lab-worker-a" in u
     assert ("ReadWritePaths=-/home/lab-worker-a/work -/home/lab-worker-a/datasets "
             "-/home/lab-worker-a/.local/state/agentic-lab/runs/%i") in u
-    assert "InaccessiblePaths=-/home/lab-worker-a/.config/agentic-lab" in u
+    assert ("InaccessiblePaths=-/home/lab-worker-a/.config/agentic-lab "
+            "-/home/lab-worker-a/.nebius") in u
     assert not any("run-home" in ln for ln in u)
     start = next(ln for ln in u if ln.startswith("ExecStart="))
     assert start.startswith("ExecStart=/opt/agentic-lab/venv/bin/lab ") and "bwrap" not in start
@@ -46,8 +47,8 @@ def test_a_run_is_held_to_the_sandbox_policy(tmp_path, monkeypatch):
     covered = [w[i + 1] for i in range(len(w)) if w[i] == "--tmpfs"]
     shown = [w[i + 1] for i in range(len(w)) if w[i] == "--ro-bind-try"]
     assert writable == fs["allowWrite"]
-    assert set(covered) == {d for d in fs["denyRead"] if os.path.isdir(d)
-                            and not os.path.islink(d)}
+    assert set(covered) == {os.path.realpath(d) for d in fs["denyRead"]
+                            if os.path.isdir(os.path.realpath(d))}
     assert str(home / ".config/agentic-lab") in covered
     assert str(home / ".local/state/agentic-lab") in covered
     assert shown == fs["allowRead"]
@@ -56,6 +57,44 @@ def test_a_run_is_held_to_the_sandbox_policy(tmp_path, monkeypatch):
     # covers come after the writable binds, the GPU socket after its cover
     assert max(i for i, a in enumerate(w) if a == "--bind-try") < \
         min(i for i, a in enumerate(w) if a == "--tmpfs")
+
+
+def covers(w):
+    return [(w[i], w[i + 1], w[i + 2]) if w[i] == "--ro-bind" else (w[i], w[i + 1])
+            for i in range(10, len(w)) if w[i] in ("--tmpfs", "--ro-bind")]
+
+
+def test_a_hidden_path_is_hidden_whatever_it_is(tmp_path):
+    real = tmp_path / "real"
+    real.mkdir()
+    (tmp_path / "link").symlink_to(real)
+    (tmp_path / "file").write_text("x")
+    fs = {"allowWrite": [str(tmp_path / "w")],
+          "denyRead": [str(tmp_path / "link"), str(real), str(tmp_path / "file"),
+                       str(tmp_path / "absent")]}
+    assert covers(R.job_wrapper(fs, "/")) == [
+        ("--tmpfs", str(real)), ("--ro-bind", "/dev/null", str(tmp_path / "file"))]
+
+
+def test_what_cant_be_hidden_stops_the_run(tmp_path):
+    (tmp_path / "dangling").symlink_to(tmp_path / "nothing")
+    fs = {"allowWrite": ["/w"], "denyRead": [str(tmp_path / "dangling")]}
+    with pytest.raises(R.RunError, match="can't be hidden"):
+        R.job_wrapper(fs, "/")
+
+
+def test_a_run_resolves_names_when_the_resolver_lives_under_a_cover(tmp_path, monkeypatch):
+    run = tmp_path / "run"
+    (run / "resolve").mkdir(parents=True)
+    (run / "resolve" / "stub-resolv.conf").write_text("nameserver 127.0.0.53\n")
+    (tmp_path / "resolv.conf").symlink_to(run / "resolve" / "stub-resolv.conf")
+    monkeypatch.setattr(R, "RESOLVER", str(tmp_path / "resolv.conf"))
+    stub = str(run / "resolve" / "stub-resolv.conf")
+    w = R.job_wrapper({"allowWrite": ["/w"], "denyRead": [str(run)]}, "/")
+    assert covers(w) == [("--tmpfs", str(run)), ("--ro-bind", stub, stub)]
+    # only the file, and only when it's under a cover
+    w = R.job_wrapper({"allowWrite": ["/w"], "denyRead": [str(tmp_path / "x")]}, "/")
+    assert covers(w) == []
 
 
 def test_a_working_folder_on_another_disk_is_bound_from_where_it_is(tmp_path):
@@ -118,6 +157,7 @@ def test_a_stopped_run_gets_its_grace_period_and_nothing_outlives_it():
     assert "--die-with-parent" not in " ".join(u)     # TERM reaches the job: it can save
     assert "KillMode=control-group" in u               # then everything in the unit goes
     assert "TimeoutStopSec=60" in u                    # within this
+    assert R.STOP_WAIT_MAX_S < 60                      # recorded before the kill
 
 
 @pytest.mark.skipif(not shutil.which("systemd-analyze"), reason="no systemd here")

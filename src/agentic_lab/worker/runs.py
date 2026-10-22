@@ -57,6 +57,7 @@ def unit(agent_id, run_id):
 
 
 BWRAP = "/usr/bin/bwrap"
+RESOLVER = "/etc/resolv.conf"
 STATUS_KEYS = ("started", "ended", "exit_code", "pid", "stop_requested", "error")
 
 
@@ -88,7 +89,7 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 UMask=0077
 # the layer underneath the job's own (run_exec): the same limits, set by systemd
-InaccessiblePaths=-{home}/.config/agentic-lab
+InaccessiblePaths=-{home}/.config/agentic-lab -{home}/.nebius
 ReadOnlyPaths={home}
 ReadWritePaths=-{workdir}{extra} -{home}/.local/state/agentic-lab/runs/%i
 PrivatePIDs=yes
@@ -230,25 +231,43 @@ def job_wrapper(policy, cwd):
     its own (its own processes only); then writable again where a command may write (bwrap
     takes sources from the host, so a link to another disk is bound from where it really
     is); then what a command may not read is covered, with what it may (the GPU socket)
-    shown again. The home being read-only is also what keeps those covers in place (nothing
-    above them can be renamed); moving the lab's secrets out of the home will retire the
-    covers for them. No --die-with-parent: a stop's TERM reaches the job
+    shown again. A link is covered where it points (a file by an empty one); what can't be
+    covered stops the run. The resolver's file is shown again if it lives under a cover
+    (Ubuntu: /etc/resolv.conf -> /run/systemd/resolve/...): a run has no proxy, it resolves
+    names itself. The home being read-only is also what keeps those covers in place
+    (nothing above them can be renamed); moving the lab's secrets out of the home will
+    retire the covers for them. No --die-with-parent: a stop's TERM reaches the job
     (KillMode=control-group signals every process of the unit), which then has its grace
     period."""
     args = [BWRAP, "--unshare-pid", "--ro-bind", "/", "/", "--dev-bind", "/dev", "/dev",
             "--proc", "/proc"]
     for w in policy["allowWrite"]:
         args += ["--bind-try", os.path.realpath(w), w]
+    covered = []
     for d in policy["denyRead"]:
-        if os.path.isdir(d) and not os.path.islink(d):
-            args += ["--tmpfs", d]
+        if not os.path.lexists(d):
+            continue                # nothing to hide, and the read-only root keeps it so
+        real = os.path.realpath(d)
+        if real in covered:
+            continue
+        if os.path.isdir(real):
+            args += ["--tmpfs", real]
+        elif os.path.isfile(real):
+            args += ["--ro-bind", "/dev/null", real]
+        else:
+            raise RunError(f"{d} can't be hidden from the job, so it doesn't start")
+        covered.append(real)
     for r in policy.get("allowRead") or []:
         args += ["--ro-bind-try", r, r]
+    resolver = os.path.realpath(RESOLVER)
+    if os.path.isfile(resolver) and any(resolver.startswith(c + os.sep) for c in covered):
+        args += ["--ro-bind", resolver, resolver]
     return args + ["--chdir", cwd, "--"]
 
 
 STOP_POLL_S = 0.5
-STOP_WAIT_MAX_S = 600       # systemd's TimeoutStopSec ends it long before; just a bound
+STOP_WAIT_MAX_S = 50        # under TimeoutStopSec (60): a job that ignores its TERM is
+                            # recorded as ended just before systemd kills what's left
 
 
 def own_cgroup_procs():
