@@ -1,22 +1,42 @@
 # The secret intake (DESIGN.md §11a): where members' `lab-member.py` sends secrets.
-# Runs as the secretary's own Unix user (lab-secretary); stored secrets are readable by
-# that user only. Address from /etc/agentic-lab/intake.env:
+# Runs only while a one-time code is open (#63): lab-intake.path starts it when the
+# secretary (or `lab secret request`) opens a code, and it stops itself once none is open.
+# Never enabled itself. Runs as the secretary's own Unix user (lab-secretary); stored
+# secrets are readable by that user only. Address from /etc/agentic-lab/intake.env:
 #   LAB_BIND=<this host's tailnet IP>   LAB_PORT=8771
 
 [Unit]
-Description=Agentic Lab secret intake
+Description=Agentic Lab secret intake (while a one-time code is open)
 After=network-online.target tailscaled.service
 Wants=network-online.target
 
 [Service]
 User=lab-secretary
 Group=lab-secretary
-WorkingDirectory=~
+WorkingDirectory=/home/lab-secretary/.local/state/agentic-lab
 EnvironmentFile=/etc/agentic-lab/intake.env
-ExecStart=/opt/agentic-lab/venv/bin/lab intake serve --host ${LAB_BIND} --port ${LAB_PORT} --client /opt/agentic-lab/client/lab-member.py
-Restart=always
-RestartSec=5
+ExecStart=/opt/agentic-lab/venv/bin/lab intake serve --host ${LAB_BIND} --port ${LAB_PORT} --client /opt/agentic-lab/client/lab-member.py --on-demand
+# Started only by its path unit, never restarted by itself: one that fails takes the flag
+# away (or it would be started again and again), so a broken intake costs one failed
+# start per request, which the requester is told about.
+Restart=no
+ExecStopPost=/bin/sh -c '[ "$$SERVICE_RESULT" = success ] || rm -f /home/lab-secretary/.local/state/agentic-lab/intake-open'
+# Needs no privileges (#63): a read-only system, its own folders only, no devices, no
+# capabilities, the usual system calls.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
 PrivateTmp=yes
-
-[Install]
-WantedBy=multi-user.target
+PrivateDevices=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+BindPaths=/home/lab-secretary/.local/state/agentic-lab

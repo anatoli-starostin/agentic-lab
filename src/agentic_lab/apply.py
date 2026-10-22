@@ -30,6 +30,7 @@ INTAKE = "/home/lab-secretary/.local/state/agentic-lab/secrets"
 PORTS = {"worker": 8770, "intake": 8771, "broker": 8772, "secretary": 8774}
 UNREACHABLE = 255           # run_bundle: the host didn't answer (e.g. a stopped VM)
 SSH_FAILED = 254            # run_bundle: it answered, but ssh failed (host key, login...)
+BUSY = 75                   # a catch-up's host: tasks are active there, not now (#61)
 _NO_ANSWER = ("timed out", "no route to host", "connection refused", "network is unreachable",
               "could not resolve hostname", "name or service not known")
 SSH_OPTS = ["-o", "ConnectTimeout=10", "-o", "BatchMode=yes"]   # never hang on a host
@@ -224,12 +225,13 @@ def host_plan(lab, host, tokens, intake=intake_secret):
         envs["/etc/agentic-lab/broker.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={PORTS['broker']}\n"
         envs["/etc/agentic-lab/intake.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={PORTS['intake']}\n"
         envs["/etc/agentic-lab/secretary.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={PORTS['secretary']}\n"
-        units += [("lab-broker.service", "lab-broker"), ("lab-intake.service", "lab-intake"),
+        # the intake runs only while a one-time code is open: its path unit starts it (#63)
+        units += [("lab-broker.service", "lab-broker"), ("lab-intake.path", "lab-intake.path"),
                   ("lab-secretary.service", "lab-secretary")]
         if "lab-secretary" not in users:
             users.append("lab-secretary")
     unit_user = {u: (f"lab-{u.split('@', 1)[1]}" if "@" in u else
-                     {"lab-broker": "lab-broker", "lab-intake": "lab-secretary",
+                     {"lab-broker": "lab-broker", "lab-intake.path": "lab-secretary",
                       "lab-secretary": "lab-secretary"}.get(u)) for _, u in units}
     held = sorted(u for u, owner in unit_user.items() if owner in waiting)
     # who may read its agents' working folders (#43): {agent user: its working folder}
@@ -284,8 +286,23 @@ systemctl enable --now lab-keep-awake.timer >/dev/null 2>&1
 """
 
 
+def busy_check(plan):
+    """A catch-up checks on the host itself, right before it applies, that none of its
+    workers has tasks running, queued or awaiting approval (a deploy restarts them, #61).
+    Read as each worker's own user."""
+    lines = ['say "active work (a catch-up waits for it)"']
+    for u in sorted(set((plan.get("run_units") or {}).values())):
+        check = ('grep -lsE \'"state": "(running|queued|awaiting_approval)"\' '
+                 f"/home/{u}/.local/state/agentic-lab/tasks/*.json")
+        lines.append(f"if runuser -u {u} -- sh -c {shlex.quote(check)} >/dev/null; then "
+                     f"echo '  {u} has active tasks: not now'; exit {BUSY}; fi")
+    return lines
+
+
 def script(plan):
     lines = [SCRIPT_HEAD.format(host=plan["host"])]
+    if plan.get("catch_up"):
+        lines += busy_check(plan)
     lines.append('say "users"')
     for u in dict.fromkeys(plan["users"]):
         lines.append(f"/opt/agentic-lab/src/deploy/worker/create-agent-user.sh {u} >/dev/null")
@@ -309,9 +326,14 @@ def script(plan):
     if plan.get("self_admin"):
         lines += self_admin_script(plan["self_admin"])
     lines.append('say "services"')
+    if plan.get("secretary_host"):      # the hardened services see only these (#63)
+        for u in ("lab-secretary", "lab-broker"):
+            lines.append(f"runuser -u {u} -- mkdir -p -m 700 /home/{u}/.local/state/agentic-lab")
     for unit_file, _ in plan["units"]:
         sub = "worker" if "worker" in unit_file else "manager" if "manager" in unit_file else "secretary"
-        lines.append(f"install -m 644 /opt/agentic-lab/src/deploy/{sub}/{unit_file} /etc/systemd/system/")
+        for f in [unit_file] + ([unit_file[:-5] + ".service"] if unit_file.endswith(".path")
+                                else []):
+            lines.append(f"install -m 644 /opt/agentic-lab/src/deploy/{sub}/{f} /etc/systemd/system/")
     lines += removed_agents_script(plan)
     if plan.get("run_units"):
         lines += run_units_script(plan["run_units"], plan.get("run_workdirs") or {},
@@ -326,6 +348,9 @@ def script(plan):
             lines.append(f"systemctl disable --now {unit} >/dev/null 2>&1 || true")
         else:
             lines.append(f"systemctl enable {unit} >/dev/null 2>&1; systemctl restart {unit}")
+        if unit.endswith(".path"):      # its service starts on demand, never at boot
+            svc = unit[:-5] + ".service"
+            lines.append(f"systemctl disable {svc} >/dev/null 2>&1; systemctl try-restart {svc}")
     lines.append('sleep 3; say "status"')
     for _, unit in plan["units"]:
         note = " (waiting for its secrets)" if unit in held else ""
@@ -433,7 +458,8 @@ def self_admin_script(sa):
     rule = [
         'say "self-administration (deploying main from Slack)"',
         'install -m 644 "$B/apply-main.yaml" /etc/agentic-lab/apply-main.yaml',
-        f"echo '{u} ALL=(root) NOPASSWD: /usr/local/bin/lab apply-main' "
+        f"printf '%s\\n' '{u} ALL=(root) NOPASSWD: /usr/local/bin/lab apply-main' "
+        f"'{u} ALL=(root) NOPASSWD: /usr/local/bin/lab apply-main --catch-up' "
         "> /etc/sudoers.d/agentic-lab.new",
         "chmod 440 /etc/sudoers.d/agentic-lab.new",
         "visudo -cqf /etc/sudoers.d/agentic-lab.new && mv /etc/sudoers.d/agentic-lab.new "
@@ -523,6 +549,28 @@ def describe(plan):
     for m in plan.get("later") or []:
         out.append(f"  · not yet (optional): {m}")
     return "\n".join(out)
+
+
+def applied_on(plan, local, admin):
+    """The host's /etc/agentic-lab/applied.yaml (what it runs), {} if it has none, or
+    UNREACHABLE."""
+    path = "/etc/agentic-lab/applied.yaml"
+    if local:
+        try:
+            with open(path) as f:
+                return yaml.safe_load(f) or {}
+        except (OSError, ValueError):
+            return {}
+    target = f"{plan.get('ssh_user') or admin}@{plan['name']}"
+    as_admin = ["sudo", "-u", admin] if os.geteuid() == 0 and admin != "root" else []
+    r = subprocess.run(as_admin + ["ssh", *SSH_OPTS, "--", target, f"cat {path}"],
+                       capture_output=True, text=True)
+    if r.returncode == 255:
+        return UNREACHABLE
+    try:
+        return yaml.safe_load(r.stdout) or {} if r.returncode == 0 else {}
+    except ValueError:
+        return {}
 
 
 def run_bundle(plan, local, admin):

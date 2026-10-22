@@ -21,6 +21,7 @@ in tests) can stand in.
 import asyncio
 import datetime as dt
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Callable, Protocol
@@ -132,6 +133,8 @@ How you work here:
   every command).
 - When the task is done (or can't be done), call finish_task exactly once: a summary for
   the human, and the artifacts (file paths, commit ids, URLs) worth keeping.
+- Files for the human (plots, reports, results to look at) go in tasks/{task.id}/ in your
+  working folder: on a shared worker those are the only files their manager can show them.
 
 Long jobs (training, big evaluations, anything over ~10 minutes):
 - Start them with start_run, never with nohup, &, setsid, screen or tmux: whatever you start
@@ -388,6 +391,11 @@ class SdkRunner:
     async def run(self, task, store):
         self._log("task", f"started for {task.requester} via {task.manager}: {task.instruction}",
                   task=task.id)
+        try:                        # its files for the member (#62), in the agent's folder
+            from .. import safefs
+            safefs.makedirs(self.workdir, os.path.join("tasks", task.id))
+        except OSError:
+            pass
         outcome = {}
         if task.wake:
             prompt = self._wake_prompt(task)

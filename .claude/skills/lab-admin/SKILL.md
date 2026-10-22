@@ -139,7 +139,8 @@ asking before each one. The whole lab, one host, or one agent.
 - **See what an agent is doing or did:** its log in the web UI (`/logs/<agent>`: admins all; members their own agents, with
   `tailscale_login` in `lab.yaml`)
   or `sudo lab logs <agent>` on its host; the service itself: `sudo journalctl -u
-  lab-worker@<id>` (or `lab-manager@<id>`, `lab-secretary`, `lab-broker`, `lab-intake`).
+  lab-worker@<id>` (or `lab-manager@<id>`, `lab-secretary`, `lab-broker`, `lab-intake`;
+  the intake runs only while a one-time code is open, started by `lab-intake.path`).
 - **Talk to an agent directly:** `sudo lab debug <agent>`
   stops its service and opens its latest session in the classic Claude Code console, as
   the agent's user with its sandbox; the service restarts on exit. `--print "question"`

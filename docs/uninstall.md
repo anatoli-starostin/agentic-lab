@@ -81,7 +81,7 @@ sudo rm -f /etc/systemd/system/lab-run-*@.service     # workers' long runs (stop
 sudo groupdel lab-readers 2>/dev/null                 # hosts with readers
 sudo rm -f /etc/systemd/system/lab-worker@.service /etc/systemd/system/lab-manager@.service \
            /etc/systemd/system/lab-secretary.service /etc/systemd/system/lab-broker.service \
-           /etc/systemd/system/lab-intake.service
+           /etc/systemd/system/lab-intake.service /etc/systemd/system/lab-intake.path
 sudo systemctl daemon-reload
 ```
 `/etc/agentic-lab` holds the generated tokens agents use with each other

@@ -103,7 +103,7 @@ def build_tools(ctx):
           {"worker": str})
     async def worker_tasks(args):
         try:
-            return text(json.dumps(await ctx.workers.call(args["worker"], "list_tasks")))
+            return text(json.dumps(await ctx.worker_tasks(args["worker"])))
         except WorkerError as e:
             return text(f"error: {e}")
 
@@ -111,14 +111,14 @@ def build_tools(ctx):
           {"worker": str, "task_id": str})
     async def task_result(args):
         try:
-            return text(json.dumps(await ctx.workers.call(args["worker"], "task_result",
-                                                          {"task_id": args["task_id"]})))
+            return text(json.dumps(await ctx.task_result(args["worker"], args["task_id"])))
         except WorkerError as e:
             return text(f"error: {e}")
 
-    @tool("ask_member_for_claude_token", "Ask a member (by lab id) for their Claude token: "
-          "sends them a DM with a one-time command. Use when their token is missing or "
-          "expires soon, or when asked to.", {"member": str})
+    @tool("ask_member_for_claude_token", "A member's (by lab id) Claude token, by DM: the "
+          "member asking for their own gets the one-time command (active 5 minutes); asked "
+          "for someone else, they get what to have ready and ask you when they are. Use when "
+          "their token is missing or expires soon, or when asked to.", {"member": str})
     async def ask_member(args):
         return text(await ctx.request_token(args["member"]))
 
@@ -167,11 +167,18 @@ def build_tools(ctx):
     async def offer_deploy(args):
         return text(await ctx.offer_apply(bool(args.get("redeploy"))))
 
+    def ready_schema(key):
+        return {"type": "object", "properties": {
+            key: {"type": "string"},
+            "ready": {"type": "boolean", "description": "true once the admin is at the paste "
+                      "step: sends the one-time link (active 5 minutes)"}}, "required": [key]}
+
     @tool("request_github_app", "Admins only: steps to create a GitHub App as an agent's "
-          "GitHub identity (it appears as <slug>[bot]; no account needed) and a one-time link "
-          "for its private key. Use the name the admin chose.", {"name": str})
+          "GitHub identity (it appears as <slug>[bot]; no account needed), in a DM; with "
+          "ready=true, the one-time link for its private key. Use the name the admin chose.",
+          ready_schema("name"))
     async def request_github_app(args):
-        return text(await ctx.request_github_app(args["name"]))
+        return text(await ctx.request_github_app(args["name"], bool(args.get("ready"))))
 
     @tool("check_github_app", "Admins only: after the admin created a GitHub App and gave "
           "its App ID: check it works and get the lab.yaml lines for it.",
@@ -185,18 +192,18 @@ def build_tools(ctx):
     async def redraw_app_icon(args):
         return text(await ctx.redraw_app_icon(args["agent"]))
 
-    @tool("request_github_token", "Admins only: a one-time link (and the exact steps) for a "
-          "GitHub bot account's token. The account must be in the deployed lab.yaml.",
-          {"account": str})
+    @tool("request_github_token", "Admins only: the exact steps for a GitHub bot account's "
+          "token, in a DM; with ready=true, the one-time link for it. The account must be in "
+          "the deployed lab.yaml.", ready_schema("account"))
     async def request_github_token(args):
-        return text(await ctx.request_github_token(args["account"]))
+        return text(await ctx.request_github_token(args["account"], bool(args.get("ready"))))
 
     @tool("request_slack_app", "Admins only: a new manager's Slack app (or 'secretary', "
-          "'approvals'). Posts the manifest, the exact clicks and a one-time link for its "
-          "tokens in this conversation. The agent must already be deployed.",
-          {"agent": str})
+          "'approvals'). Posts the manifest and the exact clicks in a DM; with ready=true, the "
+          "one-time link for its tokens. The agent must already be deployed.",
+          ready_schema("agent"))
     async def request_slack_app(args):
-        return text(await ctx.request_slack_app(args["agent"]))
+        return text(await ctx.request_slack_app(args["agent"], bool(args.get("ready"))))
 
     @tool("check_slack_app", "Admins only: do a Slack app's tokens work (bot token, Socket "
           "Mode)? owner: broker, secretary or a manager's id. Gives its App ID too.",

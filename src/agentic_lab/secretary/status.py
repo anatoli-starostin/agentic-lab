@@ -91,7 +91,8 @@ async def collect(lab, workers: Workers, broker=None, local_units=None, managers
     for m, token in (managers or {}).items():
         try:
             st = await manager_status(lab, m, token)
-            agents[m].update(up=True, usage=st.get("usage"), github=st.get("github") or {})
+            agents[m].update(up=True, usage=st.get("usage"), github=st.get("github") or {},
+                             applied=st.get("applied"))
         except (httpx2.HTTPError, ValueError) as e:
             agents[m].update(up=False, error=str(e))
     for w in workers.known():
@@ -101,7 +102,7 @@ async def collect(lab, workers: Workers, broker=None, local_units=None, managers
             agents[w].update(up=True, gpu=h.get("gpu"), gpus=h.get("gpus"),
                              gpu_processes=h.get("gpu_processes"), queue=h.get("tasks"),
                              keep_awake=h.get("keep_awake"), runs=h.get("runs"),
-                             github=h.get("github") or {},
+                             github=h.get("github") or {}, applied=h.get("applied"),
                              usage=h.get("usage"), disk_free_gb=h.get("disk_free_gb"),
                              recent=[{k: t.get(k) for k in ("id", "state", "requester",
                                                             "manager", "created", "finished",

@@ -95,6 +95,7 @@ def _approvals(state, human_id):
 def _machines(state):
     hosts = state.get("hosts") or {}
     rows = [f"{'🟢' if (v.get('state') == 'RUNNING') else '⚪'} {h}  {(v.get('state') or '—').lower()}"
+            + ("  ·  ⚠ stale (missed a deploy)" if v.get("stale") else "")
             for h, v in hosts.items() if v.get("state")]
     return [_section("*Machines*\n" + "\n".join(rows))] if rows else []
 

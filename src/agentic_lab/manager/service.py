@@ -101,7 +101,7 @@ class Manager:
         return SimpleNamespace(workers=self.workers, broker=self.broker, state=self.state,
                                conv=conv, requester=requester, private=private,
                                memory=self.memory, workdir=self.workdir, slack=self.slack,
-                               describe_workers=self.describe_workers,
+                               describe_workers=self.describe_workers, lab=self.lab,
                                guest=self.is_guest(requester),
                                owner_name=(self.lab.humans.get(owner) or {}).get("name") or owner,
                                guest_name=(self.lab.humans.get(requester) or {}).get("name")

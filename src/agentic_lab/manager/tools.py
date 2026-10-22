@@ -63,6 +63,26 @@ def _pending_visible(ctx, r):
         t is None and ctx.private and r.get("human") == ctx.requester)
 
 
+def _file_refused(ctx, worker, path):
+    """Why this conversation may not fetch `path` from `worker` (None if it may). A shared
+    worker holds several members' work: a member gets only their own tasks' folders,
+    tasks/<id>/ (#62); admins (or `visibility: team`) anything."""
+    lab = getattr(ctx, "lab", None)
+    if lab is None or (lab.agents.get(worker) or {}).get("access") != "shared":
+        return None
+    h = lab.humans.get(ctx.requester) or {}
+    if h.get("admin") or lab.data.get("visibility") == "team":
+        return None
+    parts = os.path.normpath(path).split(os.sep)
+    if os.path.isabs(path) or len(parts) < 3 or parts[0] != "tasks" or ".." in parts:
+        return (f"{worker} is shared: only files in tasks/<task id>/ of your own tasks can "
+                "be fetched from it")
+    t = ctx.state.tasks.get(parts[1])
+    if t is None or t.worker != worker or not visible(ctx, t):
+        return f"task {parts[1]} isn't one of this conversation's tasks on {worker}"
+    return None
+
+
 def _read_own(ctx, path, limit=20 * 1024 * 1024):
     """A plain file of this manager's working folder (never through a link: safefs), or
     None."""
@@ -200,12 +220,16 @@ def build(ctx):
         return _text("posted")
 
     @tool("post_worker_file", "Fetch a file from a worker's working folder (e.g. a task's "
-          "artifact) and post it into this conversation. Up to 20 MB.",
+          "artifact) and post it into this conversation. Up to 20 MB. From a shared worker, "
+          "only the files of this member's tasks: tasks/<task id>/... in its working folder.",
           {"type": "object", "properties": {"worker": {"type": "string"},
                                             "path": {"type": "string"},
                                             "comment": {"type": "string"}},
            "required": ["worker", "path"]})
     async def post_worker_file(args):
+        refused = _file_refused(ctx, args["worker"], args["path"])
+        if refused:
+            return _err(refused)
         try:
             f = await ctx.workers.call(args["worker"], "read_file", {"path": args["path"]})
         except WorkerError as e:

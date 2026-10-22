@@ -136,13 +136,15 @@ def cmd_secret_request(args):
             sys.exit("lab: Claude tokens belong to members, not services")
     elif owner not in lab.humans:
         sys.exit(f"lab: no human {owner!r} in {args.lab}")
+    from .secrets.intake import window
     intake = Intake(os.path.expanduser(args.state))
     code = intake.request(owner, args.name)
     if args.form or owner.startswith("service:"):
         print(form_url(code, args.url))
+        print(window(intake.expires(code)))
     else:
         name = (lab.humans[owner] or {}).get("name", owner)
-        print(message(name, code, args.url, args.name))
+        print(message(name, code, args.url, args.name, until=intake.expires(code)))
     return 0
 
 
@@ -155,7 +157,26 @@ def cmd_intake_serve(args):
     from .secrets.server import app
     intake = Intake(os.path.expanduser(args.state), verify={"claude-token": verify_claude_token,
                                                             "github-token": verify_github_token})
-    uvicorn.run(app(intake, args.client), host=args.host, port=args.port, log_level="info")
+    server = uvicorn.Server(uvicorn.Config(app(intake, args.client), host=args.host,
+                                           port=args.port, log_level="info"))
+    if args.on_demand:              # lab-intake.path started it: stop when no code is open
+        import asyncio
+
+        async def until_idle():
+            while not server.should_exit:
+                await asyncio.sleep(10)
+                if intake.close_if_idle():
+                    server.should_exit = True
+
+        async def main():
+            watch = asyncio.create_task(until_idle())
+            try:
+                await server.serve()
+            finally:
+                watch.cancel()
+        asyncio.run(main())
+    else:
+        server.run()
     return 0
 
 
@@ -279,14 +300,18 @@ def cmd_apply(args):
 
 
 def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_admin=None,
-           locked=False):
-    """Ship `lab_path` (already the reviewed one) and framework `source` to the hosts."""
+           only_behind=None, locked=False):
+    """Ship `lab_path` (already the reviewed one) and framework `source` to the hosts.
+    `only_behind(commit)`: a catch-up (#61): only hosts on a reviewed commit for which it
+    says True (strictly older), and each host checks for active work before it applies;
+    one line per host says what happened (`CATCH-UP <host> <outcome>`). `locked`: the
+    caller holds the deploy lock."""
     import os
 
     from . import configrepo as CR
     from . import lock
-    from .apply import (UNREACHABLE, ApplyError, describe, has_work, plan_all, run_bundle,
-                        secretary_host)
+    from .apply import (BUSY, UNREACHABLE, ApplyError, applied_on, describe, has_work,
+                        plan_all, run_bundle, secretary_host)
     from .doctor import this_host
     errors = [i for i in registry.check(registry.load(lab_path)) if i.level == "error"]
     if errors:                     # never deploy (or even plan) a lab.yaml lab check refuses
@@ -312,6 +337,22 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
             print("  skipped: secrets missing (or pass --allow-missing)\n")
             failed += 1
             continue
+        if only_behind:
+            cur = applied_on(p, local=(p["host"] == here), admin=admin)
+            said = None
+            if cur == UNREACHABLE:
+                said, why = "unreachable", "skipped: unreachable"
+                skipped.append(p["host"])
+            elif (cur.get("config_commit"), cur.get("framework_commit")) == (
+                    record.get("config_commit"), record.get("framework_commit")) \
+                    and not cur.get("unreviewed"):
+                said, why = "current", "up to date"
+            elif cur.get("unreviewed") or not only_behind(cur.get("config_commit")):
+                said, why = "ahead", "runs a newer or unreviewed commit: left alone"
+            if said:
+                print(f"  -> {why}\nCATCH-UP {p['host']} {said}\n", flush=True)
+                continue
+            p["catch_up"] = True                # it checks for active work itself
         p["lab_path"], p["source"], p["applied"] = os.path.abspath(lab_path), source, record
         if p["host"] == sec_host and self_admin:
             sec = secretary_host(lab)[1]
@@ -322,8 +363,16 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
         if rc == UNREACHABLE:
             print("  -> skipped: unreachable (stopped?); deploy again once it's on\n")
             skipped.append(p["host"])
+            if only_behind:
+                print(f"CATCH-UP {p['host']} unreachable", flush=True)
+            continue
+        if rc == BUSY and p.get("catch_up"):
+            print(f"  -> not now: tasks are active there\nCATCH-UP {p['host']} busy\n",
+                  flush=True)
             continue
         print(f"  -> {'done' if rc == 0 else f'FAILED (exit {rc})'}\n")
+        if only_behind:
+            print(f"CATCH-UP {p['host']} {'done' if rc == 0 else 'failed'}", flush=True)
         failed += rc != 0
     if skipped:
         print(f"not deployed (unreachable): {', '.join(skipped)}")
@@ -350,9 +399,10 @@ def deploy_lock(path=DEPLOY_LOCK):
 
 
 def cmd_apply_main(args):
-    """The secretary's one root command (sudoers): deploy the config repo's main. Starts
-    the deployment as its own systemd unit (the secretary's service restarts during it)
-    and prints the log's path."""
+    """The secretary's root command (sudoers): deploy the config repo's main. Starts the
+    deployment as its own systemd unit (the secretary's service restarts during it) and
+    prints the log's path. `--catch-up` (#61): deploy the commit of main this host runs to
+    the hosts that run something else (they missed a deploy), nothing newer."""
     import datetime as dt
     import os
     import subprocess
@@ -383,7 +433,8 @@ def cmd_apply_main(args):
         subprocess.run(["systemd-run", f"--unit=lab-apply-{stamp}", "--collect", "--quiet",
                         f"--property=StandardOutput=append:{log}",
                         f"--property=StandardError=append:{log}",
-                        "/usr/local/bin/lab", "apply-main", "--run"], check=True)
+                        "/usr/local/bin/lab", "apply-main", "--run"]
+                       + (["--catch-up"] if args.catch_up else []), check=True)
         print(f"started; log: {log}")
         return 0
 
@@ -397,9 +448,18 @@ def cmd_apply_main(args):
     os.environ["LAB_GIT_USER"] = cfg["config_owner"]       # its clone, its deploy key
     config = os.path.join(os.path.expanduser(f"~{cfg['config_owner']}"),
                           ".local/state/agentic-lab/config-repo", cfg.get("lab_rel", "lab.yaml"))
+    commit = None
+    if args.catch_up:
+        own = CR.applied_versions() or {}
+        if not own.get("config_commit") or own.get("unreviewed"):
+            print("lab apply-main --catch-up: this host doesn't run a reviewed commit of "
+                  f"{CR.BRANCH}; nothing to catch up to", flush=True)
+            return done(False)
+        commit = own["config_commit"]
     try:
-        lab_path, info = CR.fetch_main(config)
-        print(f"config: {info['config_commit'][:10]} ({CR.BRANCH})", flush=True)
+        lab_path, info = CR.fetch_main(config, commit)
+        print(f"config: {info['config_commit'][:10]} ({CR.BRANCH})"
+              + (" catching up the hosts that missed it" if commit else ""), flush=True)
         pin = (lock.read(lab_path) or {}).get("commit")
         if not pin:
             raise CR.ConfigError(f"no framework.lock on {CR.BRANCH}")
@@ -416,10 +476,12 @@ def cmd_apply_main(args):
         print(f"lab apply-main: {e}", flush=True)
         return done(False)
     try:
-        rc = deploy(lab_path, {**info, "via": "slack"}, src, owner, allow_missing=True,
+        rc = deploy(lab_path, {**info, "via": "catch-up" if commit else "slack"}, src, owner,
+                    allow_missing=True,
                     self_admin={k: cfg[k] for k in ("config_url", "lab_rel", "framework_source",
                                                     "framework_owner")},
-                    locked=held is not None)
+                    only_behind=(lambda old: CR.is_older(config, old, commit)) if commit
+                    else None, locked=held is not None)
     except SystemExit as e:
         print(e, flush=True)
         rc = 1
@@ -656,6 +718,8 @@ def main(argv=None):
     iserve.add_argument("--host", default="127.0.0.1", help="the tailnet IP in production")
     iserve.add_argument("--port", type=int, default=8771)
     iserve.add_argument("--state", default=STATE)
+    iserve.add_argument("--on-demand", action="store_true",
+                        help="stop once no one-time code is open (lab-intake.path restarts it)")
     iserve.add_argument("--client", default="/opt/agentic-lab/client/lab-member.py",
                         help="the member client file to serve")
     iserve.set_defaults(fn=cmd_intake_serve)
@@ -714,6 +778,8 @@ def main(argv=None):
     am = sub.add_parser("apply-main", help="deploy the config repo's main (the secretary's "
                         "one sudo command; started from Slack by an admin)")
     am.add_argument("--run", action="store_true", help=argparse.SUPPRESS)
+    am.add_argument("--catch-up", action="store_true",
+                    help="only the hosts that missed the deploy this host runs (#61)")
     am.set_defaults(fn=cmd_apply_main)
 
     lg = sub.add_parser("logs", help="an agent's event log (sudo, on its host)")

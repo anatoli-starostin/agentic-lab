@@ -15,7 +15,7 @@ What it does, for `claude-token`:
    already have;
 2. the token never goes into Slack or any chat;
 3. sends it to the secretary over the tailnet, with the one-time code. The code works
-   once, for this one secret, for a limited time (24 hours by default).
+   once, for this one secret, for 5 minutes (ask again if you miss it).
 
 Your agents then run on your Claude seat. The token is valid for a year; to renew it, ask
 the secretary (in Slack) for a new link and run the same command again. (An admin can list

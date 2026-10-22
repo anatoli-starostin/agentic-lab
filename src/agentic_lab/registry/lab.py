@@ -42,7 +42,11 @@ _TOP = {"lab": (str, True), "tailnet": (str, False), "trust_tailnet": (bool, Fal
         "announcements": (str, False),     # Slack channel (id or #name) for lab-wide notices
         "humans": (dict, True),
         "agents": (dict, True), "hosts": (dict, True), "credentials": (list, False),
-        "github": (dict, False)}            # the agents' GitHub bot accounts
+        "github": (dict, False),            # the agents' GitHub bot accounts
+        # a host that missed a deploy is brought up to date when it's back (#61)
+        "auto_catch_up": (bool, False),
+        # what members see of each other's work: "private" (default) or "team" (#62)
+        "visibility": (str, False)}
 _HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, False),
           "admin": (bool, False),           # may see every agent's log in the web UI
           # how the web UI recognises them (tailscale whois): their own agents' logs
@@ -258,6 +262,9 @@ def check(lab: Lab, today: dt.date | None = None):
             if ch.get("on_timeout", "deny") != "deny":
                 E(cw, "on_timeout must be 'deny' (a timeout never approves)")
 
+    if lab.data.get("visibility", "private") not in ("private", "team"):
+        E("visibility", "must be private (the default: members see the lab, not each "
+                        "other's work) or team (members see each other's work too)")
     if lab.data.get("tailnet") and not _DNS_NAME.match(str(lab.data["tailnet"])):
         E("tailnet", f"{lab.data['tailnet']!r} isn't a DNS name")
     for hid, h in lab.hosts.items():

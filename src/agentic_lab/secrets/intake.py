@@ -4,8 +4,13 @@ The secretary (or the admin) creates a request for one secret, owned by a human 
 Claude token) or by a lab service (e.g. the broker's Slack app tokens). That yields a
 one-time code. The secret then arrives here over the tailnet with the code, either from the
 member client (`client/lab-member.py`) or from a one-time web form (`/s/<code>`) that a
-human opens in their browser and pastes into. Codes are single-use, tied to one human and one secret name, and
-expire (24 h by default). Only a hash of each code is stored.
+human opens in their browser and pastes into. Codes are single-use, tied to one human and
+one secret name, and active for 5 minutes (#63): a link is sent when the person is ready to
+use it, and a missed one is simply asked for again. Only a hash of each code is stored.
+
+The intake runs only while a code is open (#63): creating one also creates the flag file
+`intake-open`, whose appearance makes systemd start the intake (lab-intake.path); the
+intake stops itself when no code is open any more (`close_if_idle`).
 
 Stored secrets live under the secretary service user's state directory, readable by that
 user only. `lab apply` (M3a) distributes them, e.g. a human's Claude token to each of
@@ -44,6 +49,10 @@ _OWNER = re.compile(r"^(service:)?[a-z][a-z0-9-]*$")
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"     # no 0/O, 1/I
 MAX_FAILURES = 20            # failed attempts per window, across all codes...
 FAILURE_WINDOW_S = 600       # ...before the intake refuses everything for a while
+
+
+CODE_MINUTES = 5            # how long a one-time code (link, command) is active
+OPEN_FLAG = "intake-open"   # exists while a code may be open: systemd starts the intake
 
 
 class IntakeError(ValueError):
@@ -132,13 +141,21 @@ class Intake:
         os.makedirs(self.requests_dir, mode=0o700, exist_ok=True)
         os.makedirs(self.secrets_dir, mode=0o700, exist_ok=True)
         self._lock = threading.Lock()
-        self._failures = {}         # source (the caller's address) -> times of bad codes
+        # source (the caller's address) -> times of bad codes; kept on disk, since the
+        # intake starts anew with every code (#63)
+        self._failures_path = os.path.join(self.requests_dir, "failures.json")
+        try:
+            with open(self._failures_path) as f:
+                self._failures = {s: list(ts) for s, ts in json.load(f).items()}
+        except (OSError, ValueError, AttributeError):
+            self._failures = {}
 
     # ── requests ─────────────────────────────────────────────────────────────
 
-    def request(self, human, name, ttl=dt.timedelta(hours=24)) -> str:
+    def request(self, human, name, ttl=dt.timedelta(minutes=CODE_MINUTES)) -> str:
         """Create a one-time code to hand over secret `name`. `human` is the owner: a
-        human id, or `service:<name>` for a lab service (e.g. `service:broker`)."""
+        human id, or `service:<name>` for a lab service (e.g. `service:broker`). Opens the
+        intake (the flag file) for as long as it's active."""
         if name not in NAMES:
             raise IntakeError(f"unknown secret {name!r} (known: {NAMES})")
         if not _OWNER.match(human or ""):
@@ -148,18 +165,68 @@ class Intake:
         req = Request(human, name, (_now() + ttl).isoformat(timespec="seconds"))
         _write_private(os.path.join(self.requests_dir, _hash(code) + ".json"),
                        json.dumps(req.__dict__))
+        self._open()                # after the code: the intake, once up, finds it
         return code
+
+    def expires(self, code):
+        """When `code` stops working (a datetime), or None."""
+        req = self.lookup(code)
+        return dt.datetime.fromisoformat(req.expires) if req else None
+
+    # ── open only while needed (#63) ─────────────────────────────────────────
+
+    def _open(self):
+        _write_private(os.path.join(self.root, OPEN_FLAG), "")
+
+    def open_codes(self):
+        """How many codes are still usable."""
+        n = 0
+        for f in os.listdir(self.requests_dir):
+            if not f.endswith(".json"):
+                continue
+            try:
+                with open(os.path.join(self.requests_dir, f)) as fh:
+                    req = Request(**json.load(fh))
+            except (OSError, ValueError, TypeError):
+                continue
+            if not req.used and dt.datetime.fromisoformat(req.expires) >= _now():
+                n += 1
+            elif dt.datetime.fromisoformat(req.expires) < _now() - dt.timedelta(days=1):
+                try:                # long gone: no need to keep its hash
+                    os.unlink(os.path.join(self.requests_dir, f))
+                except OSError:
+                    pass
+        return n
+
+    def close_if_idle(self):
+        """No code open: remove the flag and say True (the intake may stop). A code created
+        meanwhile wins: the flag is put back and the intake keeps serving."""
+        with self._lock:
+            if self.open_codes():
+                return False
+            try:
+                os.unlink(os.path.join(self.root, OPEN_FLAG))
+            except FileNotFoundError:
+                pass
+            if self.open_codes():   # created between the check and the unlink
+                self._open()
+                return False
+            return True
 
     def _too_many_failures(self, source):
         """Bad codes are counted per caller (#63): one device guessing can't lock out the
         others, who hold valid codes."""
-        cutoff = time.monotonic() - FAILURE_WINDOW_S
+        cutoff = time.time() - FAILURE_WINDOW_S
         self._failures = {s: [t for t in ts if t > cutoff]
                           for s, ts in self._failures.items() if any(t > cutoff for t in ts)}
-        return len(self._failures.get(source, [])) >= MAX_FAILURES
+        return len(self._failures.get(str(source), [])) >= MAX_FAILURES
 
     def _failed(self, source):
-        self._failures.setdefault(source, []).append(time.monotonic())
+        self._failures.setdefault(str(source), []).append(time.time())
+        try:
+            _write_private(self._failures_path, json.dumps(self._failures))
+        except OSError:
+            pass
 
     def receive(self, code, name, value, source=None) -> str:
         """Store `value` if `code` is a live request for secret `name`. Returns the human.
@@ -261,13 +328,26 @@ def form_url(code, url):
     return f"{url.rstrip('/')}/s/{code}"
 
 
-def message(human_name, code, url, name="claude-token"):
-    """The message the secretary sends the human (e.g. in a Slack DM)."""
+PREREQUISITES = ("Before you run it, on your computer: Claude Code installed (`claude` "
+                 "works and you're logged in), the computer on the lab's tailnet, and "
+                 "`python3`.")
+
+
+def window(until):
+    """'active for 5 minutes (until 14:05 UTC)': what every one-time link or command says."""
+    when = f" (until {until:%H:%M} UTC)" if until else ""
+    return (f"This works once and is active for {CODE_MINUTES} minutes{when}. If you miss "
+            f"it, just ask again.")
+
+
+def message(human_name, code, url, name="claude-token", until=None):
+    """The message the secretary sends the human (e.g. in a Slack DM): what to have ready
+    first, then the command and how long it's active."""
     base = url.rstrip("/")
     return (
-        f"Hi {human_name}! Your lab agents need your Claude seat token. On your computer "
-        f"(on the lab's tailnet), please run:\n\n"
+        f"Hi {human_name}! Your lab agents need your Claude seat token. {PREREQUISITES} "
+        f"Then run:\n\n"
         f"curl -fsSL {base}/client/lab-member.py -o lab-member.py && "
         f"python3 lab-member.py {name} --code {code} --to {base}\n\n"
         f"It runs `claude setup-token` and sends the token straight to the lab, never "
-        f"through chat. The code works once, within 24 hours.")
+        f"through chat. {window(until)}")

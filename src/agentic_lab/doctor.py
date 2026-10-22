@@ -234,13 +234,19 @@ def run(lab_path, host=None):
             res.append(Result(WARN, f"{role} agents get a service in a later milestone"))
         sections.append((f"{role} {aid} ({lab.display_name(aid)})", res))
 
-    for svc, unit in (("broker", "lab-broker"), ("intake", "lab-intake")):
+    # the intake itself runs only while a code is open: its path unit is what's always on
+    for svc, unit in (("broker", "lab-broker"), ("intake", "lab-intake.path")):
         code, _ = sh("systemctl", "cat", unit)
         if code == 0:                                 # this host runs it
             res, pw = user_checks("lab-broker" if svc == "broker" else "lab-secretary")
             if pw is not None and svc == "broker":
                 res += secret_checks(pw, SECRETS["broker"])
-            sections.append((svc, res + unit_checks(unit)))
+            res += unit_checks(unit)
+            if svc == "intake" and sh("systemctl", "is-failed", "--quiet", "lab-intake")[0] == 0:
+                res.append(Result(FAIL, "the intake failed when it last started (it runs only "
+                                  "while a one-time code is open)",
+                                  "sudo journalctl -u lab-intake -n 50"))
+            sections.append((svc, res))
     return sections
 
 

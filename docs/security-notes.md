@@ -134,6 +134,20 @@ What it took:
   off (`force_off`).
 - **`sudo` on a lab host is admin power**: it reads every agent's files and logs there.
   Give members SSH without `sudo`.
+- **The secret intake is open only minutes at a time** (#63): it runs while a one-time
+  code is open (5 minutes each), links go only by DM to the person who pastes the secret,
+  and it runs hardened. It still runs as the secretary's Unix user: a flaw in it, while
+  it runs, reaches what the secretary holds.
+- **What members see of each other** (#62): the web UI, the Home tab and the secretary
+  show a member the lab's state (machines, task states and owners, usage), not other
+  members' instructions, results, files or approval details; anonymous tailnet devices and
+  lab hosts (agents) only states and counts. With `visibility: team` members see each
+  other's work. **On a shared worker this protects against mistakes, not against a
+  determined member**: the agent works in one folder, as one Unix user, for every member
+  there, so a member can have it copy or link another task's files into their own task's
+  folder, which the manager then hands them. The real separation is a Unix user per
+  member (or per task); until then, give members who mustn't see each other's work
+  dedicated workers.
 - **Members' devices are the keys to the logs**: the web UI trusts Tailscale's identity of
   the device (it can't be forged over the tailnet, but a stolen, unlocked laptop is its
   member: an admin's reads every log; a member's, their dedicated agents' logs and their
