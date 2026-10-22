@@ -10,49 +10,52 @@ import pytest
 from agentic_lab.worker import runs as R
 
 
-def test_underneath_the_real_home_stays_read_only():
+def test_underneath_the_home_stays_read_only():
     """The unit's own layer, in case the job's mounts were ever wrong."""
     u = R.unit_template("worker-a", "lab-worker-a", home="/home/lab-worker-a",
-                        workdir="/home/lab-worker-a/work").splitlines()
+                        workdir="/home/lab-worker-a/work",
+                        writable=["/home/lab-worker-a/datasets"]).splitlines()
     assert "ReadOnlyPaths=/home/lab-worker-a" in u
-    assert ("ReadWritePaths=-/home/lab-worker-a/work "
-            "-/home/lab-worker-a/.local/state/agentic-lab/runs/%i "
-            "-/home/lab-worker-a/.local/state/agentic-lab/run-home") in u
+    assert ("ReadWritePaths=-/home/lab-worker-a/work -/home/lab-worker-a/datasets "
+            "-/home/lab-worker-a/.local/state/agentic-lab/runs/%i") in u
     assert "InaccessiblePaths=-/home/lab-worker-a/.config/agentic-lab" in u
+    assert not any("run-home" in ln for ln in u)
     start = next(ln for ln in u if ln.startswith("ExecStart="))
     assert start.startswith("ExecStart=/opt/agentic-lab/venv/bin/lab ") and "bwrap" not in start
 
 
-HOME, WORK = "/home/lab-w", "/home/lab-w/work"
-RUN_HOME = "/home/lab-w/.local/state/agentic-lab/run-home/alice"
+def policy(tmp_path, writes=(), gpu=True):
+    from agentic_lab.policy import sandbox
+    return sandbox.filesystem(str(tmp_path / "work"), writes, gpu)
 
 
-def wrap(**kw):
-    return R.job_wrapper(HOME, RUN_HOME, WORK, WORK + "/repo", **kw)
-
-
-def test_the_job_gets_a_home_of_its_own():
-    w = wrap(github=HOME + "/.local/share/agentic-lab/github")
-    assert w[:7] == ["/usr/bin/bwrap", "--unshare-pid", "--dev-bind", "/", "/",
-                     "--proc", "/proc"]
-    binds = [(w[i], w[i + 1], w[i + 2]) for i in range(len(w))
-             if w[i] in ("--bind", "--ro-bind-try")]
-    assert binds == [("--bind", RUN_HOME, HOME),                 # the member's home first,
-                     ("--bind", WORK, WORK),                     # the work back on top,
-                     ("--ro-bind-try", HOME + "/.local/share/agentic-lab/github",
-                      HOME + "/.local/share/agentic-lab/github")]   # git setup read-only
-    assert w[w.index("--chdir") + 1] == WORK + "/repo" and w[-1] == "--"
-    assert "--die-with-parent" not in w                         # a stop's TERM gets through
-
-
-def test_the_labs_secrets_and_state_arent_in_the_jobs_home():
-    w = " ".join(wrap())
-    for absent in ("/.config/agentic-lab", "/.local/state/agentic-lab/runs",
-                   "/.local/state/agentic-lab/events"):
-        assert HOME + absent not in w
-    # the status file lives in the real home's state, which the job's home covers
-    assert not any(a.startswith(HOME + "/.local/state/agentic-lab/runs")
-                   for a in wrap())
+def test_a_run_is_held_to_the_sandbox_policy(tmp_path, monkeypatch):
+    """One source of truth: what the job may write and may not read is exactly what the
+    agent's short commands get from Claude Code's sandbox."""
+    from agentic_lab.policy import sandbox
+    home = tmp_path / "home"
+    for d in (".config/agentic-lab", ".local/state/agentic-lab", "work"):
+        (home / d).mkdir(parents=True)
+    monkeypatch.setenv("HOME", str(home))
+    fs = sandbox.settings(str(home / "work"), gpu=True)["sandbox"]["filesystem"]
+    assert fs == sandbox.filesystem(str(home / "work"), gpu=True)
+    w = R.job_wrapper(fs, str(home / "work"))
+    assert w[:10] == ["/usr/bin/bwrap", "--unshare-pid", "--ro-bind", "/", "/",
+                      "--dev-bind", "/dev", "/dev", "--proc", "/proc"]
+    writable = [w[i + 2] for i in range(len(w)) if w[i] == "--bind-try"]
+    covered = [w[i + 1] for i in range(len(w)) if w[i] == "--tmpfs"]
+    shown = [w[i + 1] for i in range(len(w)) if w[i] == "--ro-bind-try"]
+    assert writable == fs["allowWrite"]
+    assert set(covered) == {d for d in fs["denyRead"] if os.path.isdir(d)
+                            and not os.path.islink(d)}
+    assert str(home / ".config/agentic-lab") in covered
+    assert str(home / ".local/state/agentic-lab") in covered
+    assert shown == fs["allowRead"]
+    assert w[w.index("--chdir") + 1] == str(home / "work") and w[-1] == "--"
+    assert "--die-with-parent" not in w
+    # covers come after the writable binds, the GPU socket after its cover
+    assert max(i for i, a in enumerate(w) if a == "--bind-try") < \
+        min(i for i, a in enumerate(w) if a == "--tmpfs")
 
 
 def test_a_working_folder_on_another_disk_is_bound_from_where_it_is(tmp_path):
@@ -61,53 +64,53 @@ def test_a_working_folder_on_another_disk_is_bound_from_where_it_is(tmp_path):
     work = tmp_path / "home" / "work"
     work.parent.mkdir()
     work.symlink_to(disk)
-    w = R.job_wrapper(str(tmp_path / "home"), "/rh", str(work), str(work))
-    i = w.index("--bind", w.index("--bind") + 1)
+    fs = {"allowWrite": [str(work)], "denyRead": ["/nonexistent"], "allowRead": []}
+    w = R.job_wrapper(fs, str(work))
+    i = w.index("--bind-try")
     assert w[i + 1:i + 3] == [str(disk), str(work)]
 
 
-def test_each_member_has_a_home_of_their_own(tmp_path):
+def test_the_policy_comes_from_the_session(tmp_path):
     rs = runs(tmp_path)
-    a = rs.start("t-1", "x", "true", requester="alice")
-    b = rs.start("t-2", "x", "true", requester="bob")
-    ha, hb = rs.run_home("alice"), rs.run_home("bob")
-    assert ha != hb and os.path.isdir(ha) and os.path.isdir(hb)
-    assert stat.S_IMODE(os.stat(ha).st_mode) == 0o700
-    assert a["requester"] == "alice" and b["requester"] == "bob"
-    w = " ".join(R.job_wrapper(str(tmp_path), ha, str(tmp_path / "work"), str(tmp_path)))
-    assert ha in w and hb not in w                  # bob's home isn't in alice's runs
-    with pytest.raises(R.RunError):
-        rs.run_home("../bob")
-    with pytest.raises(R.RunError):
-        rs.start("t-3", "x", "true", requester="../bob")
+    fs = policy(tmp_path, writes=["/data/shared"])
+    r = rs.start("t-1", "x", "true", requester="alice", policy=fs)
+    assert rs.get(r["id"])["policy"] == fs and r["requester"] == "alice"
 
 
-def test_no_member_no_job(tmp_path):
+def test_a_session_hands_its_runs_its_own_sandbox_policy(tmp_path, monkeypatch):
+    from agentic_lab.policy import sandbox
+    from agentic_lab.worker import tasks as T
+    from agentic_lab.worker.runner import SdkRunner
+    work = str(tmp_path / "work")
+    r = SdkRunner("w", work, lambda grants: sandbox.settings(work, gpu=True))
+    seen = {}
+    monkeypatch.setattr(r, "_lab_server", lambda task, store, outcome, fs=None:
+                        seen.update(fs=fs) or {})
+    store = T.TaskStore(tmp_path / "tasks")
+    t = store.submit("x", "alice", "m")
+    r._options(t, store, {}, {"violations": [], "restart_for": None}, [])
+    assert seen["fs"] == sandbox.settings(work, gpu=True)["sandbox"]["filesystem"]
+
+
+def test_no_policy_no_job(tmp_path):
     rs = runs(tmp_path)
     marker = tmp_path / "ran"
-    r = rs.start("t-1", "x", f"touch {marker}")
+    r = rs.start("t-1", "x", f"touch {marker}", requester="alice")
     assert R.run_exec(rs, r["id"], wrapper=lambda *a: []) == 1
-    assert not marker.exists() and rs.view(r["id"])["state"] == "failed"
+    assert not marker.exists()
+    v = rs.view(r["id"])
+    assert v["state"] == "failed" and "policy" in v["error"]
 
 
 def test_no_bwrap_no_job(tmp_path, monkeypatch):
     rs = runs(tmp_path)
     marker = tmp_path / "ran"
-    r = rs.start("t-1", "x", f"touch {marker}", requester="alice")
+    r = rs.start("t-1", "x", f"touch {marker}", requester="alice", policy=policy(tmp_path))
     monkeypatch.setattr(R, "BWRAP", str(tmp_path / "no-bwrap"))
     assert R.run_exec(rs, r["id"]) == 1
     assert not marker.exists()
     v = rs.view(r["id"])
     assert v["state"] == "failed" and "never starts without it" in v["error"]
-
-
-def test_no_run_home_no_job(tmp_path):
-    rs = runs(tmp_path)
-    marker = tmp_path / "ran"
-    r = rs.start("t-1", "x", f"touch {marker}", requester="alice")
-    os.rmdir(rs.run_home("alice"))
-    assert R.run_exec(rs, r["id"], wrapper=lambda *a: []) == 1
-    assert not marker.exists() and rs.view(r["id"])["state"] == "failed"
 
 
 def test_a_stopped_run_gets_its_grace_period_and_nothing_outlives_it():
@@ -208,7 +211,8 @@ def test_a_stopped_run_is_recorded_when_the_job_has_really_ended(tmp_path):
     import time
     rs = runs(tmp_path)
     ready = tmp_path / "ready"
-    r = rs.start("t-1", "x", f"touch {ready}; sleep 30", requester="alice")
+    r = rs.start("t-1", "x", f"touch {ready}; sleep 30", requester="alice",
+                 policy={"allowWrite": ["/w"], "denyRead": ["/s"]})
     procs = tmp_path / "cgroup.procs"
     proc = _run_exec_in_child(tmp_path, r["id"], str(procs))
     procs.write_text(f"{proc.pid} 424242")          # the job (inside bwrap) still there
@@ -231,7 +235,8 @@ def test_a_stopped_run_is_recorded_when_the_job_has_really_ended(tmp_path):
 
 def test_a_normal_run_is_recorded_as_before(tmp_path):
     rs = runs(tmp_path)
-    r = rs.start("t-1", "x", "exit 3", requester="alice")
+    r = rs.start("t-1", "x", "exit 3", requester="alice",
+                 policy={"allowWrite": ["/w"], "denyRead": ["/s"]})
     proc = _run_exec_in_child(tmp_path, r["id"], str(tmp_path / "never-read"))
     assert proc.wait(10) == 0
     st = rs._status(r["id"])
