@@ -34,6 +34,9 @@ class TrackedTask:
     approval_noted: bool = False
     registered: bool = True     # with the broker (approvals reach the requester); retried
     misses: int = 0             # rounds the worker didn't know the task
+    wrapup_reply: str | None = None     # the wrap-up written, not yet delivered
+    wrapup_tries: int = 0               # failed wrap-up attempts
+    wrapup_next: float = 0.0            # not before this (time.time()), after a failure
 
 
 class ManagerState:

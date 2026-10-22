@@ -26,6 +26,7 @@ if not os.path.exists(NEBIUS) and os.path.exists("/usr/local/bin/nebius"):
 PROFILE = "lab"
 BUSY = ("running", "queued", "awaiting_approval", "waiting")
 GPU_IDLE_READINGS = 5           # a GPU is idle only at 0% in this many readings in a row
+STALE_AFTER_MIN = 10       # idle timers older than this (the secretary was down) start over
 DOWN_GRACE_MIN = 60             # a running host whose worker is down this long is announced
 _gpu_recent = {}                # worker -> its GPUs' highest utilization, last readings
 
@@ -189,8 +190,12 @@ class IdleWatch:
         try:
             with open(path) as f:
                 d = json.load(f)
+            saved = dt.datetime.fromisoformat(d["saved"]) if d.get("saved") else None
+            fresh = saved is not None and (dt.datetime.now(dt.timezone.utc) - saved
+                                           < dt.timedelta(minutes=STALE_AFTER_MIN))
+            # after a long outage nobody watched the hosts: idle timers start over
             self.idle_since = {h: dt.datetime.fromisoformat(t)
-                               for h, t in (d.get("idle_since") or {}).items()}
+                               for h, t in (d.get("idle_since") or {}).items()} if fresh else {}
             self.down_since = {h: dt.datetime.fromisoformat(t)
                                for h, t in (d.get("down_since") or {}).items()}
         except (TypeError, OSError, ValueError):
@@ -201,8 +206,9 @@ class IdleWatch:
             return
         tmp = self.path + ".tmp"
         with open(tmp, "w") as f:
-            json.dump({k: {h: t.isoformat() for h, t in getattr(self, k).items()}
-                       for k in ("idle_since", "down_since")}, f)
+            json.dump({**{k: {h: t.isoformat() for h, t in getattr(self, k).items()}
+                          for k in ("idle_since", "down_since")},
+                       "saved": dt.datetime.now(dt.timezone.utc).isoformat()}, f)
         os.replace(tmp, self.path)
 
     def down_too_long(self, now=None, grace=dt.timedelta(minutes=DOWN_GRACE_MIN)):
@@ -210,9 +216,10 @@ class IdleWatch:
         now = now or dt.datetime.now(dt.timezone.utc)
         return [h for h, t in self.down_since.items() if now - t >= grace]
 
-    def candidates(self, lab, snapshot, now=None):
+    def candidates(self, lab, snapshot, now=None, power=None):
         """Hosts to stop now: idle_stop_min above 0, with workers (and managers, unless
-        idle_stop_with_managers: false), all workers idle for idle_stop_min."""
+        idle_stop_with_managers: false), all workers idle for idle_stop_min. `power`:
+        host -> its power state, if known (a stopped host's workers aren't "down")."""
         now = now or dt.datetime.now(dt.timezone.utc)
         out = []
         for host, h in lab.hosts.items():
@@ -226,7 +233,10 @@ class IdleWatch:
             seen = [snapshot["agents"].get(a, {}) for a in agents]
             if not all(s.get("up") for s in seen):
                 self.idle_since.pop(host, None)     # down or unreachable: not ours to judge,
-                self.down_since.setdefault(host, now)   # but said once it lasts (#60)
+                if (power or {}).get(host, "RUNNING") == "RUNNING":
+                    self.down_since.setdefault(host, now)   # but said once it lasts (#60)
+                else:
+                    self.down_since.pop(host, None)     # stopped: of course they're down
                 continue
             self.down_since.pop(host, None)
             if any(worker_busy(a, s) for a, s in zip(agents, seen)):

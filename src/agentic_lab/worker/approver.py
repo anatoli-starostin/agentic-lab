@@ -86,12 +86,15 @@ class BrokerApprover:
         return Decision("deny", _explain(d))
 
     async def withdraw(self, rid):
-        """Withdraw a request filed earlier (e.g. by this worker before it restarted)."""
+        """Withdraw a request filed earlier (e.g. by this worker before it restarted).
+        True once the broker answered (withdrawn, or already decided); False if it
+        couldn't be reached (try again later)."""
         try:
             async with httpx2.AsyncClient(headers=self.headers, timeout=10) as c:
-                await self._withdraw(c, rid)
+                r = await c.post(f"{self.url}/v1/requests/{rid}/withdraw")
+            return r.status_code < 500
         except httpx2.HTTPError:
-            pass
+            return False
 
     async def _withdraw(self, client, rid):
         try:

@@ -165,9 +165,10 @@ class Manager:
         await self.slack.post(conv.channel, conv.thread_ts, text)
 
     async def finished(self, conv, task, view):
+        """The wrap-up of a finished task (posted by the follow-up, which retries a failed
+        post without a new turn)."""
         private = conv.channel.startswith("D")
-        reply = await self._turn(conv, task.requester, private, finished_prompt(task, view))
-        await self.slack.post(conv.channel, conv.thread_ts, reply)
+        return await self._turn(conv, task.requester, private, finished_prompt(task, view))
 
 
 async def serve(lab_path, agent_id, host=None, port=None):
