@@ -66,20 +66,22 @@ class Access:
 
 
 def read_workdir_file(workdir, path):
-    """A file from the worker's working folder (never outside it), as base64."""
+    """A plain file in the worker's working folder (never outside it, never through a
+    link: safefs), as base64."""
+    from .. import safefs
     root = os.path.realpath(workdir)
-    full = os.path.realpath(path if os.path.isabs(path) else os.path.join(root, path))
-    if full != root and not full.startswith(root + os.sep):
-        raise ToolError("only files in the worker's working folder can be read")
-    if not os.path.isfile(full):
-        raise ToolError(f"no such file: {path}")
-    size = os.path.getsize(full)
-    if size > MAX_FILE_BYTES:
-        raise ToolError(f"{path} is {size // 1_000_000} MB; the limit is "
-                        f"{MAX_FILE_BYTES // 1_000_000} MB")
-    with open(full, "rb") as f:
-        data = f.read()
-    return {"path": full, "name": os.path.basename(full), "size": size,
+    full = os.path.normpath(path if os.path.isabs(path) else os.path.join(root, path))
+    try:
+        size = safefs.size(root, full)
+        if size > MAX_FILE_BYTES:
+            raise ToolError(f"{path} is {size // 1_000_000} MB; the limit is "
+                            f"{MAX_FILE_BYTES // 1_000_000} MB")
+        data = safefs.read(root, full, limit=MAX_FILE_BYTES)
+    except FileNotFoundError:
+        raise ToolError(f"no such file: {path}") from None
+    except OSError:
+        raise ToolError("only plain files in the worker's working folder can be read") from None
+    return {"path": full, "name": os.path.basename(full), "size": len(data),
             "base64": base64.b64encode(data).decode()}
 
 
@@ -95,11 +97,11 @@ def write_inbox_file(workdir, name, b64):
         raise ToolError("the file must be base64") from None
     if len(data) > MAX_FILE_BYTES:
         raise ToolError(f"the limit is {MAX_FILE_BYTES // 1_000_000} MB")
-    inbox = os.path.join(os.path.realpath(workdir), "inbox")
-    os.makedirs(inbox, exist_ok=True)
-    path = os.path.join(inbox, name)
-    with open(path, "wb") as f:
-        f.write(data)
+    from .. import safefs
+    try:
+        path = safefs.write(os.path.realpath(workdir), os.path.join("inbox", name), data)
+    except OSError as e:
+        raise ToolError(f"couldn't store it: {e}") from None
     return {"path": path, "size": len(data)}
 
 

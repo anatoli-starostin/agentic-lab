@@ -169,10 +169,12 @@ def prepare(lab, agent_id, root=ROOT, secrets=SECRETS, helper=HELPER, shim=SHIM)
            + includes)
     # gh writes its config (migrations, state): a folder of its own the sandbox lets it
     # write, with no secrets in it
-    gh_config = os.path.join(os.path.expanduser(
-        (lab.agents.get(agent_id) or {}).get("workdir") or "~/work"), ".config", "gh")
-    try:
-        os.makedirs(gh_config, mode=0o700, exist_ok=True)
+    workdir = os.path.expanduser((lab.agents.get(agent_id) or {}).get("workdir") or "~/work")
+    gh_config = os.path.join(workdir, ".config", "gh")
+    try:                                # in the agent's folder: never through a link (safefs)
+        from . import safefs
+        os.makedirs(workdir, exist_ok=True)
+        safefs.makedirs(workdir, os.path.join(".config", "gh"))
     except OSError:                     # gh makes it itself; never lose git's setup over it
         pass
     return {"GIT_CONFIG_GLOBAL": os.path.join(root, "gitconfig"),
