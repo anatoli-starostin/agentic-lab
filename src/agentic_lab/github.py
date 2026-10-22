@@ -241,8 +241,9 @@ def instructions(lab, agent_id, root=ROOT):
              "names from them: never guess an owner (names are case-insensitive, but a guessed "
              "owner is a different account). Clone with git clone "
              "https://github.com/<owner>/<repo>.git: git picks the identity by itself, so do "
-             "commits (their author). gh picks it too, from -R owner/repo or the clone you're "
-             f"in. {root}/repos.tsv lists only repositories mapped to an identity other than "
+             "commits (their author). gh picks it too, from -R owner/repo, a repository named in "
+             "the command (gh repo view owner/repo, gh api repos/owner/repo/...) or the clone "
+             f"you're in (LAB_GH_DEBUG=1 shows which). {root}/repos.tsv lists only repositories mapped to an identity other than "
              f"the default; empty means one identity for everything, not \"no access\". If a "
              "repository isn't in any list, your identities can't reach it: say so (an admin "
              "can give access), don't conclude you have no GitHub access.")

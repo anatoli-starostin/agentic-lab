@@ -216,7 +216,9 @@ git picks the identity by the repository by itself (a credential helper for the 
 git's conditional config for the commit author; the service writes the agent's git config,
 `GIT_CONFIG_GLOBAL`). `gh` is a small shim first on the agent's `PATH`
 (`deploy/worker/gh-shim`): it reads the current token at call time (the identity mapped to
-`-R owner/repo`, else the default; a `GH_TOKEN` the agent sets wins) and runs the real
+`-R owner/repo`, or to a repository named in the command: `gh repo view owner/repo`,
+`gh api repos/owner/repo/...`, a github.com URL; else the default; a `GH_TOKEN` the agent
+sets wins; `LAB_GH_DEBUG=1` says which) and runs the real
 `gh`. gh's own config, which it writes on many commands, is in the agent's working folder
 (`<workdir>/.config/gh`, `GH_CONFIG_DIR`); the tokens stay where the agent can read but not
 write them. Without `-R`, it takes the identity from the clone it runs in (its `origin`).
