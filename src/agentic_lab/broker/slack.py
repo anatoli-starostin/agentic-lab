@@ -18,7 +18,7 @@ from slack_sdk.socket_mode.request import SocketModeRequest
 from slack_sdk.socket_mode.response import SocketModeResponse
 from slack_sdk.web.async_client import AsyncWebClient
 
-from .core import PENDING, Broker, BrokerError, Request
+from .core import PENDING, TRUNCATED, Broker, BrokerError, Request
 
 log = logging.getLogger("agentic_lab.broker.slack")
 
@@ -33,8 +33,26 @@ def _grant_text(options):
                      for o in options)
 
 
+def _literal(text, limit=2800):
+    """Blocks showing `text` exactly as it is: preformatted rich text, which Slack doesn't
+    read as markup (no links, mentions or code fences from inside), in pieces."""
+    pieces = [text[i:i + limit] for i in range(0, len(text), limit)] or [""]
+    return [{"type": "rich_text", "elements": [{"type": "rich_text_preformatted",
+             "elements": [{"type": "text", "text": p}]}]} for p in pieces]
+
+
+def _plain(text):
+    return {"type": "section", "text": {"type": "plain_text", "text": text[:2900],
+                                        "emoji": False}}
+
+
+def _escape(text):
+    """For Slack's notification text: no markup, no mentions."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def request_blocks(req: Request):
-    """The DM for a pending request."""
+    """The DM for a pending request: everything it would allow, shown literally."""
     until = (dt.datetime.fromisoformat(req.expires).strftime("%H:%M UTC")
              if req.expires else None)          # None: no timeout, it waits for you
     task = f" (task `{req.task_id}`)" if req.task_id else ""
@@ -43,18 +61,28 @@ def request_blocks(req: Request):
          "text": f"*{req.agent}* asks "
                  + ("to start a long run" if req.tool == "mcp__lab__start_run"
                     else "to do something outside its sandbox") + f"{task}:"}},
-        {"type": "section", "text": {"type": "mrkdwn", "text": f"```{req.detail[:2800]}```"}},
+        *_literal(req.detail),
     ]
+    shown_in_full = TRUNCATED not in req.detail
     if req.violations:
-        blocks.append({"type": "context", "elements": [{"type": "mrkdwn",
-                       "text": "Sandbox refused: " + "; ".join(req.violations)[:2000]}]})
+        blocks.append(_plain("Sandbox refused: " + "; ".join(req.violations)))
     if req.context:
-        blocks.append({"type": "section", "text": {"type": "mrkdwn",
-                       "text": f"_Note from the manager:_ {req.context}"}})
-    buttons = [{"type": "button", "style": "primary", "action_id": "once",
-                "text": {"type": "plain_text", "text": "Run once"}, "value": f"{req.id}|once"}]
-    if req.options:
-        what = _grant_text(req.options)[:40]
+        blocks.append(_plain(f"Note from the manager: {req.context}"))
+    if req.options and shown_in_full:
+        blocks.append(_plain("Allowing it for a while grants all of these:\n"
+                             + "\n".join(f"• {_grant_text([o])}" for o in req.options)))
+    buttons = []
+    if shown_in_full:
+        buttons.append({"type": "button", "style": "primary", "action_id": "once",
+                        "text": {"type": "plain_text", "text": "Run once"},
+                        "value": f"{req.id}|once"})
+    else:
+        blocks.append(_plain("This is too long to show here in full, so it can only be "
+                             "denied. Ask the agent for something you can read (e.g. a script "
+                             "file it shows you)."))
+    if req.options and shown_in_full:
+        n = len(req.options)
+        what = _grant_text(req.options) if n == 1 else f"these {n}"
         buttons += [
             {"type": "button", "action_id": "hour", "value": f"{req.id}|hour",
              "text": {"type": "plain_text", "text": f"Allow {what} · 1 hour"[:75]}},
@@ -78,14 +106,13 @@ def decided_blocks(req: Request):
     line = LABELS.get(action, action)
     if action in ("hour", "task") and d.get("grants"):
         line += f": {_grant_text(d['grants'])}"
-    if d.get("note"):
-        line += f'\n> {d["note"][:500]}'
     by = f" by {d['by']}" if d.get("by") else ""
-    return [
-        {"type": "section", "text": {"type": "mrkdwn",
-         "text": f"*{req.agent}*: ```{req.detail[:1500]}```"}},
-        {"type": "context", "elements": [{"type": "mrkdwn", "text": f"{line}{by}"}]},
-    ]
+    blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": f"*{req.agent}*:"}},
+              *_literal(req.detail[:1500] + ("…" if len(req.detail) > 1500 else "")),
+              _plain(f"{line}{by}")]
+    if d.get("note"):
+        blocks.append(_plain(d["note"][:500]))
+    return blocks
 
 
 class SlackChannel:
@@ -119,7 +146,7 @@ class SlackChannel:
             im = await self.web.conversations_open(users=user)
             channel = im["channel"]["id"]
             r = await self.web.chat_postMessage(channel=channel, blocks=request_blocks(req),
-                                                text=f"{req.agent} asks for approval: {req.detail[:200]}")
+                                                text=_escape(f"{req.agent} asks for approval: {req.detail[:200]}"))
             self.broker.set_channel_ref(req.id, {"channel": channel, "ts": r["ts"]})
         except Exception:
             log.exception("could not DM %s about %s", req.human, req.id)
@@ -131,7 +158,7 @@ class SlackChannel:
         blocks = decided_blocks(req) if req.state != PENDING else request_blocks(req)
         try:
             await self.web.chat_update(channel=ref["channel"], ts=ref["ts"], blocks=blocks,
-                                       text=f"{req.agent}: {req.detail[:200]}")
+                                       text=_escape(f"{req.agent}: {req.detail[:200]}"))
         except Exception:
             log.exception("could not update the message for %s", req.id)
 

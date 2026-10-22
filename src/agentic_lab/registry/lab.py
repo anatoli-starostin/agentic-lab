@@ -27,6 +27,8 @@ USER_PREFIX = "lab-"
 # an agent id becomes part of its Unix user name: lab-<agent-id>, at most 32 characters
 _AGENT_ID = re.compile(r"^[a-z][a-z0-9-]*$")
 _UNIX_USER = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+_HOST_ID = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
+_DNS_NAME = re.compile(r"^[A-Za-z0-9]([A-Za-z0-9-]{0,62})(\.[A-Za-z0-9]([A-Za-z0-9-]{0,62}))*$")
 READERS_GROUP = "lab-readers"
 CHANNEL_TYPES = ("slack_dm",)   # first version: Slack DM only (DESIGN.md §7)
 ACCESS = ("shared", "dedicated")
@@ -256,8 +258,17 @@ def check(lab: Lab, today: dt.date | None = None):
             if ch.get("on_timeout", "deny") != "deny":
                 E(cw, "on_timeout must be 'deny' (a timeout never approves)")
 
+    if lab.data.get("tailnet") and not _DNS_NAME.match(str(lab.data["tailnet"])):
+        E("tailnet", f"{lab.data['tailnet']!r} isn't a DNS name")
     for hid, h in lab.hosts.items():
         where = f"hosts.{hid}"
+        if not _HOST_ID.match(str(hid)):
+            E(where, "a host id is lowercase letters, digits and '-'")
+        for key, pattern, what in (("ssh_user", _UNIX_USER, "a Linux user name"),
+                                   ("tailnet_name", _DNS_NAME, "a DNS name")):
+            v = (h or {}).get(key)
+            if v is not None and not (isinstance(v, str) and pattern.match(v)):
+                E(where, f"{key} {v!r} isn't {what}")
         if "power" in (h or {}):            # before 2026-10-19: power: always_on | on_demand
             E(where, "'power' was removed: idle_stop_min decides (above 0: stopped when idle "
                      "that long; 0: never)")
@@ -343,9 +354,6 @@ def check(lab: Lab, today: dt.date | None = None):
             except G.GrantError as e:
                 E(f"{where}.grants[{j}]", str(e))
                 continue
-            if g.kind == "tool" and g.value == "mcp__lab__start_run":
-                E(f"{where}.grants[{j}]", "long runs are approved one at a time; start_run "
-                                          "can't be granted")
             if g.expires is not None:
                 E(f"{where}.grants[{j}]", "standing grants in lab.yaml don't expire; "
                                           "timed grants are given by a human through the broker")

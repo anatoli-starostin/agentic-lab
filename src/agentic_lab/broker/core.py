@@ -25,6 +25,8 @@ import threading
 from dataclasses import asdict, dataclass, field
 from urllib.parse import urlparse
 
+from ..policy import grants as G
+
 PENDING, DECIDED = "pending", "decided"
 ACTIONS = ("once", "hour", "task", "deny")
 TASK_GRANT_MAX = dt.timedelta(hours=24)      # a "this task" grant never outlives a day
@@ -102,27 +104,56 @@ def grant_options(tool, tool_input, violations):
         folder = os.path.dirname(path)
         if folder not in ("", "/") and folder != os.path.expanduser("~"):
             add("write", folder)
-    elif tool in ("WebFetch", "WebSearch") or tool.startswith("mcp__"):
+    elif tool in ("WebFetch", "WebSearch") or (tool.startswith("mcp__") and
+                                                 G.grantable_tool(tool)):
         add("tool", tool)
     return opts
 
 
+MAX_DETAIL = 20000          # characters shown; a longer request can only be denied
+TRUNCATED = "⚠ TRUNCATED"   # marks a detail that isn't shown in full
+
+
+def visible(text):
+    """Text made reviewable: runs of spaces or tabs shown with their count, control
+    characters as escapes, long runs of blank lines counted."""
+    import re as _re
+    text = _re.sub(r"[ \t]{8,}", lambda m: f" ⟨{len(m.group())} blanks⟩ ", text)
+    text = _re.sub(r"\n{4,}", lambda m: f"\n⟨{len(m.group())} line breaks⟩\n", text)
+    return "".join(c if c in "\n" or c.isprintable() else f"\\x{ord(c):02x}" for c in text)
+
+
+def _full(text):
+    text = visible(text)
+    if len(text) > MAX_DETAIL:
+        return (text[:MAX_DETAIL]
+                + f"\n{TRUNCATED}: {len(text) - MAX_DETAIL} more characters not shown")
+    return text
+
+
 def describe(tool, tool_input):
-    """One line saying what the agent wants to do."""
+    """What the agent wants to do, in full (nothing approved is hidden)."""
     if tool == "Bash":
-        return tool_input.get("command", "")[:2000]
-    if tool in ("Write", "Edit", "NotebookEdit"):
-        return f"{tool} {tool_input.get('file_path') or tool_input.get('notebook_path')}"
+        return _full(tool_input.get("command", ""))
+    if tool == "Write":
+        return _full(f"Write {tool_input.get('file_path')}:\n{tool_input.get('content', '')}")
+    if tool == "Edit":
+        return _full(f"Edit {tool_input.get('file_path')}:\n--- replace:\n"
+                     f"{tool_input.get('old_string', '')}\n--- with:\n"
+                     f"{tool_input.get('new_string', '')}")
+    if tool in ("MultiEdit", "NotebookEdit"):
+        return _full(f"{tool} {tool_input.get('file_path') or tool_input.get('notebook_path')}"
+                     f":\n{json.dumps(tool_input, indent=1)}")
     if tool == "WebFetch":
         return f"fetch {tool_input.get('url', '')}"
     if tool == "WebSearch":
         return f"search: {tool_input.get('query', '')}"
     if tool == "mcp__lab__start_run":
-        return (f"start a long run as the agent, until it ends or is stopped; the agent's "
-                f"file rules, network not limited ({tool_input.get('name', 'run')}): "
-                f"{tool_input.get('command', '')[:1800]}"
-                + (f"  [in {tool_input['cwd']}]" if tool_input.get("cwd") else ""))
-    return f"{tool} {json.dumps(tool_input)[:500]}"
+        return _full(f"start a long run as the agent, until it ends or is stopped; the "
+                     f"agent's file rules, network not limited ({tool_input.get('name', 'run')})"
+                     + (f" [in {tool_input['cwd']}]" if tool_input.get("cwd") else "")
+                     + f":\n{tool_input.get('command', '')}")
+    return _full(f"{tool} {json.dumps(tool_input, indent=1)}")
 
 
 # ── the broker ───────────────────────────────────────────────────────────────
@@ -262,6 +293,8 @@ class Broker:
                 raise BrokerError("only the person asked can decide this request")
             if action in ("hour", "task") and not req.options:
                 raise BrokerError("nothing to grant for this request")
+            if action != "deny" and TRUNCATED in req.detail:
+                raise BrokerError("not shown in full, so it can only be denied")
             t = now()
             decision = {"action": action, "by": req.human, "at": _iso(t), "note": note}
             if action in ("hour", "task"):

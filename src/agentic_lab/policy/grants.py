@@ -58,6 +58,21 @@ def validate(kind, value):
         _not_the_labs_own(value)
     if kind == "tool" and not _TOOL.match(value):
         raise GrantError(f"not a tool name or anchored mcp__server__ glob: {value!r}")
+    if kind == "tool" and value == "mcp__lab__start_run":
+        raise GrantError("long runs are approved one at a time; start_run can't be granted")
+    if kind == "tool" and not grantable_tool(value):
+        raise GrantError(f"{value!r} can't be granted: the lab's own tools and Bash are "
+                         "governed by the sandbox and the approvals")
+
+
+NOT_GRANTABLE = ("Bash",)
+LAB_SERVER = "mcp__lab__"
+
+
+def grantable_tool(value):
+    """Tools a grant may name: never the lab's own tools (some must always ask) or Bash
+    (sandboxed commands need no grant; unsandboxed ones always ask)."""
+    return value not in NOT_GRANTABLE and not value.startswith(LAB_SERVER)
 
 
 def _in_home(value):

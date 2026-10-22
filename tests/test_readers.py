@@ -35,12 +35,14 @@ def test_readers_open_the_working_folder_and_nothing_else(tmp_path):
     s = "\n".join(readers_script(plan["readers"], plan["readable"]))
     assert 'gpasswd -M "${members#,}" lab-readers' in s
     assert "setfacl -m g:lab-readers:x /home/lab-worker-a" in s            # traverse only
-    assert "setfacl -R -d -m g:lab-readers:rX /home/lab-worker-a/work" in s  # later files too
-    assert "! -path /home/lab-worker-a/work -exec chmod go-rwx" in s       # the rest: private
+    assert ("runuser -u lab-worker-a -- setfacl -R -P -d -m g:lab-readers:rX "
+            "/home/lab-worker-a/work") in s                                 # later files too
+    assert "! -path /home/lab-worker-a/work ! -type l -exec chmod go-rwx" in s  # the rest
     assert "w" not in s.split("g:lab-readers:")[1].split()[0]               # never write
     assert subprocess.run(["bash", "-n"], input=script(plan), text=True).returncode == 0
     deep = "\n".join(readers_script(["alice"], {"lab-m": "/home/lab-m/projects/w"}))
     assert "not shared" in deep and "setfacl -m" not in deep and "setfacl -R" not in deep
+    assert "runuser -u lab-m" not in deep
     assert subprocess.run(["bash", "-n"], input=deep, text=True).returncode == 0
     # the agent's tmp: stable, in its working folder, only with readers
     assert lab.agent_tmpdir("worker-a").endswith("/work/tmp")

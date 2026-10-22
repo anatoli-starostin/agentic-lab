@@ -288,6 +288,10 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
     from .apply import (UNREACHABLE, ApplyError, describe, has_work, plan_all, run_bundle,
                         secretary_host)
     from .doctor import this_host
+    errors = [i for i in registry.check(registry.load(lab_path)) if i.level == "error"]
+    if errors:                     # never deploy (or even plan) a lab.yaml lab check refuses
+        sys.exit("lab apply: lab.yaml doesn't pass lab check:\n"
+                 + "\n".join(f"  {i}" for i in errors))
     try:
         record = CR.applied_record(info, lock.current(source)[1], admin)
         lab, tokens, plans = plan_all(lab_path, hosts=hosts or None)
