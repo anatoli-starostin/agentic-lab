@@ -355,8 +355,14 @@ def stop_runs(runs, task_id):
 async def run_tasks(store: T.TaskStore, runner, stop: asyncio.Event, runs=None):
     """The task loop: recover after a restart, then run queued tasks one at a time, and
     wake waiting tasks when their runs need them."""
+    approver = getattr(runner, "approver", None)
     for t in store.recover():
         log.info("requeued %s after restart", t.id)
+        for rid in t.pending_requests:      # its old approval requests: no longer waited for
+            if approver is not None:
+                await approver.withdraw(rid)
+        if t.pending_requests:
+            store.update(t.id, pending_requests=[])
     loop = asyncio.get_running_loop()
     last_wake = 0.0
     while not stop.is_set():

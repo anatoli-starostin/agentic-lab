@@ -232,8 +232,10 @@ async def serve(lab_path, agent_id, host=None, port=None):
              agent_id, lab.display_name(agent_id), len(workers.known()), bool(broker),
              len(members))
     GH.start(lab, agent_id, stop)       # a GitHub App identity: keep its token fresh
-    follower = asyncio.create_task(follow(state, workers, mgr.post, mgr.finished, stop,
-                                          mention=mgr.mention))
+    follower = asyncio.create_task(follow(
+        state, workers, mgr.post, mgr.finished, stop, mention=mgr.mention,
+        register=(lambda t: broker.register_task(t.worker, t.task_id, t.requester))
+        if broker is not None else None))
     status_server = None
     if host and port:               # the secretary's view: usage and events
         import uvicorn

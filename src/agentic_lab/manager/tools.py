@@ -5,6 +5,7 @@ answering. That member is decided by code (from the Slack event), never by the L
 who a submitted task is for, and who is asked to approve anything it leads to.
 """
 import base64
+import logging
 import os
 
 import httpx2
@@ -16,6 +17,8 @@ TOOL_NAMES = ("list_workers", "submit_task", "my_tasks", "task_status", "task_re
               "cancel_task", "pending_approvals", "add_approval_note", "post_file",
               "post_worker_file", "send_file_to_worker", "recall", "remember")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
+
+log = logging.getLogger("agentic_lab.manager")
 
 
 class BrokerClient:
@@ -80,13 +83,24 @@ def build(ctx):
             t = await ctx.workers.call(args["worker"], "submit_task", retries=0, args={
                 "instruction": args["instruction"], "requester": ctx.requester,
                 **({"project": args["project"]} if args.get("project") else {})})
-            if ctx.broker is not None:
-                await ctx.broker.register_task(args["worker"], t["id"], ctx.requester)
-            ctx.state.track(t["id"], args["worker"], ctx.conv.key, ctx.requester)
+            tid, state = t["id"], t["state"]
         except (WorkerError, KeyError, TypeError) as e:
             return _err(e)
-        return _text(f"Submitted {t['id']} to {args['worker']} (state: {t['state']}). Its "
-                     f"progress and result will be posted in this conversation.")
+        # followed from the moment the worker has it, whatever happens next (#58)
+        ctx.state.track(tid, args["worker"], ctx.conv.key, ctx.requester,
+                        registered=ctx.broker is None)
+        note = ""
+        if ctx.broker is not None:
+            try:
+                await ctx.broker.register_task(args["worker"], tid, ctx.requester)
+                ctx.state.tasks[tid].registered = True
+                ctx.state.save()
+            except Exception as e:      # the follow-up retries it; never resubmit
+                log.warning("registering %s with the broker: %s", tid, e)
+                note = (" (Routing its approvals to the member is still pending; it's retried "
+                        "automatically. Don't submit it again.)")
+        return _text(f"Submitted {tid} to {args['worker']} (state: {state}). Its progress "
+                     f"and result will be posted in this conversation.{note}")
 
     @tool("my_tasks", "The tasks you submitted that this conversation may see, with their "
           "last known state.", {})

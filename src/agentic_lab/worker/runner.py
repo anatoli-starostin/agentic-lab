@@ -103,6 +103,9 @@ class NoChannelApprover:
     async def active_grants(self):
         return []
 
+    async def withdraw(self, rid):
+        pass
+
 
 class AgentRunner(Protocol):
     async def run(self, task: T.Task, store: T.TaskStore) -> None:
@@ -305,14 +308,27 @@ class SdkRunner:
             if store.get(task.id).cancel_requested:
                 return PermissionResultDeny(message="The task was cancelled.", interrupt=True)
             store.update(task.id, state=T.AWAITING)
+            session["asking"] = session.get("asking", 0) + 1
             self._log("approval", "asked: " + tool_summary(tool_name, tool_input), task=task.id)
+            mine = []
+
+            def filed(rid):                 # kept on the task: withdrawn after a crash (#58)
+                mine.append(rid)
+                store.update(task.id, pending_requests=store.get(task.id).pending_requests + [rid])
             try:
                 d = await self.approver.ask(task, tool_name, tool_input,
                                             list(session["violations"]),
-                                            stop=lambda: store.get(task.id).cancel_requested)
+                                            stop=lambda: store.get(task.id).cancel_requested,
+                                            filed=filed)
             finally:
-                if store.get(task.id).state == T.AWAITING:
-                    store.update(task.id, state=T.RUNNING)
+                session["asking"] -= 1
+                t = store.get(task.id)
+                left = [r for r in t.pending_requests if r not in mine]
+                # running again only when no other approval is still pending
+                if t.state == T.AWAITING and session["asking"] == 0:
+                    store.update(task.id, state=T.RUNNING, pending_requests=left)
+                else:
+                    store.update(task.id, pending_requests=left)
             self._log("approval", f"decided: {d.kind}" + (f" ({d.message[:200]})" if d.message
                                                          else ""), task=task.id)
             if d.kind == "allow":
@@ -372,6 +388,10 @@ class SdkRunner:
                     task, store, outcome, session, grants, prompt)
             except Exception as e:   # the agent process failed: record it, keep the worker up
                 err = f"{type(e).__name__}: {e}"
+                if "result" in outcome or store.get(task.id).cancel_requested:
+                    # it had finished (finish_task), or the cancel interrupted it: not a failure
+                    self._finish(task, store, outcome, None, None)
+                    return
                 if self.runs and self.runs.active(task.id):     # its runs go on: wait for them
                     store.add_progress(task.id, f"session failed ({err[:200]}); waiting for "
                                        "its runs")

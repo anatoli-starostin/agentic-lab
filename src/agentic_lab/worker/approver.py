@@ -39,7 +39,7 @@ class BrokerApprover:
         self.headers = {"Authorization": f"Bearer {token}"}
         self.timeout_s = timeout_s
 
-    async def ask(self, task, tool_name, tool_input, violations, stop=None):
+    async def ask(self, task, tool_name, tool_input, violations, stop=None, filed=None):
         """File the request and wait for its decision. `stop()` true (e.g. the task was
         cancelled), or this coroutine cancelled (e.g. a manager's turn cut off): the request
         is withdrawn, so the human isn't asked about it any more."""
@@ -53,6 +53,8 @@ class BrokerApprover:
                     "input": tool_input, "violations": violations})
                 r.raise_for_status()
                 req = r.json()
+                if filed is not None:           # the caller keeps the id (recovery, #58)
+                    filed(req["id"])
                 failures = 0
                 while req["state"] == "pending":
                     if (stop is not None and stop()) or (deadline and loop.time() > deadline):
@@ -82,6 +84,14 @@ class BrokerApprover:
         if d.get("action") in ("hour", "task"):
             return Decision("grant", grants=d.get("grants") or [])
         return Decision("deny", _explain(d))
+
+    async def withdraw(self, rid):
+        """Withdraw a request filed earlier (e.g. by this worker before it restarted)."""
+        try:
+            async with httpx2.AsyncClient(headers=self.headers, timeout=10) as c:
+                await self._withdraw(c, rid)
+        except httpx2.HTTPError:
+            pass
 
     async def _withdraw(self, client, rid):
         try:
