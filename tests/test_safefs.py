@@ -121,3 +121,21 @@ def test_special_files_are_never_waited_on(folders):
     t.start()
     t.join(2)
     assert done, "opening it blocked"
+
+
+def test_the_secretary_posts_the_icon_it_drew(monkeypatch):
+    import asyncio
+    from agentic_lab.secretary.service import Secretary
+    sent = []
+
+    async def drawn(name, role, env=None, lab=None):
+        return b"PNG", "drawn"
+
+    class Slack:
+        async def upload(self, channel, thread_ts, path, title, comment=None, data=None):
+            sent.append((path, data))
+    monkeypatch.setattr("agentic_lab.icon.drawn", drawn)
+    me = SimpleNamespace(brain=None, lab=SimpleNamespace(name="L"), slack=Slack())
+    asyncio.run(Secretary.post_icon(me, "X", "manager", SimpleNamespace(channel="C",
+                                                                         thread_ts=None), "c"))
+    assert sent == [(None, b"PNG")]
