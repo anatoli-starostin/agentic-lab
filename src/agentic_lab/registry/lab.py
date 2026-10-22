@@ -396,6 +396,23 @@ def check(lab: Lab, today: dt.date | None = None):
     if lab.data.get("trust_tailnet", True) and not lab.data.get("tailnet"):
         W("lab", "no tailnet set: sandboxed commands can't reach lab resources")
 
+    ports = {}                      # (host, port) -> the agent using it (#61)
+    sec_host = next((x.get("host") for x in lab.agents.values()
+                     if (x or {}).get("role") == "secretary"), None)
+    for h in lab.hosts:
+        if h == sec_host:           # the secretary host's own services
+            for p, what in ((8771, "the intake"), (8772, "the broker"), (8774, "the web UI")):
+                ports[(h, p)] = what
+    for aid, a in lab.agents.items():
+        if (a or {}).get("role") not in ("worker", "manager"):
+            continue
+        port = lab.address(aid)[1]
+        other = ports.get((a.get("host"), port))
+        if other:
+            E(f"agents.{aid}", f"port {port} on host {a.get('host')} is taken by {other}: "
+                               "give it its own `port:`")
+        ports[(a.get("host"), port)] = aid
+
     secretaries = roles.get("secretary", [])
     if len(secretaries) != 1:
         E("agents", f"a lab has exactly one secretary, found {len(secretaries)}")

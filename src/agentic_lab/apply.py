@@ -28,6 +28,8 @@ from .registry import load as load_lab
 PRIVATE = "/etc/agentic-lab/private"
 INTAKE = "/home/lab-secretary/.local/state/agentic-lab/secrets"
 PORTS = {"worker": 8770, "intake": 8771, "broker": 8772, "secretary": 8774}
+UNREACHABLE = 255           # run_bundle: the host didn't answer (e.g. a stopped VM)
+SSH_OPTS = ["-o", "ConnectTimeout=10", "-o", "BatchMode=yes"]   # never hang on a host
 SOURCE_COPY = "/opt/agentic-lab/src"
 
 
@@ -299,8 +301,11 @@ def script(plan):
     for unit_file, _ in plan["units"]:
         sub = "worker" if "worker" in unit_file else "manager" if "manager" in unit_file else "secretary"
         lines.append(f"install -m 644 /opt/agentic-lab/src/deploy/{sub}/{unit_file} /etc/systemd/system/")
+    lines += removed_agents_script(plan)
     if plan.get("run_units"):
         lines += run_units_script(plan["run_units"])
+    else:                       # no worker here (any more): no runs, no sudo rule for them
+        lines.append("rm -f /etc/sudoers.d/agentic-lab-runs")
     lines += readers_script(plan.get("readers") or [], plan.get("readable") or {})
     lines.append("systemctl daemon-reload")
     held = set(plan.get("held") or [])
@@ -314,6 +319,34 @@ def script(plan):
         note = " (waiting for its secrets)" if unit in held else ""
         lines.append(f'echo "  {unit}: $(systemctl is-active {unit}){note}"')
     return "\n".join(lines) + "\n"
+
+
+def removed_agents_script(plan):
+    """Agents no longer on this host (removed from lab.yaml, or moved): their services
+    stopped and disabled, their env files and run units removed (#61). Their Unix users
+    and working folders stay (docs/uninstall.md)."""
+    keep = " ".join(sorted(u for _, u in plan["units"]
+                           if u.startswith(("lab-worker@", "lab-manager@"))))
+    runs = " ".join(sorted(f"lab-run-{a}@.service" for a in plan.get("run_units") or {}))
+    return [
+        'say "agents no longer here"',
+        f'keep=" {keep} "; keep_runs=" {runs} "',
+        "for f in /etc/systemd/system/multi-user.target.wants/lab-worker@*.service "
+        "/etc/systemd/system/multi-user.target.wants/lab-manager@*.service; do",
+        '    [ -e "$f" ] || [ -L "$f" ] || continue',
+        '    u=$(basename "$f" .service)',
+        '    case "$keep" in *" $u "*) continue ;; esac',
+        '    systemctl disable --now "$u" >/dev/null 2>&1 || true',
+        '    role=${u%%@*}; role=${role#lab-}; id=${u#*@}',
+        '    rm -f "/etc/agentic-lab/$role-$id.env"',
+        '    echo "  stopped $u (no longer in lab.yaml for this host)"',
+        "done",
+        "for f in /etc/systemd/system/lab-run-*@.service; do",
+        '    [ -e "$f" ] || continue',
+        '    case "$keep_runs" in *" $(basename "$f") "*) continue ;; esac',
+        '    rm -f "$f"; echo "  removed $(basename "$f")"',
+        "done",
+    ]
 
 
 def readers_script(readers, readable):
@@ -479,8 +512,13 @@ def run_bundle(plan, local, admin):
             for root, dirs, fnames in os.walk(tmp):
                 for n in [root] + [os.path.join(root, x) for x in dirs + fnames]:
                     os.chown(n, pw.pw_uid, pw.pw_gid)
-        r = subprocess.run(as_admin + ["scp", "-q", "-r", b, f"{target}:{remote}"])
+        # a stopped VM (the usual state of an idle GPU host) answers nothing: skip it fast
+        if subprocess.run(as_admin + ["ssh", *SSH_OPTS, target, "true"],
+                          capture_output=True).returncode == 255:
+            return UNREACHABLE
+        r = subprocess.run(as_admin + ["scp", *SSH_OPTS, "-q", "-r", b, f"{target}:{remote}"])
         if r.returncode:
             return r.returncode
-        return subprocess.run(as_admin + ["ssh", target, f"sudo bash {remote}/apply.sh; "
-                                          f"rc=$?; rm -rf {remote}; exit $rc"]).returncode
+        return subprocess.run(as_admin + ["ssh", *SSH_OPTS, target,
+                                          f"sudo bash {remote}/apply.sh; rc=$?; "
+                                          f"rm -rf {remote}; exit $rc"]).returncode

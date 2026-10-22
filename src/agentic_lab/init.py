@@ -96,12 +96,17 @@ def build(lab_name, tailnet, admin_id, admin_name, slack_user, secretary_host,
         agents[manager] = {"role": "manager", "human": admin_id, "host": mhost,
                            "access": "dedicated", "workdir": "~/scratch",
                            "grants": [{"tool": "WebFetch"}, {"tool": "WebSearch"}]}
+    used = {}                       # host -> ports given (several workers on one host, #61)
     for wid, host, name in workers:
+        taken = used.setdefault(host, set())
+        port = next(p for p in [8770] + list(range(8780, 8800)) if p not in taken)
+        taken.add(port)
         if host not in hosts:
             hosts[host] = cloud_host(provider, 30)
             if name:
                 hosts[host]["tailnet_name"] = name
         agents[wid] = {"role": "worker", "human": admin_id, "host": host, "access": "shared",
+                       **({"port": port} if port != 8770 else {}),
                        "grants": [{"domain": "pypi.org"}, {"domain": "files.pythonhosted.org"}]}
     return {"lab": lab_name, "tailnet": tailnet, "humans": {admin_id: human},
             "hosts": hosts, "agents": agents, "credentials": []}
