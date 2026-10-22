@@ -2,11 +2,13 @@
 
 An agent may create, rename and link anything in its working folder. A service that opens
 a path there (a run's log, a file to hand a member, an attachment to store) must stay in
-that folder whatever the agent did to it, even while it changes: the folder itself and
-every component in it are opened relative to their parent and never through a symbolic
-link (O_NOFOLLOW), only plain files with a single name are used (never a device, a pipe,
-or a second name of a file kept elsewhere), and a file is written as a new file renamed
-into place.
+that folder whatever the agent did to it, even while it changes. The folder itself is
+resolved once (`pin`, at the service's start: an admin may have made it a link, e.g. to a
+fast local disk) and must be the same folder (device and inode) on every later call;
+every component in it is opened relative to its parent and never through a symbolic link
+(O_NOFOLLOW); only plain files with a single name are used (never a device, a pipe, or a
+second name of a file kept elsewhere); and a file is written as a new file renamed into
+place.
 """
 import errno
 import os
@@ -20,13 +22,33 @@ class UnsafePath(OSError):
     pass
 
 
+_pins = {}          # the folder as configured -> (where it really is, st_dev, st_ino)
+
+
+def pin(root):
+    """Resolve the folder `root` once and remember which folder it is. Returns
+    (its real path, device, inode)."""
+    given = os.path.abspath(root)
+    if given not in _pins:
+        real = os.path.realpath(given)
+        st = os.stat(real)
+        if not stat.S_ISDIR(st.st_mode):
+            raise UnsafePath(f"{root} is not a folder")
+        _pins[given] = (real, st.st_dev, st.st_ino)
+    return _pins[given]
+
+
 def _parts(root, path):
-    """`path` (absolute, or relative to `root`) as its components below `root`."""
-    root = os.path.abspath(root)
-    full = os.path.normpath(path if os.path.isabs(path) else os.path.join(root, path))
-    if not full.startswith(root + os.sep):
+    """`path` (relative to `root`, or absolute: under `root` as configured or as it really
+    is) as its components below it."""
+    given, real = os.path.abspath(root), pin(root)[0]
+    full = os.path.normpath(path if os.path.isabs(path) else os.path.join(given, path))
+    for base in (given, real):
+        if full.startswith(base + os.sep):
+            parts = os.path.relpath(full, base).split(os.sep)
+            break
+    else:
         raise UnsafePath(f"{path} isn't inside {root}")
-    parts = os.path.relpath(full, root).split(os.sep)
     if any(p in ("", ".", "..") for p in parts):
         raise UnsafePath(f"bad path {path}")
     return parts
@@ -34,12 +56,17 @@ def _parts(root, path):
 
 def _dir(root, parts, create=False):
     """A descriptor of the folder `root`/`parts`, every step without following a link."""
+    real, dev, ino = pin(root)
     try:
-        fd = os.open(os.path.abspath(root), DIR)    # the folder itself: never a link
+        fd = os.open(real, DIR)         # where it really is, and still the same folder
     except OSError as e:
         if e.errno in (errno.ELOOP, errno.ENOTDIR):
-            raise UnsafePath(f"{root} is not a plain folder") from None
+            raise UnsafePath(f"{root} is not the folder it was") from None
         raise
+    st = os.fstat(fd)
+    if (st.st_dev, st.st_ino) != (dev, ino):
+        os.close(fd)
+        raise UnsafePath(f"{root} is not the folder it was")
     try:
         for p in parts:
             try:

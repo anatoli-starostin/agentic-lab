@@ -713,6 +713,8 @@ async def serve(lab_path, host, port):
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
     workdir = os.path.expanduser(sa.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
+    from .. import safefs
+    safefs.pin(workdir)         # resolved once: its file operations stay there
     brain = SecretaryBrain(lab.display_name(sec_id), lab.name, workdir,
                            lab.agent_settings(sec_id), model=sa.get("model"), env=env,
                            events=events, usage=usage)
@@ -827,6 +829,8 @@ async def ask(lab_path, human, text):
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
     workdir = os.path.expanduser(sa.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
+    from .. import safefs
+    safefs.pin(workdir)         # resolved once: its file operations stay there
     # the same event log as the service: what's done from the console is on record (#41)
     events = EventLog(os.path.expanduser(f"{STATE}/events"))
     brain = SecretaryBrain(lab.display_name(sec_id), lab.name, workdir,

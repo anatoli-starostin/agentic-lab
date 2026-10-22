@@ -77,6 +77,8 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
     env.update(GH.env_for(lab, agent_id))      # its GitHub bot, if it has one
     workdir = os.path.expanduser(a.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
+    from .. import safefs
+    safefs.pin(workdir)         # resolved once: the folder its file operations stay in
     # tools' caches in the working folder, for the agent and everything it starts (#45);
     # the settings say so too, this also covers what doesn't read them
     env.update(cache_env(workdir))
