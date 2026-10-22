@@ -83,3 +83,32 @@ def test_the_runs_page_lists_every_redirect():
     page = (Path(__file__).parent.parent / "docs" / "long-runs.md").read_text()
     for name in list(R.home_env("/w")) + list(cache_env("/w")):
         assert f"`{name}`" in page, name
+
+
+def test_a_stop_reaches_the_job_once(tmp_path):
+    """A stop as systemd does it (KillMode=control-group): TERM to every process of the
+    run, the wrapper and the job alike. The job must see it once, and the run is
+    recorded as stopped once the job has ended."""
+    import os
+    import signal
+    import sys
+    import time
+    rs = runs(tmp_path)
+    count, ready = tmp_path / "count", tmp_path / "ready"
+    r = rs.start("t-1", "x", f"trap 'echo t >> {count}' TERM; touch {ready}; "
+                              "for i in $(seq 40); do sleep 0.05; done")
+    code = ("import sys; from agentic_lab.worker import runs as R; "
+            f"s = R.RunStore({str(tmp_path / 'state')!r}, {str(tmp_path / 'work')!r}, 'w', "
+            "systemctl=lambda *a: False); R.run_exec(s, sys.argv[1])")
+    wrapper = subprocess.Popen([sys.executable, "-c", code, r["id"]])
+    deadline = time.time() + 10
+    while not ready.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    job = rs._status(r["id"])["pid"]
+    os.kill(wrapper.pid, signal.SIGTERM)        # every process in the unit...
+    time.sleep(0.3)                             # (the order varies: spaced, they'd count)
+    os.killpg(job, signal.SIGTERM)              # ...the job's group included
+    assert wrapper.wait(10) == 0
+    time.sleep(0.2)
+    assert count.read_text().splitlines() == ["t"]
+    assert rs.view(r["id"])["state"] == "stopped"
