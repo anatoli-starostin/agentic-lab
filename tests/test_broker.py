@@ -318,3 +318,58 @@ def test_approver_withdraws_when_the_task_is_cancelled(tmp_path, free_port):
         server.should_exit = True
         th.join()
     assert b.pending("carol") == []                                   # nobody's asked any more
+
+
+# ── what the human sees is what they approve ────────────────────────────────
+
+def _texts(blocks):
+    return str(blocks)
+
+
+def test_the_request_is_shown_in_full_and_literally():
+    long_cmd = "echo start; " + "x" * 5000 + "; echo end"
+    d = C.describe("Bash", {"command": long_cmd})
+    assert d == long_cmd                                    # nothing cut
+    r = C.Request(id="r-1", agent="worker-a", task_id="t-1", human="alice", tool="Bash",
+                  detail=d, violations=["deny <!here>"], options=[], created="x", expires=None,
+                  context="*bold* <https://a.example|ok>")
+    blocks = request_blocks(r)
+    shown = "".join(e["text"] for b in blocks if b["type"] == "rich_text"
+                    for e in b["elements"][0]["elements"])
+    assert shown == long_cmd
+    assert all(b["text"]["type"] == "plain_text" for b in blocks
+               if b["type"] == "section" and ("manager" in b["text"]["text"]
+                                              or "refused" in b["text"]["text"]))
+
+
+def test_hidden_layout_is_made_visible():
+    d = C.describe("Bash", {"command": "ls" + " " * 300 + "rm x\x1b[2K\n\n\n\n\n\nok"})
+    assert "⟨300 blanks⟩" in d and "\\x1b" in d and "⟨6 line breaks⟩" in d
+
+
+def test_file_writes_show_their_content():
+    assert "hello there" in C.describe("Write", {"file_path": "/w/a.sh", "content": "hello there"})
+    d = C.describe("Edit", {"file_path": "/w/a.sh", "old_string": "a1", "new_string": "b2"})
+    assert "a1" in d and "b2" in d
+
+
+def test_what_cannot_be_shown_can_only_be_denied(broker):
+    r = submit(broker, inp={"command": "y" * (C.MAX_DETAIL + 10)})
+    assert C.TRUNCATED in r.detail
+    labels = [e["text"]["text"] for b in request_blocks(r) if b["type"] == "actions"
+              for e in b["elements"]]
+    assert labels == ["Deny"]
+    with pytest.raises(C.BrokerError):
+        broker.decide(r.id, "once", "U-ALICE")
+    assert broker.decide(r.id, "deny", "U-ALICE").decision["action"] == "deny"
+
+
+def test_every_grant_is_listed():
+    opts = [{"kind": "domain", "value": f"h{i}.example.org"} for i in range(6)]
+    r = C.Request(id="r-1", agent="worker-a", task_id="t-1", human="alice", tool="Bash",
+                  detail="curl ...", violations=[], options=opts, created="x", expires=None)
+    text = _texts(request_blocks(r))
+    assert all(o["value"] in text for o in opts)
+    labels = [e["text"]["text"] for b in request_blocks(r) if b["type"] == "actions"
+              for e in b["elements"]]
+    assert "Allow these 6 · 1 hour" in labels
