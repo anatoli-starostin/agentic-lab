@@ -161,7 +161,10 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
     def cancel_task(task_id: str, ctx: Context) -> dict:
         who(ctx, writes=True)
         task(task_id)
-        return store.request_cancel(task_id).view(with_progress=False)
+        t = store.request_cancel(task_id)
+        if t.state in T.TERMINAL:           # cancelled at once (queued): its runs too (#59)
+            stop_runs(runs, task_id)
+        return t.view(with_progress=False)
 
     @mcp.tool(description="All tasks on this worker, oldest first. Optionally only one state.")
     def list_tasks(ctx: Context, state: str | None = None) -> list[dict]:
@@ -312,6 +315,27 @@ def _num(s):
         return None
 
 
+def stop_orphaned_runs(store: T.TaskStore, runs):
+    """Runs whose task is over (done, failed, cancelled) or unknown: stopped, so nothing
+    runs for nobody and keeps the machine from being idle-stopped (#59). Returns them."""
+    if runs is None:
+        return []
+    out = []
+    for r in runs.active():
+        try:
+            over = store.get(r["task"]).state in T.TERMINAL
+        except T.TaskError:
+            over = True
+        if over:
+            log.warning("run %s outlived its task %s: stopping it", r["id"], r["task"])
+            try:
+                runs.stop(r["id"])
+                out.append(r)
+            except (R.RunError, OSError, subprocess.SubprocessError) as e:
+                log.warning("couldn't stop run %s: %s", r["id"], e)
+    return out
+
+
 def wake_waiting(store: T.TaskStore, runs, now=None):
     """Waiting tasks: queue again those whose run ended or whose check-in time came;
     cancel (stopping their runs) those a manager cancelled. Returns the tasks woken."""
@@ -371,6 +395,7 @@ async def run_tasks(store: T.TaskStore, runner, stop: asyncio.Event, runs=None):
             try:
                 for t in await asyncio.to_thread(wake_waiting, store, runs):
                     log.info("woke %s: %s", t.id, t.wake)
+                await asyncio.to_thread(stop_orphaned_runs, store, runs)
             except Exception:
                 log.exception("checking waiting tasks failed")
         task = store.next_queued()
