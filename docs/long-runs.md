@@ -66,8 +66,8 @@ each process one TERM, but your own launcher may pass it on again (`torchrun`,
 `accelerate`, `mpirun`, a shell script that traps and forwards), so a worker process can
 see it twice. Make the handler idempotent: note the request, and let the training loop
 save and exit once. A stopped run records when its job really ended; its exit code isn't
-recorded (`null`). A job that ignores its TERM is recorded as ended at about 50 seconds and
-killed at 60.
+recorded (`null`). A job still running at 60 seconds is killed; its run is recorded as
+stopped with a note that it was killed.
 
 ```python
 import signal, sys
