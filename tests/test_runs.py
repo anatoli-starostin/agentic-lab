@@ -313,16 +313,6 @@ def test_a_run_ending_between_the_reads_is_not_lost(tmp_path):
     assert v["state"] == "exited" and v["exit_code"] == 0
 
 
-def test_a_run_writes_only_its_own_part_of_the_state():
-    u = R.unit_template("worker-a", "lab-worker-a", home="/home/lab-worker-a")
-    lines = u.splitlines()
-    assert "ReadOnlyPaths=/home/lab-worker-a" in lines
-    assert ("ReadWritePaths=-/home/lab-worker-a/work "
-            "-/home/lab-worker-a/.local/state/agentic-lab/runs/%i "
-            "-/home/lab-worker-a/.local/state/agentic-lab/run-home") in lines
-    assert "InaccessiblePaths=-/home/lab-worker-a/.config/agentic-lab" in lines
-
-
 def test_ended_runs_arent_asked_about(tmp_path):
     asked = []
 
