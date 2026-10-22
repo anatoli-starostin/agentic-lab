@@ -55,10 +55,10 @@ What it took:
   visible; sockets elsewhere would be. Never run tmux or other socket servers as an
   agent's user, and keep its user without a lingering systemd user manager (the lab
   creates them that way).
-- **Long runs are outside the sandbox, by design.** A run (`start_run`, DESIGN.md §4.2)
-  is the agent's command running as its Unix user with no sandbox, for hours: full
-  network, writes wherever that user may, the user's files, and any socket server it starts
-  is reachable from the agent's sandbox while it lives. Its lab secrets are hidden from the
+- **Long runs outlive the session, by design.** A run (`start_run`, DESIGN.md §4.2) is
+  the agent's command running as its Unix user for hours, outside Claude Code's sandbox:
+  full network, and any socket server it starts is reachable from the agent's sandbox
+  while it lives. Its lab secrets are hidden from the
   run (`InaccessiblePaths=` on `~/.config/agentic-lab`: the member's Claude seat token, the
   lab tokens), so a careless or injected command can't send them away. The job is held
   to the same filesystem policy as the agent's sandboxed commands (one definition for
