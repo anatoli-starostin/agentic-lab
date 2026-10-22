@@ -414,6 +414,7 @@ The one description every component reads, kept in the lab's private config repo
 lab: example-lab
 tailnet: example.ts.net
 announcements: "#lab"                    # optional: lab-wide notices
+auto_catch_up: true                      # optional (default): hosts that missed a deploy catch up
 humans:
   alice:
     name: Alice
@@ -549,9 +550,20 @@ identity the pull request opened; replies with the diff and "here is the PR, rev
 it"), `offer_deploy` (a **Deploy** button; only an admin's click
 deploys), `request_slack_app` (with an app icon Claude draws from the agent's name, role and the lab's name;
 `redraw_app_icon` for another), `request_github_token`, `request_github_app` and `check_github_app` (a GitHub App as an
-agent's identity), `check_slack_app`. The secretary's one
-root command is **`lab apply-main`** (a sudoers rule, no arguments): it deploys only `main`,
-as its own systemd unit. Even a misled secretary can only deploy what a human merged.
+agent's identity), `check_slack_app`. The secretary's root command is **`lab apply-main`**
+(two exact sudoers rules, no free arguments): it deploys only `main`, as its own systemd
+unit. Even a misled secretary can only deploy what a human merged.
+
+**Hosts that missed a deploy** (a GPU host stopped at the time, the usual case) are caught
+up when they're back (#61): every agent's health reading says what its host runs
+(`/etc/agentic-lab/applied.yaml`); when a host runs something other than the secretary's
+host, the secretary runs `lab apply-main --catch-up`, which deploys the commit of `main` the
+secretary's host runs (never a newer one, never an `--unreviewed` apply) to the hosts that
+run something else, and skips the rest. Not while a worker there has tasks running, queued
+or awaiting approval; at most 3 attempts per host and commit (5 and 20 minutes apart), then
+the host stays stale and the admins are told; the deploy lock applies (a running deploy is
+waited for). The web UI marks stale hosts ("config N commits behind"). `auto_catch_up:
+false` in `lab.yaml` turns the catch-up off; stale hosts are still shown.
 
 | Command | Does |
 |---|---|
@@ -658,6 +670,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-20 | **Host `readers`**: Linux users who may read a host's agents' working folders (a group and ACLs), never their secrets or state. |
 | 2026-10-21 | **AWS EC2 hosts**, without power control for now (public IPv4 with no inbound, EBS root). |
 | 2026-10-22 | **`gh` through a shim** that reads the identity's current token at call time; gh's config in the working folder. Each identity's **reachable repositories** are listed in the agent's prompt. |
+| 2026-10-22 | **Hosts that missed a deploy catch up automatically** (#61), to the commit of `main` the rest of the lab runs: triggered by the secretary, deferred while tasks are active, 3 attempts then admins are told; `auto_catch_up: false` to opt out. |
 
 ## 14. Open questions
 

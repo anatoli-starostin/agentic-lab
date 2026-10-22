@@ -216,6 +216,8 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         h = await asyncio.to_thread(health or default_health, agent_id, store)
         if github is not None:
             h["github"] = github()          # identities that don't work right now (#64)
+        from ..configrepo import applied_versions
+        h["applied"] = applied_versions()   # what this host runs: missed deploys (#61)
         if runs is not None:
             h["runs"] = [{k: r.get(k) for k in ("id", "name", "task", "state", "started")}
                          for r in await asyncio.to_thread(runs.active)]

@@ -42,7 +42,9 @@ _TOP = {"lab": (str, True), "tailnet": (str, False), "trust_tailnet": (bool, Fal
         "announcements": (str, False),     # Slack channel (id or #name) for lab-wide notices
         "humans": (dict, True),
         "agents": (dict, True), "hosts": (dict, True), "credentials": (list, False),
-        "github": (dict, False)}            # the agents' GitHub bot accounts
+        "github": (dict, False),            # the agents' GitHub bot accounts
+        # a host that missed a deploy is brought up to date when it's back (#61)
+        "auto_catch_up": (bool, False)}
 _HUMAN = {"name": (str, False), "slack_user": (str, False), "channels": (list, False),
           "admin": (bool, False),           # may see every agent's log in the web UI
           # how the web UI recognises them (tailscale whois): their own agents' logs

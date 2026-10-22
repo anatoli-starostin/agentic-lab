@@ -255,6 +255,11 @@ deployed, and the secretary checks in code that the person asking is an admin.
   (checked), and replies with the diff and "here is the PR, review and merge it". After
   the merge, tell it so: it posts a **Deploy** button; only an admin's click deploys
   (`lab apply-main`, its one sudo command). The result is posted back in the DM.
+- **Hosts that were stopped during a deploy** are skipped (not a failure) and caught up by
+  the secretary when they're back on (`lab apply-main --catch-up`, the same deploy for the
+  hosts that missed it), once their workers have no active tasks. It says
+  "<host> is up (updated to <commit>)"; after 3 failed attempts it tells the admins and the
+  web UI marks the host stale. `auto_catch_up: false` in `lab.yaml` turns this off.
 - **Add a member:** their name and Slack member ID → PR → merge → deploy; the secretary
   then DMs them their Claude-token command.
 - **Who talks to which manager:** every member may talk to any manager. A *dedicated*

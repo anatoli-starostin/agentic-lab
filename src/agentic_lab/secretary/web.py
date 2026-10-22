@@ -279,10 +279,22 @@ def _hosts(state):
         f"{e((v.get('state') or '—').lower())}</td><td class='small'>{e(f"idle stop {v['idle_stop_min']} min" if v.get('idle_stop_min') else 'no idle stop')}"
         + (f"<div class='muted small'>idle since {e(ago(v['idle_since']))}</div>"
            if v.get("idle_since") else "")
+        + (f"<div class='small {'bad' if v['stale'].get('gave_up') else 'warn'}'>"
+           f"{e(stale_text(v['stale']))}</div>" if v.get("stale") else "")
         + f"</td><td class='muted small'>{e(ago(v.get('at')) if v.get('at') else '')}</td></tr>"
         for h, v in hosts.items())
     return ("<section><h2>Machines</h2><table><tr><th>Host</th><th>Power</th><th>Policy</th>"
             "<th>Checked</th></tr>" + rows + "</table></section>")
+
+
+def stale_text(s):
+    """'stale: config 3 commits behind, framework older' for a host that missed deploys."""
+    n = s.get("config_behind")
+    parts = [f"config {n} commit{'s' if n != 1 else ''} behind" if n else
+             "config differs" if n is None else "",
+             "framework differs" if s.get("framework_differs") else ""]
+    return ("stale: " + ", ".join(p for p in parts if p)
+            + (" · catch-up gave up: deploy by hand" if s.get("gave_up") else ""))
 
 
 def _agents(state):

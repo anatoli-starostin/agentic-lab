@@ -422,7 +422,8 @@ def self_admin_script(sa):
     rule = [
         'say "self-administration (deploying main from Slack)"',
         'install -m 644 "$B/apply-main.yaml" /etc/agentic-lab/apply-main.yaml',
-        f"echo '{u} ALL=(root) NOPASSWD: /usr/local/bin/lab apply-main' "
+        f"printf '%s\\n' '{u} ALL=(root) NOPASSWD: /usr/local/bin/lab apply-main' "
+        f"'{u} ALL=(root) NOPASSWD: /usr/local/bin/lab apply-main --catch-up' "
         "> /etc/sudoers.d/agentic-lab.new",
         "chmod 440 /etc/sudoers.d/agentic-lab.new",
         "visudo -cqf /etc/sudoers.d/agentic-lab.new && mv /etc/sudoers.d/agentic-lab.new "
@@ -512,6 +513,28 @@ def describe(plan):
     for m in plan.get("later") or []:
         out.append(f"  · not yet (optional): {m}")
     return "\n".join(out)
+
+
+def applied_on(plan, local, admin):
+    """The host's /etc/agentic-lab/applied.yaml (what it runs), {} if it has none, or
+    UNREACHABLE."""
+    path = "/etc/agentic-lab/applied.yaml"
+    if local:
+        try:
+            with open(path) as f:
+                return yaml.safe_load(f) or {}
+        except (OSError, ValueError):
+            return {}
+    target = f"{plan.get('ssh_user') or admin}@{plan['name']}"
+    as_admin = ["sudo", "-u", admin] if os.geteuid() == 0 and admin != "root" else []
+    r = subprocess.run(as_admin + ["ssh", *SSH_OPTS, "--", target, f"cat {path}"],
+                       capture_output=True, text=True)
+    if r.returncode == 255:
+        return UNREACHABLE
+    try:
+        return yaml.safe_load(r.stdout) or {} if r.returncode == 0 else {}
+    except ValueError:
+        return {}
 
 
 def run_bundle(plan, local, admin):

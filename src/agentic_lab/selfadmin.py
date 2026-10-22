@@ -213,9 +213,11 @@ def applied(path=CR.APPLIED):
         return {}
 
 
-def start_apply():
-    """Run `sudo lab apply-main`; returns the log file the deployment writes."""
-    r = subprocess.run(["sudo", "-n", "/usr/local/bin/lab", "apply-main"], capture_output=True,
+def start_apply(catch_up=False):
+    """Run `sudo lab apply-main` (`--catch-up`: only the hosts that missed the deploy this
+    host runs); returns the log file the deployment writes."""
+    r = subprocess.run(["sudo", "-n", "/usr/local/bin/lab", "apply-main"]
+                       + (["--catch-up"] if catch_up else []), capture_output=True,
                        text=True, timeout=60)
     m = re.search(r"log: (\S+)", r.stdout)
     if r.returncode or not m:

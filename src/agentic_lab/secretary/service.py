@@ -33,6 +33,7 @@ from .. import github as GH
 from .. import selfadmin as SA
 from ..worker.usage import UsageLog, probe_loop, probe_now
 from . import home as H
+from . import catchup as CU
 from . import power as P
 from .status import check_seat, collect, manager_status
 from .web import app, own_entries
@@ -667,6 +668,8 @@ async def serve(lab_path, host, port):
     stop = asyncio.Event()
 
     idle = P.IdleWatch(os.path.expanduser(f"{STATE}/idle.json"))     # kept across restarts
+    catch = CU.CatchUp(os.path.expanduser(f"{STATE}/catch-up.json"))  # missed deploys (#61)
+    sec_host = lab.agents[sec_id].get("host")
     hosts_power = {}
     down_noted = {}                 # host -> the day its worker being down was announced
     rounds = {"n": 0}
@@ -712,6 +715,11 @@ async def serve(lab_path, host, port):
                     f"since {idle.down_since[host]:%Y-%m-%d %H:%M} UTC: it can't be "
                     "idle-stopped like this. Check it (lab doctor), or power it off.")
         idle.save()
+        try:                    # hosts back from a stop that missed a deploy (#61)
+            await CU.step(catch, lab, latest["state"] or {}, sec_host,
+                          lambda: SA.start_apply(catch_up=True), SA.apply_result, sec.announce)
+        except Exception:
+            log.exception("catching up hosts failed")
 
     async def collector():
         while not stop.is_set():
@@ -725,10 +733,13 @@ async def serve(lab_path, host, port):
                 if rounds["n"] % HOME_REFRESH_ROUNDS == 0:
                     for user in list(sec.home_viewers):
                         await sec.publish_home(user)
+                stale = CU.stale_info(latest["state"], sec_host,
+                                      os.path.expanduser(SA.CLONE), catch.gave_up)
                 latest["state"]["hosts"] = {
                     h: {**(hosts_power.get(h) or {}), "idle_stop_min": (lab.hosts[h] or {}).get("idle_stop_min"),
                         "idle_since": (idle.idle_since.get(h).isoformat(timespec="seconds")
-                                       if idle.idle_since.get(h) else None)}
+                                       if idle.idle_since.get(h) else None),
+                        "stale": stale.get(h)}
                     for h in lab.hosts}
                 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(snapshot_path))
                 with os.fdopen(fd, "w") as f:

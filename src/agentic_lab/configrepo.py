@@ -50,12 +50,19 @@ def repo_of(lab_path):
     return top, os.path.relpath(os.path.abspath(lab_path), top)
 
 
-def fetch_main(lab_path):
+def fetch_main(lab_path, commit=None):
     """Fetch, and copy lab.yaml (+ framework.lock) as of origin/main into a temporary
-    folder. Returns (path of that lab.yaml, info) where info says what was taken."""
+    folder. Returns (path of that lab.yaml, info) where info says what was taken.
+    `commit`: an earlier commit of main instead (refused if it isn't on main)."""
     top, rel = repo_of(lab_path)
     git(top, "fetch", "--quiet", "origin", BRANCH)
     ref = f"origin/{BRANCH}"
+    if commit is not None:
+        try:
+            git(top, "merge-base", "--is-ancestor", commit, ref)
+        except ConfigError:
+            raise ConfigError(f"{commit[:10]} isn't a commit of {BRANCH}") from None
+        ref = commit
     commit = git(top, "rev-parse", ref).strip()
     out = tempfile.mkdtemp(prefix="lab-config-")
     d = os.path.dirname(rel)
@@ -98,6 +105,19 @@ def pr_link(lab_path, branch):
     if not m:
         return None
     return f"https://github.com/{m.group(1)}/compare/{BRANCH}...{branch}?expand=1"
+
+
+def applied_versions(path=APPLIED):
+    """What this host runs (its last apply): config and framework commits, for health
+    readings, so the secretary sees hosts that missed a deploy (#61)."""
+    import yaml
+    try:
+        with open(path) as f:
+            ap = yaml.safe_load(f) or {}
+    except (OSError, ValueError):
+        return None
+    return {k: ap.get(k) for k in ("config_commit", "framework_commit", "unreviewed")
+            if ap.get(k) is not None} or None
 
 
 def applied_record(info, framework_commit, by):

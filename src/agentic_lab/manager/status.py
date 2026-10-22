@@ -13,6 +13,8 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Route
 
+from ..configrepo import applied_versions
+
 
 def app(token, usage, events, check=None, github=None):
     def authorized(request):
@@ -29,7 +31,8 @@ def app(token, usage, events, check=None, github=None):
             hours = 24
         return JSONResponse({"usage": usage.load(),
                              "events": events.read(since=dt.timedelta(hours=hours), limit=2000),
-                             "github": github() if github is not None else {}})
+                             "github": github() if github is not None else {},
+                             "applied": applied_versions()})      # missed deploys (#61)
 
     async def check_usage(request: Request):
         if not authorized(request):

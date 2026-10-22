@@ -275,14 +275,16 @@ def cmd_apply(args):
     return deploy(lab_path, info, source, admin, args.host, args.allow_missing, self_admin)
 
 
-def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_admin=None):
-    """Ship `lab_path` (already the reviewed one) and framework `source` to the hosts."""
+def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_admin=None,
+           only_behind=False):
+    """Ship `lab_path` (already the reviewed one) and framework `source` to the hosts.
+    `only_behind`: skip hosts that already run exactly this (a catch-up, #61)."""
     import os
 
     from . import configrepo as CR
     from . import lock
-    from .apply import (UNREACHABLE, ApplyError, describe, has_work, plan_all, run_bundle,
-                        secretary_host)
+    from .apply import (UNREACHABLE, ApplyError, applied_on, describe, has_work, plan_all,
+                        run_bundle, secretary_host)
     from .doctor import this_host
     try:
         record = CR.applied_record(info, lock.current(source)[1], admin)
@@ -308,6 +310,17 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
             print("  skipped: secrets missing (or pass --allow-missing)\n")
             failed += 1
             continue
+        if only_behind:
+            cur = applied_on(p, local=(p["host"] == here), admin=admin)
+            if cur == UNREACHABLE:
+                print("  -> skipped: unreachable\n")
+                skipped.append(p["host"])
+                continue
+            if (cur.get("config_commit"), cur.get("framework_commit")) == (
+                    record.get("config_commit"), record.get("framework_commit")) \
+                    and not cur.get("unreviewed"):
+                print("  -> up to date\n")
+                continue
         p["lab_path"], p["source"], p["applied"] = os.path.abspath(lab_path), source, record
         if p["host"] == sec_host and self_admin:
             sec = secretary_host(lab)[1]
@@ -346,9 +359,10 @@ def deploy_lock(path=DEPLOY_LOCK):
 
 
 def cmd_apply_main(args):
-    """The secretary's one root command (sudoers): deploy the config repo's main. Starts
-    the deployment as its own systemd unit (the secretary's service restarts during it)
-    and prints the log's path."""
+    """The secretary's root command (sudoers): deploy the config repo's main. Starts the
+    deployment as its own systemd unit (the secretary's service restarts during it) and
+    prints the log's path. `--catch-up` (#61): deploy the commit of main this host runs to
+    the hosts that run something else (they missed a deploy), nothing newer."""
     import datetime as dt
     import os
     import subprocess
@@ -379,7 +393,8 @@ def cmd_apply_main(args):
         subprocess.run(["systemd-run", f"--unit=lab-apply-{stamp}", "--collect", "--quiet",
                         f"--property=StandardOutput=append:{log}",
                         f"--property=StandardError=append:{log}",
-                        "/usr/local/bin/lab", "apply-main", "--run"], check=True)
+                        "/usr/local/bin/lab", "apply-main", "--run"]
+                       + (["--catch-up"] if args.catch_up else []), check=True)
         print(f"started; log: {log}")
         return 0
 
@@ -389,9 +404,18 @@ def cmd_apply_main(args):
     os.environ["LAB_GIT_USER"] = cfg["config_owner"]       # its clone, its deploy key
     config = os.path.join(os.path.expanduser(f"~{cfg['config_owner']}"),
                           ".local/state/agentic-lab/config-repo", cfg.get("lab_rel", "lab.yaml"))
+    commit = None
+    if args.catch_up:
+        own = CR.applied_versions() or {}
+        if not own.get("config_commit") or own.get("unreviewed"):
+            print("lab apply-main --catch-up: this host doesn't run a reviewed commit of "
+                  f"{CR.BRANCH}; nothing to catch up to", flush=True)
+            return done(False)
+        commit = own["config_commit"]
     try:
-        lab_path, info = CR.fetch_main(config)
-        print(f"config: {info['config_commit'][:10]} ({CR.BRANCH})", flush=True)
+        lab_path, info = CR.fetch_main(config, commit)
+        print(f"config: {info['config_commit'][:10]} ({CR.BRANCH})"
+              + (" catching up the hosts that missed it" if commit else ""), flush=True)
         pin = (lock.read(lab_path) or {}).get("commit")
         if not pin:
             raise CR.ConfigError(f"no framework.lock on {CR.BRANCH}")
@@ -408,9 +432,11 @@ def cmd_apply_main(args):
         print(f"lab apply-main: {e}", flush=True)
         return done(False)
     try:
-        rc = deploy(lab_path, {**info, "via": "slack"}, src, owner, allow_missing=True,
+        rc = deploy(lab_path, {**info, "via": "catch-up" if commit else "slack"}, src, owner,
+                    allow_missing=True,
                     self_admin={k: cfg[k] for k in ("config_url", "lab_rel", "framework_source",
-                                                    "framework_owner")})
+                                                    "framework_owner")},
+                    only_behind=bool(commit))
     except SystemExit as e:
         print(e, flush=True)
         rc = 1
@@ -705,6 +731,8 @@ def main(argv=None):
     am = sub.add_parser("apply-main", help="deploy the config repo's main (the secretary's "
                         "one sudo command; started from Slack by an admin)")
     am.add_argument("--run", action="store_true", help=argparse.SUPPRESS)
+    am.add_argument("--catch-up", action="store_true",
+                    help="only the hosts that missed the deploy this host runs (#61)")
     am.set_defaults(fn=cmd_apply_main)
 
     lg = sub.add_parser("logs", help="an agent's event log (sudo, on its host)")
