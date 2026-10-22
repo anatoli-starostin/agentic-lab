@@ -251,7 +251,8 @@ say "framework -> /opt/agentic-lab"
 command -v uv >/dev/null || curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh >/dev/null 2>&1
 mkdir -p /opt/agentic-lab /etc/agentic-lab
 rm -rf /opt/agentic-lab/src.new && mkdir /opt/agentic-lab/src.new
-tar xzf "$B/source.tgz" -C /opt/agentic-lab/src.new
+tar --no-same-owner --no-same-permissions -xzf "$B/source.tgz" -C /opt/agentic-lab/src.new
+chown -R root:root /opt/agentic-lab/src.new && chmod -R go-w /opt/agentic-lab/src.new
 rm -rf /opt/agentic-lab/src && mv /opt/agentic-lab/src.new /opt/agentic-lab/src
 # a Python uv downloads (none 3.12 on the host) must be readable by the lab's users
 export UV_PYTHON_INSTALL_DIR=/opt/agentic-lab/python
@@ -260,7 +261,6 @@ uv pip install -q -p /opt/agentic-lab/venv --reinstall-package agentic-lab /opt/
 install -d /opt/agentic-lab/client
 install -m 644 /opt/agentic-lab/src/client/lab-member.py /opt/agentic-lab/client/
 install -m 644 "$B/lab.yaml" /etc/agentic-lab/lab.yaml
-install -m 644 "$B/applied.yaml" /etc/agentic-lab/applied.yaml   # which commits run here
 ln -sf /opt/agentic-lab/venv/bin/lab /usr/local/bin/lab     # `lab` for every user here
 
 say "sandbox prerequisites"
@@ -289,10 +289,12 @@ def script(plan):
                      "SHELL=/bin/sh bash >/dev/null'")
     lines.append('say "secrets and config"')
     for i, (path, (owner, mode, _)) in enumerate(sorted(plan["files"].items())):
-        d = os.path.dirname(path)
-        lines.append(f"install -d -m 700 -o {owner} -g {owner} {shlex.quote(os.path.dirname(d))} "
-                     f"{shlex.quote(d)}")
-        lines.append(f'install -m {mode} -o {owner} -g {owner} "$B/files/{i}" {shlex.quote(path)}')
+        # written as its owner, into its owner's home: root never acts on paths there
+        lines.append(f"runuser -u {shlex.quote(owner)} -- sh -c "
+                     + shlex.quote('umask 077; mkdir -p "$1" && cat > "$2.new" && '
+                                   f'chmod {mode} "$2.new" && mv -f "$2.new" "$2"')
+                     + f" _ {shlex.quote(os.path.dirname(path))} {shlex.quote(path)}"
+                     f' < "$B/files/{i}"')
     for i, path in enumerate(sorted(plan["envs"])):
         lines.append(f'sed "s/@TAILNET_IP@/$TIP/" "$B/envs/{i}" > {shlex.quote(path)}')
     if plan.get("self_admin"):
@@ -318,6 +320,8 @@ def script(plan):
     for _, unit in plan["units"]:
         note = " (waiting for its secrets)" if unit in held else ""
         lines.append(f'echo "  {unit}: $(systemctl is-active {unit}){note}"')
+    # last: what this host runs now (a failed step above leaves the previous record)
+    lines.append('install -m 644 "$B/applied.yaml" /etc/agentic-lab/applied.yaml')
     return "\n".join(lines) + "\n"
 
 
@@ -375,12 +379,14 @@ def readers_script(readers, readable):
                          "home: not shared'")
             continue
         lines += [
-            f"install -d -o {user} -g {user} -m 700 {q(work)} {q(work + '/tmp')}",
+            # all inside the home as its owner: root never walks paths the agent owns
+            f"runuser -u {q(user)} -- install -d -m 700 {q(work)} {q(work + '/tmp')}",
             # everything in the home but the working folder: the agent's alone
-            f"find {q(home)} -mindepth 1 -maxdepth 1 ! -path {q(work)} -exec chmod go-rwx {{}} +",
-            f"setfacl -m g:lab-readers:x {q(home)}",
-            f"setfacl -R -m g:lab-readers:rX {q(work)}",
-            f"setfacl -R -d -m g:lab-readers:rX {q(work)}",
+            f"runuser -u {q(user)} -- find -P {q(home)} -mindepth 1 -maxdepth 1 "
+            f"! -path {q(work)} ! -type l -exec chmod go-rwx {{}} +",
+            f"[ -L {q(home)} ] || setfacl -m g:lab-readers:x {q(home)}",
+            f"runuser -u {q(user)} -- setfacl -R -P -m g:lab-readers:rX {q(work)}",
+            f"runuser -u {q(user)} -- setfacl -R -P -d -m g:lab-readers:rX {q(work)}",
         ]
     lines.append('echo "  lab-readers: ${members#,} (they may need to log in again)"')
     return lines
@@ -449,10 +455,8 @@ def bundle(plan, lab_path, source, out):
     """Write the host's bundle into directory `out` (mode 700)."""
     os.makedirs(os.path.join(out, "files"), mode=0o700)
     os.makedirs(os.path.join(out, "envs"), mode=0o700)
-    with tarfile.open(os.path.join(out, "source.tgz"), "w:gz") as t:
-        t.add(source, arcname=".", filter=lambda ti: None if any(
-            p in ti.name.split("/") for p in (".git", ".venv", "__pycache__", ".pytest_cache"))
-            else ti)
+    with open(os.path.join(out, "source.tgz"), "wb") as f:
+        f.write(source_archive(source))
     shutil.copy(lab_path, os.path.join(out, "lab.yaml"))
     with open(os.path.join(out, "applied.yaml"), "w") as f:
         yaml.safe_dump(plan.get("applied") or {}, f, sort_keys=False)
@@ -470,6 +474,19 @@ def bundle(plan, lab_path, source, out):
     with open(os.path.join(out, "apply.sh"), "w") as f:
         f.write(script(plan))
     os.chmod(os.path.join(out, "apply.sh"), 0o700)
+
+
+def source_archive(source):
+    """The framework as committed (git archive HEAD): only tracked files, whatever else
+    is in the checkout. `lab apply` has checked HEAD is the pinned commit, with nothing
+    uncommitted."""
+    owner = os.stat(source).st_uid
+    as_owner = (["sudo", "-u", f"#{owner}", "-H"] if os.geteuid() == 0 and owner != 0 else [])
+    r = subprocess.run([*as_owner, "git", "-C", source, "archive", "--format=tar.gz", "HEAD"],
+                       capture_output=True, timeout=120)
+    if r.returncode:
+        raise ApplyError(f"git archive in {source}: {r.stderr.decode(errors='replace')[:200]}")
+    return r.stdout
 
 
 def plan_all(lab_path, hosts=None, tokens=None, intake=intake_secret):
@@ -513,12 +530,13 @@ def run_bundle(plan, local, admin):
                 for n in [root] + [os.path.join(root, x) for x in dirs + fnames]:
                     os.chown(n, pw.pw_uid, pw.pw_gid)
         # a stopped VM (the usual state of an idle GPU host) answers nothing: skip it fast
-        if subprocess.run(as_admin + ["ssh", *SSH_OPTS, target, "true"],
+        if subprocess.run(as_admin + ["ssh", *SSH_OPTS, "--", target, "true"],
                           capture_output=True).returncode == 255:
             return UNREACHABLE
-        r = subprocess.run(as_admin + ["scp", *SSH_OPTS, "-q", "-r", b, f"{target}:{remote}"])
+        r = subprocess.run(as_admin + ["scp", *SSH_OPTS, "-q", "-r", "--", b,
+                                       f"{target}:{remote}"])
         if r.returncode:
             return r.returncode
-        return subprocess.run(as_admin + ["ssh", *SSH_OPTS, target,
+        return subprocess.run(as_admin + ["ssh", *SSH_OPTS, "--", target,
                                           f"sudo bash {remote}/apply.sh; rc=$?; "
                                           f"rm -rf {remote}; exit $rc"]).returncode

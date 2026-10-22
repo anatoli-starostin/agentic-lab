@@ -289,6 +289,10 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
         lab, tokens, plans = plan_all(lab_path, hosts=hosts or None)
     except (ApplyError, lock.LockError) as e:
         sys.exit(f"lab apply: {e}")
+    errors = [i for i in registry.check(lab) if i.level == "error"]
+    if errors:                     # never deploy a lab.yaml lab check refuses
+        sys.exit("lab apply: lab.yaml doesn't pass lab check:\n"
+                 + "\n".join(f"  {i}" for i in errors))
     here, sec_host = this_host(lab), secretary_host(lab)[0]
     lock_fd = deploy_lock()
     if lock_fd is False:

@@ -26,7 +26,8 @@ loginctl disable-linger "$user" 2>/dev/null || true
 
 home=$(getent passwd "$user" | cut -d: -f6)
 rm -rf "$home/.ssh"
-install -d -m 700 -o "$user" -g "$user" "$home" "$home/work"
+install -d -m 700 -o "$user" -g "$user" "$home"
+runuser -u "$user" -- install -d -m 700 "$home/work"     # inside the home: as its owner
 
 # GPU access: the device nodes are world-accessible on most hosts; if this host restricts
 # them to a group (e.g. video, render), add the user to it.
