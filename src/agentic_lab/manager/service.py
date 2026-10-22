@@ -196,6 +196,8 @@ async def serve(lab_path, agent_id, host=None, port=None):
 
     workdir = os.path.expanduser(a.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
+    from .. import safefs
+    safefs.pin(workdir)         # resolved once: its file operations stay there
     tmpdir = lab.agent_tmpdir(agent_id)      # hosts with readers: a tmp they can find (#43)
     if tmpdir:
         os.makedirs(tmpdir, exist_ok=True)
@@ -298,6 +300,8 @@ async def ask(lab_path, agent_id, human, text, wait_s=900):
     env.update(GH.env_for(lab, agent_id))      # its GitHub bot, if it has one
     workdir = os.path.expanduser(a.get("workdir", "~/work"))
     os.makedirs(workdir, exist_ok=True)
+    from .. import safefs
+    safefs.pin(workdir)         # resolved once: its file operations stay there
     state_root = os.path.expanduser(STATE)
     state = ManagerState(os.path.join(state_root, "cli"))
     memory = Memory(os.path.join(state_root, "memory"), shared=a.get("access") == "shared")
