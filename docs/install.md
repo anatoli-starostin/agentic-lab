@@ -244,7 +244,8 @@ After the install, the admin works with **the secretary in a Slack DM**; the con
 emergencies. The rule is the same: only what's merged to the config repo's `main` is
 deployed, and the secretary checks in code that the person asking is an admin.
 
-Workers' long runs have a read-only home (only the working folder is writable): tell
+Workers' long runs have a home of their own (per member; the working folder and caches are
+shared with the agent): tell
 members who set up projects about [docs/long-runs.md](long-runs.md), which lists what
 doesn't work in runs and the workaround for each.
 

@@ -8,8 +8,15 @@ approves it (every time: a run is outside the sandbox), and the worker service s
 as its own systemd unit, `lab-run-<agent>@<run-id>.service`, as the agent's Unix user:
 
     ~/.local/state/agentic-lab/runs/<id>.json         what to run (written by the service)
-    ~/.local/state/agentic-lab/runs/<id>/status.json  state and exit code (by the run)
+    ~/.local/state/agentic-lab/runs/<id>/status.json  state and exit code (by run-exec)
+    ~/.local/state/agentic-lab/run-home/<member>/     the job's home (one per member)
     <workdir>/runs/<name>-<id>/log                    its output, readable by the agent
+
+The unit's main process is `lab worker run-exec` (ours): it reads the spec, writes the
+status, and starts only the job under bwrap, in a process namespace of its own, with a home
+of its own: the member's run home mounted over the real home, the working folder bound back
+on top, the agent's GitHub setup read-only. The lab's secrets and state aren't in that home
+at all, and every tool that writes to ~ just works there (docs/long-runs.md).
 
 The service may start and stop only its own runs: one sudo rule per worker allows only
 deploy/worker/lab-run-ctl, which checks its arguments and takes the agent from SUDO_USER
@@ -45,20 +52,20 @@ def unit(agent_id, run_id):
     return f"lab-run-{agent_id}@{run_id}.service"
 
 
-# No --die-with-parent: on `systemctl stop` the job gets its TERM and its grace period (a
-# checkpoint), bounded by TimeoutStopSec; KillMode=control-group then kills whatever is
-# left in the unit, inside the namespace or not, and if bwrap itself dies the unit ends and
-# the same happens.
-BWRAP = "/usr/bin/bwrap --unshare-pid --dev-bind / / --proc /proc --"
+BWRAP = "/usr/bin/bwrap"
+GITHUB = "~/.local/share/agentic-lab/github"    # the agent's git setup: read-only in a run
+_MEMBER = re.compile(r"^[a-z][a-z0-9-]*$")
 STATUS_KEYS = ("started", "ended", "exit_code", "pid", "stop_requested", "error")
 
 
 def unit_template(agent_id, user, lab_path="/etc/agentic-lab/lab.yaml", home=None,
                   workdir=None):
-    """/etc/systemd/system/lab-run-<agent>@.service: one run of this worker. The run can't
-    see the agent's lab secrets (its member's Claude seat token, lab tokens), and of the
-    home it may write only the working folder and its own status folder: the rest of the
-    home is read-only to it. The real home path: in a system unit %h is root's."""
+    """/etc/systemd/system/lab-run-<agent>@.service: one run of this worker. Two layers:
+    run-exec gives the job a home of its own under bwrap (the main protection, see
+    run_exec); underneath, the unit itself keeps the real home read-only (only the working
+    folder, the run's status and the run homes writable) and the lab's secrets hidden, so a
+    mistake in the job's mounts falls back to that, never below. The real home path: in a
+    system unit %h is root's."""
     home = home or f"/home/{user}"
     workdir = workdir or f"{home}/work"
     return f"""# A long run of worker {agent_id} (worker/runs.py). Started and stopped by the worker
@@ -71,14 +78,14 @@ Type=simple
 User={user}
 Group={user}
 WorkingDirectory=~
-# its own process view on every systemd version: if bwrap can't give it one, it doesn't run
-ExecStart={BWRAP} /opt/agentic-lab/venv/bin/lab --lab {lab_path} worker run-exec {agent_id} %i
+# run-exec starts the job itself, under bwrap (a home and a process view of its own)
+ExecStart=/opt/agentic-lab/venv/bin/lab --lab {lab_path} worker run-exec {agent_id} %i
 NoNewPrivileges=yes
 PrivateTmp=yes
 UMask=0077
 InaccessiblePaths=-{home}/.config/agentic-lab
 ReadOnlyPaths={home}
-ReadWritePaths=-{workdir} -{home}/.local/state/agentic-lab/runs/%i
+ReadWritePaths=-{workdir} -{home}/.local/state/agentic-lab/runs/%i -{home}/.local/state/agentic-lab/run-home
 KillMode=control-group
 TimeoutStopSec=60
 """
@@ -125,10 +132,20 @@ class RunStore:
         except (OSError, ValueError):
             return None
 
-    def start(self, task_id, name, command, cwd=None):
-        """Start a run (already approved). Returns its view."""
+    def run_home(self, member):
+        """The home a member's runs see (one per member: what a run keeps there, e.g. a
+        login, stays theirs on a shared worker). Next to the runs, never in the workdir
+        (the agent's sandbox writes that, and readers read it)."""
+        if not _MEMBER.match(member or ""):
+            raise RunError(f"bad member {member!r}")
+        return os.path.join(os.path.dirname(os.path.abspath(self.root)), "run-home", member)
+
+    def start(self, task_id, name, command, cwd=None, requester=None):
+        """Start a run (already approved) for task `task_id` of member `requester` (from the
+        task, never from the job). Returns its view."""
         if not (command or "").strip():
             raise RunError("a run needs a command")
+        home = self.run_home(requester)
         name = _NAME.sub("-", (name or "run").strip())[:40].strip("-") or "run"
         cwd = os.path.normpath(os.path.join(self.workdir, os.path.expanduser(cwd or ".")))
         if not os.path.isdir(cwd):
@@ -136,9 +153,11 @@ class RunStore:
         run_id = f"r-{secrets.token_hex(6)}"
         logdir = os.path.join(self.workdir, "runs", f"{name}-{run_id}")
         os.makedirs(logdir, exist_ok=True)
-        spec = {"id": run_id, "task": task_id, "name": name, "command": command, "cwd": cwd,
-                "log": os.path.join(logdir, "log"), "created": _now()}
+        spec = {"id": run_id, "task": task_id, "requester": requester, "name": name,
+                "command": command, "cwd": cwd, "log": os.path.join(logdir, "log"),
+                "created": _now()}
         self._write(self._path(run_id), spec)
+        os.makedirs(home, mode=0o700, exist_ok=True)
         os.makedirs(os.path.dirname(self._path(run_id, ".status")), mode=0o700, exist_ok=True)
         try:
             self.systemctl("start", self.agent_id, run_id)
@@ -197,25 +216,20 @@ def log_tail(path, lines=40):
         return ""
 
 
-def home_env(workdir):
-    """A run's home is read-only to it: what tools keep in the home (settings, data, state,
-    per-user installs, package caches) goes into the working folder instead
-    (docs/long-runs.md lists what still can't work)."""
-    w = os.path.abspath(workdir)
-    j = lambda *p: os.path.join(w, *p)          # noqa: E731
-    return {"XDG_CONFIG_HOME": j(".config"),
-            "XDG_DATA_HOME": j(".local", "share"),
-            "XDG_STATE_HOME": j(".local", "state"),
-            "PYTHONUSERBASE": j(".local"),                 # pip install --user
-            "IPYTHONDIR": j(".config", "ipython"),
-            "JUPYTER_CONFIG_DIR": j(".config", "jupyter"),
-            "KERAS_HOME": j(".cache", "keras"),
-            "npm_config_cache": j(".cache", "npm"),
-            "npm_config_prefix": j(".local"),              # npm install -g
-            "CARGO_HOME": j(".cache", "cargo"),
-            "GOPATH": j(".cache", "go"),
-            "CONDA_PKGS_DIRS": j(".cache", "conda", "pkgs"),
-            "CONDA_ENVS_PATH": j("envs")}
+def job_wrapper(home, run_home, workdir, cwd, github=None):
+    """bwrap's arguments for the job (before its command). Order matters: the member's run
+    home goes over the real home first, then the real working folder is bound back on top
+    (bwrap takes sources from the host, so this is the real one even inside the home), then
+    the git setup read-only. The lab's secrets and state aren't in the run home: protected
+    by absence. No --die-with-parent: a stop's TERM reaches the job (KillMode=control-group
+    signals every process of the unit), which then has its grace period."""
+    home, workdir = os.path.abspath(home), os.path.abspath(workdir)
+    github = github or GITHUB.replace("~", home, 1)
+    return [BWRAP, "--unshare-pid", "--dev-bind", "/", "/", "--proc", "/proc",
+            "--bind", run_home, home,
+            "--bind", os.path.realpath(workdir), workdir,
+            "--ro-bind-try", github, github,
+            "--chdir", cwd, "--"]
 
 
 def _systemctl(verb, agent_id, run_id):
@@ -228,20 +242,32 @@ def _systemctl(verb, agent_id, run_id):
     return True
 
 
-def run_exec(store: RunStore, run_id, env=None):
-    """The unit's main process (as the agent's user, outside the sandbox): run the command,
-    output to its log, and record how it ended."""
+def run_exec(store: RunStore, run_id, env=None, wrapper=job_wrapper, home=None):
+    """The unit's main process (as the agent's user, outside the sandbox): start the job
+    under bwrap (`wrapper`, job_wrapper), output to its log, and record how it ended. It
+    never runs a job unwrapped: no bwrap, no member, no run home, no job."""
     spec = store.get(run_id)
     status = store._path(run_id, ".status")
+    home = home or os.path.expanduser("~")
     with open(spec["log"], "ab") as log:
         log.write(f"== {_now()} run {run_id}: {spec['command']}\n".encode())
         log.flush()
+        try:
+            run_home = store.run_home(spec.get("requester"))
+            if not os.path.isdir(run_home):
+                raise RunError(f"no run home {run_home}")
+            if wrapper is job_wrapper and not os.access(BWRAP, os.X_OK):
+                raise RunError(f"{BWRAP} is missing: a run never starts without it")
+            wrap = wrapper(home, run_home, store.workdir, spec["cwd"])
+        except RunError as e:
+            store._write(status, {"state": "failed", "ended": _now(), "error": str(e)})
+            log.write(f"== {_now()} not started: {e}\n".encode())
+            return 1
         from ..policy.sandbox import cache_env      # the same caches as its tasks (#45)
-        p = subprocess.Popen(["/bin/bash", "-c", spec["command"]], cwd=spec["cwd"],
+        p = subprocess.Popen(wrap + ["/bin/bash", "-c", spec["command"]], cwd=spec["cwd"],
                              stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL,
                              start_new_session=True,
-                             env={**os.environ, **cache_env(store.workdir),
-                                  **home_env(store.workdir), **(env or {})})
+                             env={**os.environ, **cache_env(store.workdir), **(env or {})})
         store._write(status, {"state": "running", "started": _now(), "pid": p.pid})
         stopped = {}
 
