@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from agentic_lab.manager import followup
 from agentic_lab.manager import tools as MT
 from agentic_lab.manager.state import ManagerState
+from agentic_lab.manager.workers import WorkerError
 from agentic_lab.worker import tasks as T
 from agentic_lab.worker.runner import Decision, SdkRunner
 from agentic_lab.worker.server import run_tasks
@@ -108,7 +109,11 @@ def test_the_result_is_delivered_even_if_the_wrapup_fails_once(tmp_path):
         told.append(v["result"]["summary"])
     asyncio.run(followup.check_once(state, Workers(), post, finished))
     assert state.open_tasks() and not told            # not marked done: retried
-    asyncio.run(followup.check_once(ManagerState(tmp_path), Workers(), post, finished))
+    again = ManagerState(tmp_path)
+    asyncio.run(followup.check_once(again, Workers(), post, finished))
+    assert told == []                                 # after a pause, not at once
+    again.tasks["t-1"].wrapup_next = 0
+    asyncio.run(followup.check_once(again, Workers(), post, finished))
     assert told == ["ok"]
 
 
@@ -232,3 +237,89 @@ def test_notes_only_on_requests_this_conversation_may_see(tmp_path, monkeypatch)
         "is_error")
     assert asyncio.run(h["add_approval_note"]({"request_id": "r-bob", "note": "x"}))["is_error"]
     assert notes == ["r-mine"]
+
+
+def test_progress_continues_across_an_upgrade(tmp_path):
+    """A task saved before progress_total existed, followed by a manager that counted
+    list positions: new lines still reach the conversation."""
+    import json as _json
+    from agentic_lab.worker import tasks as T2
+    store = T2.TaskStore(tmp_path / "tasks")
+    t = store.submit("x", "alice", "m")
+    raw = _json.loads(open(store._path(t.id)).read())
+    raw["progress"] = [{"at": "x", "message": f"line {i}"} for i in range(40)]
+    raw.pop("progress_total", None)
+    open(store._path(t.id), "w").write(_json.dumps(raw))
+    assert store.get(t.id).progress_total == 40
+    store.add_progress(t.id, "line 40")
+    state = ManagerState(tmp_path / "m")
+    conv = state.conversation("C1", "1.0")
+    state.track(t.id, "worker-a", conv.key, "alice")
+    state.tasks[t.id].progress_seen = 40                 # the old manager's list index
+    posted = []
+
+    class Workers:
+        async def call(self, worker, tool, args=None):
+            return store.get(t.id).view()
+
+    async def post(c, text):
+        posted.append(text)
+    asyncio.run(followup.check_once(state, Workers(), post, None))
+    assert posted and posted[-1].endswith("line 40")
+
+
+def test_a_wrapup_that_keeps_failing_is_given_up(tmp_path):
+    state = ManagerState(tmp_path)
+    conv = state.conversation("C1", "1.0")
+    state.track("t-1", "worker-a", conv.key, "alice")
+    turns = []
+
+    class Workers:
+        async def call(self, worker, tool, args=None):
+            return {"state": "done", "progress": [], "result": {"summary": "ok"}}
+
+    async def finished(c, t, v):
+        turns.append(1)
+        return "the wrap-up"
+
+    async def post(c, text):
+        raise RuntimeError("not_in_channel")
+    for _ in range(followup.WRAPUP_TRIES):
+        state.tasks["t-1"].wrapup_next = 0
+        asyncio.run(followup.check_once(state, Workers(), post, finished))
+    assert turns == [1]                     # written once; only the post was retried
+    assert not state.open_tasks()           # given up
+
+
+def test_registration_already_done_counts(tmp_path):
+    state = ManagerState(tmp_path)
+    conv = state.conversation("C1", "1.0")
+    state.track("t-1", "worker-a", conv.key, "alice", registered=False)
+
+    class Workers:
+        async def call(self, worker, tool, args=None):
+            return {"state": "running", "progress": []}
+
+    async def register(t):
+        raise WorkerError("broker: task t-1 is already registered")
+
+    async def post(c, text):
+        pass
+    asyncio.run(followup.check_once(state, Workers(), post, None, register=register))
+    assert state.tasks["t-1"].registered
+
+
+def test_old_requests_are_withdrawn_until_the_broker_answers(tmp_path):
+    from agentic_lab.worker.server import withdraw_stale
+    store = T.TaskStore(tmp_path / "tasks")
+    t = store.update(store.submit("x", "alice", "m").id, stale_requests=["q-1", "q-2"])
+    answers = {"q-1": True, "q-2": False}
+
+    class Approver:
+        async def withdraw(self, rid):
+            return answers[rid]
+    asyncio.run(withdraw_stale(store, Approver()))
+    assert store.get(t.id).stale_requests == ["q-2"]
+    answers["q-2"] = True
+    asyncio.run(withdraw_stale(store, Approver()))
+    assert store.get(t.id).stale_requests == []

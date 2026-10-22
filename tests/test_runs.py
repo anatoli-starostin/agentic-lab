@@ -254,7 +254,8 @@ def test_warm_environments(tmp_path, monkeypatch):
     tasks, runs, units = stores(tmp_path)
     r = runs.start("t-1", "env", "echo $TORCH_EXTENSIONS_DIR")
     R.run_exec(runs, r["id"])
-    assert f"{tmp_path}/work/.cache/torch_extensions" in R.log_tail(r["log"])
+    assert f"{tmp_path}/work/.cache/torch_extensions" in R.log_tail(r["log"], 40,
+                                                                    str(tmp_path / "work"))
     t = tasks.submit("x", "alice", "mgr")
     prompt = RN._system_prompt("worker-a", t, keep_free_gb=77)
     assert "ENVIRONMENTS.md" in prompt and "77 GB" in prompt and "{" not in prompt
@@ -313,3 +314,18 @@ def test_a_run_writes_only_its_own_part_of_the_state():
     assert "ReadOnlyPaths=-/home/lab-worker-a/.local/state/agentic-lab" in lines
     assert "ReadWritePaths=-/home/lab-worker-a/.local/state/agentic-lab/runs" in lines
     assert "InaccessiblePaths=-/home/lab-worker-a/.config/agentic-lab" in lines
+
+
+def test_ended_runs_arent_asked_about(tmp_path):
+    asked = []
+
+    def systemctl(verb, agent, run_id):
+        asked.append(run_id)
+        return False
+    runs = R.RunStore(str(tmp_path / "state"), str(tmp_path / "work"), "worker-a",
+                      systemctl=systemctl)
+    (tmp_path / "work").mkdir(exist_ok=True)
+    r = runs.start("t-1", "x", "true")
+    runs._write(runs._path(r["id"], ".status"), {"state": "exited", "exit_code": 0})
+    asked.clear()
+    assert runs.view(r["id"])["state"] == "exited" and asked == []

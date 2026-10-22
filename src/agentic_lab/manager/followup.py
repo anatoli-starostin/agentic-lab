@@ -7,6 +7,7 @@ agent gets a message about it and writes the wrap-up for the member.
 """
 import asyncio
 import logging
+import time
 
 from .workers import WorkerError
 
@@ -18,17 +19,34 @@ TERMINAL = ("done", "failed", "cancelled")
 _wrapups = set()                # wrap-ups running in the background (kept referenced)
 _wrapping = set()               # task ids whose wrap-up is running (not started twice)
 GIVE_UP_AFTER = 15              # rounds a worker doesn't know a task before we stop following
+WRAPUP_TRIES = 5                # failed wrap-ups before giving up on one
+WRAPUP_PAUSE_S = (30, 120, 600, 1800)   # between them
 
 
-async def _wrapup(state, finished, conv, t, view):
-    """The agent tells the member; only then is the task done (a restart before that
-    re-runs the wrap-up, so the result is never lost, #58)."""
+async def _wrapup(state, finished, post, conv, t, view):
+    """The agent writes the wrap-up, then it's posted; only then is the task done (a
+    restart before that redoes what's missing, so the result is never lost, #58). The
+    reply is kept once written: a failed post is retried without a new turn. A wrap-up
+    that keeps failing is retried a few times, with pauses, then given up."""
     try:
-        await finished(conv, t, view)
-        t.done = True
+        if t.wrapup_reply is None:
+            t.wrapup_reply = await finished(conv, t, view) or ""
+            state.save()
+        if t.wrapup_reply:
+            await post(conv, t.wrapup_reply)
+        t.done, t.wrapup_reply = True, None
         state.save()
     except Exception:
-        log.exception("wrapping up %s failed", t.task_id)
+        t.wrapup_tries += 1
+        if t.wrapup_tries >= WRAPUP_TRIES:
+            log.exception("wrapping up %s failed %d times: giving up", t.task_id,
+                          t.wrapup_tries)
+            t.done = True
+        else:
+            log.exception("wrapping up %s failed", t.task_id)
+            t.wrapup_next = time.time() + WRAPUP_PAUSE_S[min(t.wrapup_tries,
+                                                             len(WRAPUP_PAUSE_S)) - 1]
+        state.save()
     finally:
         _wrapping.discard(t.task_id)
 
@@ -41,7 +59,7 @@ async def check_once(state, workers, post, finished, mention=lambda human: human
     `background`: run each wrap-up (a whole agent turn) on its own, so a long one never
     holds up the other tasks' progress."""
     for t in state.open_tasks():
-        if t.task_id in _wrapping:
+        if t.task_id in _wrapping or t.wrapup_next > time.time():
             continue
         if not t.registered and register is not None:
             try:
@@ -49,7 +67,14 @@ async def check_once(state, workers, post, finished, mention=lambda human: human
                 t.registered = True
                 state.save()
             except Exception as e:
-                log.warning("registering %s with the broker: %s", t.task_id, e)
+                if "already registered" in str(e):     # an earlier try got through
+                    t.registered = True
+                elif str(e).startswith("broker:"):     # refused: retrying won't help
+                    log.error("the broker refused registering %s: %s", t.task_id, e)
+                    t.registered = True
+                else:
+                    log.warning("registering %s with the broker: %s", t.task_id, e)
+                state.save()
         try:
             view = await workers.call(t.worker, "task_result", {"task_id": t.task_id})
         except WorkerError as e:
@@ -71,7 +96,9 @@ async def check_once(state, workers, post, finished, mention=lambda human: human
             continue
         lines = view.get("progress") or []
         # new lines by the total ever added: the worker keeps only the last ones (#58)
-        total = view.get("progress_total", len(lines))
+        total = max(view.get("progress_total") or 0, len(lines))
+        if total < t.progress_seen:             # counted otherwise before an upgrade
+            t.progress_seen = max(0, total - 1)
         new = max(0, total - t.progress_seen)
         if new > len(lines):
             await post(conv, f"🔧 _{t.worker}_ · … {new - len(lines)} earlier progress lines "
@@ -94,11 +121,11 @@ async def check_once(state, workers, post, finished, mention=lambda human: human
             _wrapping.add(t.task_id)
             state.save()
             if background:
-                task = asyncio.create_task(_wrapup(state, finished, conv, t, view))
+                task = asyncio.create_task(_wrapup(state, finished, post, conv, t, view))
                 _wrapups.add(task)
                 task.add_done_callback(_wrapups.discard)
             else:
-                await _wrapup(state, finished, conv, t, view)
+                await _wrapup(state, finished, post, conv, t, view)
         state.save()
 
 

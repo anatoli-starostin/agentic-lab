@@ -297,9 +297,10 @@ def cmd_apply(args):
 
 
 def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_admin=None,
-           only_behind=False):
+           only_behind=False, locked=False):
     """Ship `lab_path` (already the reviewed one) and framework `source` to the hosts.
-    `only_behind`: skip hosts that already run exactly this (a catch-up, #61)."""
+    `only_behind`: skip hosts that already run exactly this (a catch-up, #61); `locked`:
+    the caller holds the deploy lock."""
     import os
 
     from . import configrepo as CR
@@ -317,7 +318,7 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
         sys.exit("lab apply: lab.yaml doesn't pass lab check:\n"
                  + "\n".join(f"  {i}" for i in errors))
     here, sec_host = this_host(lab), secretary_host(lab)[0]
-    lock_fd = deploy_lock()
+    lock_fd = None if locked else deploy_lock()     # `locked`: the caller holds it
     if lock_fd is False:
         sys.exit("lab apply: a deploy is already running; try again when it's done")
     tokens.save()                  # generated tokens are kept before anything uses them
@@ -422,6 +423,10 @@ def cmd_apply_main(args):
     def done(ok):
         print(f"{RESULT} {'ok' if ok else 'failed'}", flush=True)
         return 0 if ok else 1
+    held = deploy_lock()        # held from the fetch to the end (#61)
+    if held is False:
+        print("lab apply-main: a deploy is already running", flush=True)
+        return done(False)
     os.environ["LAB_GIT_USER"] = cfg["config_owner"]       # its clone, its deploy key
     config = os.path.join(os.path.expanduser(f"~{cfg['config_owner']}"),
                           ".local/state/agentic-lab/config-repo", cfg.get("lab_rel", "lab.yaml"))
@@ -457,7 +462,7 @@ def cmd_apply_main(args):
                     allow_missing=True,
                     self_admin={k: cfg[k] for k in ("config_url", "lab_rel", "framework_source",
                                                     "framework_owner")},
-                    only_behind=bool(commit))
+                    only_behind=bool(commit), locked=held is not None)
     except SystemExit as e:
         print(e, flush=True)
         rc = 1

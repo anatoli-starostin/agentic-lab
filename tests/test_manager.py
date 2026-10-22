@@ -756,3 +756,24 @@ def test_idle_stop_is_reliable(tmp_path):
         async def call(self, w, tool, args=None, retries=None):
             raise RuntimeError("unreachable")
     assert "couldn't re-check" in asyncio.run(P.recheck(lab, "gpu-a", Down(), snap))
+
+
+def test_idle_and_down_are_judged_only_while_watched(tmp_path):
+    """A stopped host's workers aren't "down"; idle timers from before a long secretary
+    outage start over."""
+    import datetime as dt
+    import json
+    from agentic_lab.secretary import power as P
+    lab = registry.load(EXAMPLE)
+    t0 = dt.datetime(2026, 10, 17, 12, tzinfo=dt.timezone.utc)
+    snap = {"agents": {"worker-a": {"up": True, "queue": {}}, "worker-b": {"up": False}}}
+    w = P.IdleWatch(str(tmp_path / "idle.json"))
+    w.candidates(lab, snap, now=t0, power={"gpu-b": "STOPPED"})
+    assert "gpu-b" not in w.down_since
+    w.candidates(lab, snap, now=t0, power={"gpu-b": "RUNNING"})
+    assert w.down_since["gpu-b"] == t0
+    w.save()
+    d = json.loads((tmp_path / "idle.json").read_text())
+    d["saved"] = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=3)).isoformat()
+    (tmp_path / "idle.json").write_text(json.dumps(d))
+    assert P.IdleWatch(str(tmp_path / "idle.json")).idle_since == {}

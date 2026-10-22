@@ -66,20 +66,22 @@ class Access:
 
 
 def read_workdir_file(workdir, path):
-    """A file from the worker's working folder (never outside it), as base64."""
+    """A plain file in the worker's working folder (never outside it, never through a
+    link: safefs), as base64."""
+    from .. import safefs
     root = os.path.realpath(workdir)
-    full = os.path.realpath(path if os.path.isabs(path) else os.path.join(root, path))
-    if full != root and not full.startswith(root + os.sep):
-        raise ToolError("only files in the worker's working folder can be read")
-    if not os.path.isfile(full):
-        raise ToolError(f"no such file: {path}")
-    size = os.path.getsize(full)
-    if size > MAX_FILE_BYTES:
-        raise ToolError(f"{path} is {size // 1_000_000} MB; the limit is "
-                        f"{MAX_FILE_BYTES // 1_000_000} MB")
-    with open(full, "rb") as f:
-        data = f.read()
-    return {"path": full, "name": os.path.basename(full), "size": size,
+    full = os.path.normpath(path if os.path.isabs(path) else os.path.join(root, path))
+    try:
+        size = safefs.size(root, full)
+        if size > MAX_FILE_BYTES:
+            raise ToolError(f"{path} is {size // 1_000_000} MB; the limit is "
+                            f"{MAX_FILE_BYTES // 1_000_000} MB")
+        data = safefs.read(root, full, limit=MAX_FILE_BYTES)
+    except FileNotFoundError:
+        raise ToolError(f"no such file: {path}") from None
+    except OSError:
+        raise ToolError("only plain files in the worker's working folder can be read") from None
+    return {"path": full, "name": os.path.basename(full), "size": len(data),
             "base64": base64.b64encode(data).decode()}
 
 
@@ -95,11 +97,11 @@ def write_inbox_file(workdir, name, b64):
         raise ToolError("the file must be base64") from None
     if len(data) > MAX_FILE_BYTES:
         raise ToolError(f"the limit is {MAX_FILE_BYTES // 1_000_000} MB")
-    inbox = os.path.join(os.path.realpath(workdir), "inbox")
-    os.makedirs(inbox, exist_ok=True)
-    path = os.path.join(inbox, name)
-    with open(path, "wb") as f:
-        f.write(data)
+    from .. import safefs
+    try:
+        path = safefs.write(os.path.realpath(workdir), os.path.join("inbox", name), data)
+    except OSError as e:
+        raise ToolError(f"couldn't store it: {e}") from None
     return {"path": path, "size": len(data)}
 
 
@@ -386,22 +388,51 @@ async def run_tasks(store: T.TaskStore, runner, stop: asyncio.Event, runs=None):
     approver = getattr(runner, "approver", None)
     for t in store.recover():
         log.info("requeued %s after restart", t.id)
-        for rid in t.pending_requests:      # its old approval requests: no longer waited for
-            if approver is not None:
-                await approver.withdraw(rid)
-        if t.pending_requests:
-            store.update(t.id, pending_requests=[])
-    loop = asyncio.get_running_loop()
-    last_wake = 0.0
-    while not stop.is_set():
-        if loop.time() - last_wake >= WAKE_CHECK_S:
-            last_wake = loop.time()
+        if t.pending_requests:              # its old approval requests: no longer waited for
+            store.update(t.id, stale_requests=t.stale_requests + t.pending_requests,
+                         pending_requests=[])
+    # waking parked tasks, stopping orphaned runs, withdrawing old requests: on their own,
+    # so they go on while a task runs (#59), and never hold up the start (#58)
+    keeper = asyncio.create_task(housekeeping(store, runs, approver, stop))
+    try:
+        await _task_loop(store, runner, stop)
+    finally:
+        keeper.cancel()
+
+
+async def withdraw_stale(store, approver):
+    """Withdraw the requests of tasks requeued after a crash; keep those the broker
+    couldn't be asked about, for the next round."""
+    for t in store.all():
+        left = []
+        for rid in t.stale_requests:
             try:
-                for t in await asyncio.to_thread(wake_waiting, store, runs):
-                    log.info("woke %s: %s", t.id, t.wake)
-                await asyncio.to_thread(stop_orphaned_runs, store, runs)
+                ok = await approver.withdraw(rid) if approver is not None else True
             except Exception:
-                log.exception("checking waiting tasks failed")
+                ok = False
+            if ok is False:
+                left.append(rid)
+        if left != t.stale_requests:
+            store.update(t.id, stale_requests=left)
+
+
+async def housekeeping(store, runs, approver, stop):
+    while not stop.is_set():
+        try:
+            for t in await asyncio.to_thread(wake_waiting, store, runs):
+                log.info("woke %s: %s", t.id, t.wake)
+            await asyncio.to_thread(stop_orphaned_runs, store, runs)
+            await withdraw_stale(store, approver)
+        except Exception:
+            log.exception("checking waiting tasks failed")
+        try:
+            await asyncio.wait_for(stop.wait(), WAKE_CHECK_S)
+        except asyncio.TimeoutError:
+            pass
+
+
+async def _task_loop(store, runner, stop):
+    while not stop.is_set():
         task = store.next_queued()
         if task is None:
             try:
