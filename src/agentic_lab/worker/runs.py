@@ -45,6 +45,7 @@ def unit(agent_id, run_id):
     return f"lab-run-{agent_id}@{run_id}.service"
 
 
+BWRAP = "/usr/bin/bwrap --die-with-parent --unshare-pid --dev-bind / / --proc /proc --"
 STATUS_KEYS = ("started", "ended", "exit_code", "pid", "stop_requested", "error")
 
 
@@ -66,7 +67,8 @@ Type=simple
 User={user}
 Group={user}
 WorkingDirectory=~
-ExecStart=/opt/agentic-lab/venv/bin/lab --lab {lab_path} worker run-exec {agent_id} %i
+# its own process view on every systemd version: if bwrap can't give it one, it doesn't run
+ExecStart={BWRAP} /opt/agentic-lab/venv/bin/lab --lab {lab_path} worker run-exec {agent_id} %i
 NoNewPrivileges=yes
 PrivateTmp=yes
 UMask=0077
