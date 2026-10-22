@@ -18,6 +18,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
 
 from ..eventlog import tool_summary
 
+from ..policy.confine import approved_input
 from ..policy.grants import Grant
 
 # The lab tools are auto-allowed on purpose (allowed_tools); the SDK warns that the
@@ -158,8 +159,9 @@ class Brain:
             log("approval", "asked: " + tool_summary(tool_name, tool_input))
             d = await self.approver.ask(asker, tool_name, tool_input, list(violations))
             log("approval", f"decided: {d.kind}")
-            if d.kind == "allow":
-                return PermissionResultAllow()
+            if d.kind == "allow":           # as approved; started confined (policy/confine)
+                return PermissionResultAllow(
+                    updated_input=approved_input(tool_name, tool_input))
             if d.kind == "grant":
                 if all(g["kind"] == "tool" for g in d.grants):
                     tool_grants.update(g["value"] for g in d.grants)

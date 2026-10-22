@@ -7,7 +7,11 @@ item stays under "To verify" until a test on a real host proves it.
 
 Every agent: inside Claude Code's built-in sandbox, Bash is auto-allowed with no internet,
 the tailnet, and writes to its working folder and tmp. Outside the sandbox, internet and
-writes need a human's permission; reads are free. Grants widen the sandbox for a while
+writes need a human's permission; reads are free. A command a human approved to run
+outside the sandbox keeps everything the agent's user may do on the machine, but not the
+lab's own credentials and state, nor a view of the service's processes: it starts in a
+process namespace of its own, with those folders and files covered (`policy/confine.py`).
+The approval itself is unchanged. Grants widen the sandbox for a while
 (or permanently, in `lab.yaml`). There is no command parsing anywhere: a parser that
 decides from command text is an arms race: an earlier command classifier yielded about ten
 bypasses in one afternoon, and that's why we dropped the approach.
