@@ -121,7 +121,19 @@ def run_checks(aid, user):
         out.append(Result(FAIL, f"no sudo rule for {user}'s long runs", "sudo lab apply"))
     elif ok:
         out.append(Result(OK, "long runs: sudo rule"))
+    v = systemd_version()
+    if v is not None and v < 257:
+        out.append(Result(WARN, f"systemd {v}: long runs share the agent's process view "
+                          "(PrivatePIDs needs systemd 257 or newer)",
+                          "use a newer OS image for this host"))
     return out
+
+
+def systemd_version():
+    code, out = sh("systemctl", "--version")
+    import re as _re
+    m = _re.match(r"\D*(\d+)", out or "")
+    return int(m.group(1)) if code == 0 and m else None
 
 
 def user_checks(user):

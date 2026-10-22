@@ -64,7 +64,9 @@ What it took:
   offered, `lab check` refuses one in `lab.yaml`, and the runner ignores any. Review what
   the command runs (a script the agent wrote can do anything that user can). What stays
   in place: the run unit has `NoNewPrivileges` (it can't use the worker's sudo rule to
-  start more runs), a private `/tmp`, and the worker's sudo rule allows only
+  start more runs), a private `/tmp`, its own process view (`PrivatePIDs`, systemd 257 or
+  newer; `lab doctor` warns on older hosts), the lab's state and git setup read-only (only
+  its runs' status writable), and the worker's sudo rule allows only
   `lab-run-ctl`, which starts or stops `lab-run-<that agent>@r-<12 hex>.service` and
   nothing else (the agent comes from `SUDO_USER`). Inside its sandbox the agent can't use
   sudo or reach systemd (`/run` hidden), so only the worker service starts runs.

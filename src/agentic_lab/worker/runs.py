@@ -68,8 +68,9 @@ NoNewPrivileges=yes
 PrivateTmp=yes
 UMask=0077
 InaccessiblePaths=-{home}/.config/agentic-lab
-ReadOnlyPaths=-{home}/.local/state/agentic-lab
+ReadOnlyPaths=-{home}/.local/state/agentic-lab -{home}/.local/share/agentic-lab
 ReadWritePaths=-{home}/.local/state/agentic-lab/runs
+PrivatePIDs=yes
 KillMode=control-group
 TimeoutStopSec=60
 """

@@ -399,23 +399,26 @@ def readers_script(readers, readable):
              "members=''"]
     for r in readers:
         lines.append(f"if id {q(r)} >/dev/null 2>&1; then members=\"$members,{r}\"; "
-                     f"else echo '  no user {r} here: skipped'; fi")
+                     f"else echo {q(f'  no user {r} here: skipped')}; fi")
     lines.append('gpasswd -M "${members#,}" lab-readers >/dev/null')
     for user, work in sorted(readable.items()):
         home = f"/home/{user}"
         if os.path.dirname(work) != home:
-            lines.append(f"echo '  {user}: its working folder {work} is not directly in its "
-                         "home: not shared'")
+            lines.append("echo " + q(f"  {user}: its working folder {work} is not directly "
+                                     "in its home: not shared"))
             continue
         lines += [
             # all inside the home as its owner: root never walks paths the agent owns
             f"runuser -u {q(user)} -- install -d -m 700 {q(work)} {q(work + '/tmp')}",
             # everything in the home but the working folder: the agent's alone
             f"runuser -u {q(user)} -- find -P {q(home)} -mindepth 1 -maxdepth 1 "
-            f"! -path {q(work)} ! -type l -exec chmod go-rwx {{}} +",
+            f"! -path {q(work)} ! -type l -exec chmod go-rwx {{}} + 2>/dev/null || "
+            f"echo {q(f'  {user}: some files in its home are not its own: left as they are')}",
             f"[ -L {q(home)} ] || setfacl -m g:lab-readers:x {q(home)}",
-            f"runuser -u {q(user)} -- setfacl -R -P -m g:lab-readers:rX {q(work)}",
-            f"runuser -u {q(user)} -- setfacl -R -P -d -m g:lab-readers:rX {q(work)}",
+            f"runuser -u {q(user)} -- setfacl -R -P -m g:lab-readers:rX {q(work)} 2>/dev/null "
+            f"|| echo {q(f'  {user}: some files in {work} are not its own: not shared')}",
+            f"runuser -u {q(user)} -- setfacl -R -P -d -m g:lab-readers:rX {q(work)} "
+            "2>/dev/null || true",
         ]
     lines.append('echo "  lab-readers: ${members#,} (they may need to log in again)"')
     return lines
@@ -425,7 +428,11 @@ def run_units_script(run_units):
     """Workers' long runs (worker/runs.py): a unit template per worker, and the sudo rule
     that lets each worker's service start and stop its own runs."""
     from .worker.runs import sudo_rule, unit_template
-    lines = ['say "long runs"']
+    lines = ['say "long runs"',
+             # older systemd ignores some of the runs' settings (it says which): flagged
+             'v=$(systemctl --version | sed -n "1s/[^0-9]*\\([0-9]*\\).*/\\1/p"); '
+             '[ "${v:-0}" -ge 257 ] || echo "  note: systemd ${v:-?} here; runs are less '
+             'isolated before 257 (lab doctor)"']
     for aid, user in sorted(run_units.items()):
         lines.append(f"cat > /etc/systemd/system/lab-run-{aid}@.service <<'UNIT'\n"
                      f"{unit_template(aid, user)}UNIT")
@@ -460,8 +467,8 @@ def self_admin_script(sa):
         "echo '  sudo rule refused by visudo'; }",
     ]
     if sa.get("github"):        # its GitHub identity: HTTPS, its service clones (no deploy key)
-        return rule + [f"echo '  config repo: the secretary uses its GitHub identity "
-                       f"{sa['github']} (HTTPS, its service clones; no deploy key)'"]
+        return rule + ["echo " + q(f"  config repo: the secretary uses its GitHub identity "
+                                   f"{sa['github']} (HTTPS, its service clones; no deploy key)")]
     ssh = ("ssh -i ~/.config/agentic-lab/config-repo-key -o IdentitiesOnly=yes "
            "-o StrictHostKeyChecking=accept-new")
     return rule + [
@@ -477,7 +484,7 @@ def self_admin_script(sa):
         f"core.sshCommand {q(ssh)} && echo '  config repo: cloned for the secretary' || {{ "
         "echo '  the secretary cannot reach the config repo yet. Add this deploy key to it, "
         "WITH write access (it pushes branches, never merges), then sudo lab apply again:'; "
-        f"sed 's/^/    /' ~{u}/.config/agentic-lab/config-repo-key.pub; }}",
+        f"runuser -u {u} -- sed 's/^/    /' /home/{u}/.config/agentic-lab/config-repo-key.pub; }}",
     ]
 
 

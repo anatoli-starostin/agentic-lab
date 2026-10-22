@@ -80,12 +80,19 @@ def _workers(state, human_id):
     return blocks or [_section("_No workers._")]
 
 
+def _inert(text):
+    """Agent-provided text in mrkdwn: no formatting, links or mentions from inside."""
+    return ("‘" + text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+            .replace("`", "ˋ").replace("*", "∗").replace("_", "＿").replace("~", "∼")
+            .replace("\n", " ") + "’")
+
+
 def _approvals(state, human_id):
     ap = state.get("approvals") or {}
     mine = [r for r in ap.get("pending") or [] if r.get("human") == human_id]
     if not mine:
         return [_context("No approvals waiting for you.")]
-    rows = [f"• *{r['agent']}*: `{r['detail'][:80]}`"
+    rows = [f"• *{r['agent']}*: {_inert(r['detail'][:80])}"
             + (f" (until {r['expires'][11:16]} UTC)" if r.get("expires") else "")
             for r in mine]
     return [_section(f"*⏳ {len(mine)} waiting for you* (in your DM from the approvals app)\n"
