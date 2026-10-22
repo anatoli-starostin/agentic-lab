@@ -113,10 +113,13 @@ def cmd_worker_run_exec(args):
     a = lab.agents.get(args.agent) or {}
     if a.get("role") != "worker":
         raise SystemExit(f"{args.agent!r} is not a worker")
+    from . import github as GH
     workdir = os.path.expanduser(a.get("workdir", "~/work"))
     tmpdir = lab.agent_tmpdir(args.agent)
+    # the agent's git setup, bound into the run read-only: git and gh must find it
+    env = {**GH.environment(lab, args.agent), **({"TMPDIR": tmpdir} if tmpdir else {})}
     return run_exec(RunStore(os.path.expanduser(f"{STATE}/runs"), workdir, args.agent),
-                    args.run, env={"TMPDIR": tmpdir} if tmpdir else None)
+                    args.run, env=env)
 
 
 STATE = "~/.local/state/agentic-lab"
