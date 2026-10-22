@@ -348,12 +348,16 @@ def test_a_run_finds_the_agents_git_setup(tmp_path, monkeypatch):
     written = GH.prepare(lab, w, root=str(root), secrets=str(secrets), helper=str(HELPER))
     assert written == GH.environment(lab, w, root=str(root))       # one source of truth
     env = GH.environment(lab, w)
-    home = os.path.expanduser("~")
-    ro = R.job_wrapper(home, "/rh", str(tmp_path / "work"), str(tmp_path / "work"))
-    bound = ro[ro.index("--ro-bind-try") + 1]
-    assert ro[ro.index("--ro-bind-try") + 2] == bound              # read-only, same place
-    assert env["GIT_CONFIG_GLOBAL"].startswith(bound + os.sep)
-    assert env["LAB_GITHUB_DIR"] == bound
+    # in a run, as in a command, the git setup is readable and not writable: the job's
+    # root is read-only and the setup is neither in what it may write nor in what's hidden
+    from agentic_lab.policy import sandbox
+    fs = sandbox.filesystem(str(tmp_path / "work"))
+    job = R.job_wrapper(fs, str(tmp_path / "work"))
+    assert job[2:5] == ["--ro-bind", "/", "/"]
+    setup = os.path.expanduser(GH.ROOT)
+    assert env["GIT_CONFIG_GLOBAL"].startswith(setup + os.sep) and env["LAB_GITHUB_DIR"] == setup
+    assert not any(setup.startswith(p) or p.startswith(setup)
+                   for p in fs["allowWrite"] + fs["denyRead"])
     assert env["PATH"].startswith(GH.SHIM + ":")
     seen = {}
     monkeypatch.setattr("agentic_lab.registry.load", lambda p: lab)

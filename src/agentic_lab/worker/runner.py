@@ -149,11 +149,10 @@ Long jobs (training, big evaluations, anything over ~10 minutes):
 - While a task waits, you may get other tasks. Before using the GPU, check run_status:
   don't start GPU work that would compete with a running run unless the task says so.
 - finish_task only once the task's runs are over (stop_run the ones you don't need).
-- Inside a run, ~ is a home of the run's own (per member, kept between their runs; your
-  task's home files aren't there), your working folder is the same as here, /tmp is the
-  run's own, and it sees only its own processes. Caches are shared with your commands
-  here. Keep anything you need later in the working folder. A stop gives the job a TERM
-  and a minute to save.
+- A run has the same rules as your commands here (it reads what you read, writes only
+  your working folder, /tmp and granted folders, sees only its own processes), with its
+  own /tmp and no network limit. Caches are shared with your commands. A stop gives the
+  job a TERM and a minute to save.
 
 Warm environments: setting up a project often takes longer than the experiment, so keep
 what you build and reuse it.
@@ -200,7 +199,7 @@ class SdkRunner:
         if self.events is not None:
             self.events.add(kind, text, **meta)
 
-    def _lab_server(self, task, store, outcome):
+    def _lab_server(self, task, store, outcome, fs=None):
         @tool("report_progress", "Report progress on the current task to the humans "
               "following it.", {"message": str})
         async def report_progress(args):
@@ -227,10 +226,10 @@ class SdkRunner:
 
         tools = [report_progress, finish_task]
         if self.runs is not None:
-            tools += self._run_tools(task, store, outcome)
+            tools += self._run_tools(task, store, outcome, fs)
         return create_sdk_mcp_server("lab", tools=tools)
 
-    def _run_tools(self, task, store, outcome):
+    def _run_tools(self, task, store, outcome, fs=None):
         runs = self.runs
 
         @tool("start_run", "Start a long job (training, a big evaluation...) as a run: it goes "
@@ -244,8 +243,9 @@ class SdkRunner:
                "required": ["name", "command"]})
         async def start_run(args):
             try:
+                # the run is held to the session's own sandbox policy (same rules, longer)
                 r = runs.start(task.id, args.get("name"), args["command"], args.get("cwd"),
-                               requester=task.requester)
+                               requester=task.requester, policy=fs)
             except R.RunError as e:
                 return _text(str(e), True)
             store.add_progress(task.id, f"started run {r['id']} ({r['name']}): {r['command']}")
@@ -369,7 +369,8 @@ class SdkRunner:
             setting_sources=[],
             permission_mode="default",
             can_use_tool=can_use_tool,
-            mcp_servers={"lab": self._lab_server(task, store, outcome)},
+            mcp_servers={"lab": self._lab_server(
+                task, store, outcome, (settings.get("sandbox") or {}).get("filesystem"))},
             allowed_tools=list(LAB_TOOLS),
             system_prompt={"type": "preset", "preset": "claude_code",
                            "append": _system_prompt(self.agent_id, task, self.keep_free_gb)
