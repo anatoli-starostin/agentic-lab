@@ -20,8 +20,15 @@ def test_the_home_is_read_only_but_the_work_isnt():
 def test_a_run_has_its_own_process_view():
     u = R.unit_template("worker-a", "lab-worker-a").splitlines()
     start = next(ln for ln in u if ln.startswith("ExecStart="))
-    assert start.startswith("ExecStart=/usr/bin/bwrap --die-with-parent --unshare-pid "
+    assert start.startswith("ExecStart=/usr/bin/bwrap --unshare-pid "
                             "--dev-bind / / --proc /proc -- /opt/agentic-lab/venv/bin/lab ")
+
+
+def test_a_stopped_run_gets_its_grace_period_and_nothing_outlives_it():
+    u = R.unit_template("worker-a", "lab-worker-a").splitlines()
+    assert "--die-with-parent" not in " ".join(u)     # TERM reaches the job: it can save
+    assert "KillMode=control-group" in u               # then everything in the unit goes
+    assert "TimeoutStopSec=60" in u                    # within this
 
 
 @pytest.mark.skipif(not shutil.which("systemd-analyze"), reason="no systemd here")
@@ -67,3 +74,12 @@ def test_runs_from_before_still_read(tmp_path):
 def test_tools_keep_their_files_in_the_working_folder():
     env = R.home_env("/w")
     assert env["XDG_CONFIG_HOME"] == "/w/.config" and env["XDG_DATA_HOME"] == "/w/.local/share"
+    assert all(v.startswith("/w/") for v in env.values())
+
+
+def test_the_runs_page_lists_every_redirect():
+    from pathlib import Path
+    from agentic_lab.policy.sandbox import cache_env
+    page = (Path(__file__).parent.parent / "docs" / "long-runs.md").read_text()
+    for name in list(R.home_env("/w")) + list(cache_env("/w")):
+        assert f"`{name}`" in page, name

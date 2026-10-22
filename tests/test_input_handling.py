@@ -95,6 +95,29 @@ def test_write_grants_elsewhere_are_fine():
     G.validate("write", "/data/shared")
 
 
+@pytest.mark.parametrize("path", ["/proc/self/root/home/x", "/proc/self/cwd", "/proc/1/root",
+                                  "/proc/thread-self/root", "//proc/self/root", "/dev/fd/3",
+                                  "/dev/stdin", "/sys/kernel", "/run/user/1000"])
+def test_write_grants_never_name_system_views(path):
+    with pytest.raises(G.GrantError):
+        G.validate("write", path)
+
+
+def test_where_a_granted_folder_leads_is_checked_on_the_host(tmp_path, monkeypatch):
+    from agentic_lab.policy.sandbox import settings
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    (home / "work").mkdir()
+    (home / "data").mkdir()
+    (home / "work" / "link").symlink_to(home / ".claude")
+    monkeypatch.setenv("HOME", str(home))
+    assert G.resolved_refused("~/work/link")
+    assert G.resolved_refused("~/data") is None
+    gs = [G.Grant("write", "~/work/link"), G.Grant("write", "~/data")]
+    allow = settings(str(home / "work"), grant_list=gs)["sandbox"]["filesystem"]["allowWrite"]
+    assert str(home / "data") in allow and not any("link" in a for a in allow)
+
+
 def test_restarts_for_expiry_are_bounded(tmp_path, monkeypatch):
     store = T.TaskStore(tmp_path / "tasks")
     t = store.update(store.submit("x", "alice", "m").id, state=T.RUNNING)
