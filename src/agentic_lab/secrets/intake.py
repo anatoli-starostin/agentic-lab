@@ -132,7 +132,7 @@ class Intake:
         os.makedirs(self.requests_dir, mode=0o700, exist_ok=True)
         os.makedirs(self.secrets_dir, mode=0o700, exist_ok=True)
         self._lock = threading.Lock()
-        self._failures = []
+        self._failures = {}         # source (the caller's address) -> times of bad codes
 
     # ── requests ─────────────────────────────────────────────────────────────
 
@@ -150,25 +150,32 @@ class Intake:
                        json.dumps(req.__dict__))
         return code
 
-    def _too_many_failures(self):
+    def _too_many_failures(self, source):
+        """Bad codes are counted per caller (#63): one device guessing can't lock out the
+        others, who hold valid codes."""
         cutoff = time.monotonic() - FAILURE_WINDOW_S
-        self._failures = [t for t in self._failures if t > cutoff]
-        return len(self._failures) >= MAX_FAILURES
+        self._failures = {s: [t for t in ts if t > cutoff]
+                          for s, ts in self._failures.items() if any(t > cutoff for t in ts)}
+        return len(self._failures.get(source, [])) >= MAX_FAILURES
 
-    def receive(self, code, name, value) -> str:
-        """Store `value` if `code` is a live request for secret `name`. Returns the human."""
+    def _failed(self, source):
+        self._failures.setdefault(source, []).append(time.monotonic())
+
+    def receive(self, code, name, value, source=None) -> str:
+        """Store `value` if `code` is a live request for secret `name`. Returns the human.
+        `source`: who's calling (their address), for the per-caller limit on bad codes."""
         with self._lock:
-            if self._too_many_failures():
+            if self._too_many_failures(source):
                 raise IntakeError("too many failed attempts; try again later")
             path = os.path.join(self.requests_dir, _hash((code or "").strip().upper()) + ".json")
             try:
                 with open(path) as f:
                     req = Request(**json.load(f))
             except (FileNotFoundError, ValueError):
-                self._failures.append(time.monotonic())
+                self._failed(source)
                 raise IntakeError("unknown or already used code") from None
             if req.used:
-                self._failures.append(time.monotonic())
+                self._failed(source)
                 raise IntakeError("unknown or already used code")
             if dt.datetime.fromisoformat(req.expires) < _now():
                 raise IntakeError("this code has expired; ask for a new one")
