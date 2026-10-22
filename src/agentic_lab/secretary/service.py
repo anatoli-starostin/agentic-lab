@@ -35,6 +35,7 @@ from ..worker.usage import UsageLog, probe_loop, probe_now
 from . import home as H
 from . import catchup as CU
 from . import power as P
+from . import visibility as V
 from .status import check_seat, collect, manager_status
 from .web import app, own_entries
 import datetime as dt
@@ -77,7 +78,10 @@ class Secretary:
         conversation `conv` (where a deploy button goes)."""
         who = (self.lab.humans.get(human) or {}).get("name") or human
         return SimpleNamespace(
-            state=lambda: self.latest["state"], workers=self.workers,
+            state=lambda: V.shape(self.latest["state"], self.lab, human),
+            worker_tasks=lambda worker: self.worker_tasks(worker, human),
+            task_result=lambda worker, task_id: self.task_result(worker, task_id, human),
+            workers=self.workers,
             request_token=lambda member: self.request_token(member, asked_by=human),
             announce=self.announce, save=self.state.save,
             power=lambda host, action: self.power(host, action, f"asked by {who} {self.via}",
@@ -498,6 +502,20 @@ class Secretary:
         return "\n".join(rows) or f"no power actions{' on ' + host if host else ''} in the " \
                                    f"last {hours} h"
 
+    async def worker_tasks(self, worker, human):
+        """A worker's tasks as `human` may see them (#62): others' without their content."""
+        tasks = await self.workers.call(worker, "list_tasks")
+        if V.sees_all(self.lab, human):
+            return tasks
+        return [V.task_view(t, human) for t in tasks or []]
+
+    async def task_result(self, worker, task_id, human):
+        t = await self.workers.call(worker, "task_result", {"task_id": task_id})
+        if V.sees_all(self.lab, human) or t.get("requester") == human:
+            return t
+        return {"error": f"task {task_id} is {t.get('requester')}'s: you can see its state "
+                         f"({t.get('state')}) and owner, not its content"}
+
     async def request_token(self, member, asked_by=None):
         if member not in self.lab.humans:
             return f"no member {member!r} in lab.yaml"
@@ -551,7 +569,8 @@ class Secretary:
         admin = bool((self.lab.humans[human_id] or {}).get("admin"))
         try:
             await self.slack.web.views_publish(user_id=slack_user, view=H.view(
-                self.latest["state"], human_id, self.dashboard_url, admin=admin))
+                V.shape(self.latest["state"], self.lab, human_id), human_id,
+                self.dashboard_url, admin=admin))
         except Exception:
             log.exception("publishing the Home tab for %s failed", human_id)
 
@@ -819,6 +838,7 @@ async def serve(lab_path, host, port):
     server = uvicorn.Server(uvicorn.Config(app(state_with_checks, get_events, viewer,
                                                check_usage,
                                                access=lambda m, a: log_access(lab, m, a),
+                                               shape=lambda st, m: V.shape(st, lab, m),
                                                may_check=lambda m, h: m is not None and (
                                                    m == h or bool((lab.humans.get(m) or {})
                                                                   .get("admin")))),

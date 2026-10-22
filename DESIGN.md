@@ -22,8 +22,10 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 - Three agent roles (**secretary**, **manager**, **worker**) with clear jobs and guardrails.
 - **Frictionless inside, approval outside.** An agent does nearly all its work in a sandbox
   with no prompts. Anything that crosses the sandbox boundary needs a real human's yes.
-- **Everything is visible.** A shared **web UI** (§9) shows agents, tasks, approvals, grants,
-  machines and Claude usage per account. Transparency replaces spend limits and quotas.
+- **The lab is visible, the work is private.** A shared **web UI** (§9) shows agents,
+  machines, who keeps them busy, task states and owners, grants and Claude usage per
+  account. Transparency replaces spend limits and quotas. What a member asked for (task
+  instructions, results, files, approval details) is theirs and the admins' (§9).
 - **Humans are never bypassed.** Agents relay approval requests; they never answer them, and
   they never approve or merge pull requests. **Code enforces this, not prompts.**
 - **One description of the lab.** `lab.yaml` lists the humans, agents, hosts, grants, GitHub
@@ -415,6 +417,7 @@ lab: example-lab
 tailnet: example.ts.net
 announcements: "#lab"                    # optional: lab-wide notices
 auto_catch_up: true                      # optional (default): hosts that missed a deploy catch up
+visibility: private                      # optional (default); team: members see each other's work
 humans:
   alice:
     name: Alice
@@ -497,8 +500,22 @@ permissions are answered in Slack (§7).
   login is a member's `tailscale_login` in `lab.yaml`. Tailscale authenticates every packet with its device's key, so the
   address can't be forged.
 
-The main page needs no login: it's visible to whoever can reach the secretary host on the
-tailnet (restrict with Tailscale ACLs if the tailnet is wider than the lab).
+**Who sees what** (#62; the same for `/`, `/state.json`, the Slack Home tab and the
+secretary's tools), from the viewer's Tailscale identity as for the logs:
+
+- **Admins** see everything.
+- **A member** sees what the lab is doing: machines, busy or idle and why (whose task, who
+  keeps a machine awake), queues, every task's state and owner, Claude usage per seat,
+  grants. Of other members' work, nothing of its content: no instructions, results, long
+  runs' names or approval details.
+- **Anyone else** (a device that isn't a member's, and every lab host, i.e. every agent):
+  machines, states and counts, without names or text.
+- `visibility: team` in `lab.yaml` lets members see each other's work too (small trusted
+  teams); `private` is the default.
+
+On a **shared worker**, a manager posts a member only files of that member's own tasks:
+each task's folder, `tasks/<task id>/` in the worker's working folder, where the agent is
+told to put what the member should see. Admins (or `visibility: team`) may fetch any file.
 
 ## 10. Agent runtime
 
@@ -670,6 +687,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-20 | **Host `readers`**: Linux users who may read a host's agents' working folders (a group and ACLs), never their secrets or state. |
 | 2026-10-21 | **AWS EC2 hosts**, without power control for now (public IPv4 with no inbound, EBS root). |
 | 2026-10-22 | **`gh` through a shim** that reads the identity's current token at call time; gh's config in the working folder. Each identity's **reachable repositories** are listed in the agent's prompt. |
+| 2026-10-22 | **Transparent about the lab, private about the work** (#62): members see machines, states, owners and usage, not each other's instructions, results, files or approvals; anonymous viewers and agents see states and counts; admins everything. `visibility: team` to share work. Files from shared workers: the member's own `tasks/<id>/` only. Supersedes "everything is visible". |
 | 2026-10-22 | **Hosts that missed a deploy catch up automatically** (#61), to the commit of `main` the rest of the lab runs: triggered by the secretary, deferred while tasks are active, 3 attempts then admins are told; `auto_catch_up: false` to opt out. |
 
 ## 14. Open questions

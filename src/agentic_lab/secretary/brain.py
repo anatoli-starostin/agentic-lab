@@ -103,7 +103,7 @@ def build_tools(ctx):
           {"worker": str})
     async def worker_tasks(args):
         try:
-            return text(json.dumps(await ctx.workers.call(args["worker"], "list_tasks")))
+            return text(json.dumps(await ctx.worker_tasks(args["worker"])))
         except WorkerError as e:
             return text(f"error: {e}")
 
@@ -111,8 +111,7 @@ def build_tools(ctx):
           {"worker": str, "task_id": str})
     async def task_result(args):
         try:
-            return text(json.dumps(await ctx.workers.call(args["worker"], "task_result",
-                                                          {"task_id": args["task_id"]})))
+            return text(json.dumps(await ctx.task_result(args["worker"], args["task_id"])))
         except WorkerError as e:
             return text(f"error: {e}")
 

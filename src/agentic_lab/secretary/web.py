@@ -3,8 +3,9 @@
 One page, rendered on the server from the secretary's latest snapshot, refreshing itself.
 Every reading shows when it was taken and which agent reported it. No external assets.
 
-    GET /                 the page
-    GET /state.json       the snapshot, for scripts
+    GET /                 the page          } as the viewer may see them (visibility.py, #62):
+    GET /state.json       the snapshot      } admins all; members the lab, not others' work;
+                                            } anyone else machines, states and counts
     GET /logs/{agent}     an agent's event log, for whoever may see it (log_access): admins
                           all; a member their dedicated agents' logs, and their own
                           entries of shared agents (recognised by `tailscale whois`)
@@ -387,11 +388,19 @@ def render_logs(state, agent, hours, events, error=None, scope="all"):
 
 
 def app(get_state, get_events=None, viewer=None, check_usage=None, access=None,
-        may_check=None):
+        may_check=None, shape=None):
     """`get_events(agent, hours, member)` (async) -> events (only `member`'s own entries
     when given); `viewer(client_ip)` (async) -> the member behind that address, or None;
     `access(member, agent)` -> "all" | "own" | None (log_access); `check_usage(human)`
-    (async): read that seat's limits now."""
+    (async): read that seat's limits now; `shape(state, member)`: the state as that viewer
+    (None: anonymous) may see it."""
+    async def seen(request):
+        state = get_state()
+        if shape is None:
+            return state
+        member = await viewer(request.client.host) if viewer is not None else None
+        return shape(state, member)
+
     async def check(request):
         """Read a seat's limits now: only for the member themselves (or an admin), whom
         the request's Tailscale identity names (#62); it spends a request on that seat."""
@@ -418,10 +427,10 @@ def app(get_state, get_events=None, viewer=None, check_usage=None, access=None,
             "Content-Disposition": f'attachment; filename="{agent}-icon.png"'})
 
     async def page(request):
-        return HTMLResponse(render(get_state()), headers=HEADERS)
+        return HTMLResponse(render(await seen(request)), headers=HEADERS)
 
     async def state_json(request):
-        return JSONResponse(get_state() or {})
+        return JSONResponse(await seen(request) or {}, headers=HEADERS)
 
     async def logs(request):
         agent = request.path_params["agent"]
