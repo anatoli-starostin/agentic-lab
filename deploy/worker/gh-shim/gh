@@ -5,32 +5,74 @@
 # ($LAB_GITHUB_DIR/<identity>/token); gh's own config goes to GH_CONFIG_DIR, in the
 # agent's working folder (gh writes there on many commands).
 #
-# Which identity: GH_TOKEN if the agent already set it; else the one lab.yaml maps to the
-# repository given with -R/--repo, or else to the clone we're in (its origin remote)
-# (repos.tsv, as git's credential helper does); else the agent's default identity.
+# Which identity: GH_TOKEN if the agent already set it; else the one lab.yaml maps
+# (repos.tsv, as git's credential helper does) to the repository the command is about:
+#   -R/--repo owner/repo; else one named in the arguments (`gh repo view|clone|... owner/repo`,
+#   `gh api repos/owner/repo/...`, any https://github.com/owner/repo/... URL); else the clone
+#   we're in (its origin remote); else the agent's default identity.
+# LAB_GH_DEBUG=1 says on stderr which identity it chose, and why.
 real=${LAB_REAL_GH:-/usr/bin/gh}
 if [ ! -x "$real" ]; then
     echo "gh isn't installed on this host (apt-get install gh)" >&2
     exit 127
 fi
+
+# owner/repo from a repository reference (owner/repo, github.com/owner/repo, an https or
+# git@ URL, with or without .git or a path after it); empty if it isn't one
+as_repo() {
+    local r=$1
+    r=${r#https://}; r=${r#http://}; r=${r#git@github.com:}; r=${r#www.}; r=${r#github.com/}
+    case $r in *://*|*@*|*:*) return ;; esac
+    r=${r%%[?#]*}
+    local owner=${r%%/*} rest=${r#*/}
+    [ "$owner" != "$r" ] || return
+    local name=${rest%%/*}
+    name=${name%.git}
+    [[ $owner =~ ^[A-Za-z0-9][A-Za-z0-9-]*$ && $name =~ ^[A-Za-z0-9_.-]+$ ]] || return
+    echo "$owner/$name"
+}
+
 root=${LAB_GITHUB_DIR:-$HOME/.local/share/agentic-lab/github}
 if [ -z "${GH_TOKEN:-}" ] && [ -f "$root/default" ]; then
     name=$(head -n 1 "$root/default")
-    repo=""
+    repo="" why="default identity"
     prev=""
-    for a in "$@"; do
-        case $prev in -R|--repo) repo=$a ;; esac
-        case $a in --repo=*) repo=${a#--repo=} ;; -R?*) repo=${a#-R} ;; esac
+    for a in "$@"; do                                   # -R / --repo
+        case $prev in -R|--repo) repo=$(as_repo "$a") ;; esac
+        case $a in --repo=*) repo=$(as_repo "${a#--repo=}") ;; -R?*) repo=$(as_repo "${a#-R}") ;; esac
         prev=$a
     done
-    if [ -z "$repo" ]; then         # no -R: the clone we're in (its origin), as gh does
-        repo=$(git remote get-url origin 2>/dev/null)
-        repo=${repo#git@github.com:}
-        case $repo in https://github.com/*|github.com/*) ;; *:*|*@*) repo="" ;; esac
+    [ -n "$repo" ] && why="-R $repo"
+    if [ -z "$repo" ]; then                             # named in the arguments
+        args=("$@")
+        for ((i = 0; i < ${#args[@]}; i++)); do
+            a=${args[$i]}
+            case $a in
+                https://github.com/*|http://github.com/*|github.com/*|git@github.com:*)
+                    repo=$(as_repo "$a") ;;
+            esac
+            [ -n "$repo" ] && break
+        done
+        if [ -z "$repo" ] && [ "${1:-}" = api ]; then   # gh api repos/owner/repo/...
+            for a in "${@:2}"; do
+                case $a in
+                    repos/*|/repos/*) p=${a#/}; repo=$(as_repo "${p#repos/}"); break ;;
+                esac
+            done
+        elif [ -z "$repo" ] && [ "${1:-}" = repo ]; then    # gh repo <sub> owner/repo
+            for a in "${@:3}"; do
+                case $a in -*) continue ;; esac
+                [[ $a =~ ^[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_.-]+$ ]] || continue
+                repo=$(as_repo "$a")
+                break
+            done
+        fi
+        [ -n "$repo" ] && why="argument $repo"
     fi
-    repo=${repo#https://github.com/}
-    repo=${repo#github.com/}
-    repo=${repo%.git}
+    if [ -z "$repo" ]; then                             # the clone we're in, as gh does
+        repo=$(as_repo "$(git remote get-url origin 2>/dev/null)")
+        [ -n "$repo" ] && why="this clone's origin $repo"
+    fi
     if [ -n "$repo" ] && [ -f "$root/repos.tsv" ]; then
         shopt -s nocasematch    # GitHub owner and repository names are case-insensitive
         while IFS=$'\t' read -r pattern identity; do
@@ -43,5 +85,8 @@ if [ -z "${GH_TOKEN:-}" ] && [ -f "$root/default" ]; then
         GH_TOKEN=$(head -n 1 "$root/$name/token")
         export GH_TOKEN
     fi
+    [ -n "${LAB_GH_DEBUG:-}" ] && echo "lab gh: as $name ($why)" >&2
+elif [ -n "${LAB_GH_DEBUG:-}" ]; then
+    echo "lab gh: with the GH_TOKEN you set" >&2
 fi
 exec "$real" "$@"

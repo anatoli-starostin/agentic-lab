@@ -275,3 +275,60 @@ def test_the_prompt_is_read_at_every_session():
     store = type("S", (), {"get": lambda self, i: task})()
     o = r._options(task, store, {}, {"violations": [], "restart_for": None}, [])
     assert o.system_prompt["append"].endswith("EXTRA") and calls == [1]
+
+
+def test_gh_shim_finds_the_repository_in_the_arguments(tmp_path):
+    """#56: commands naming the repository positionally (`gh repo view owner/repo`,
+    `gh api repos/owner/repo/...`, a github.com URL) use the identity mapped to it; -R and
+    the clone's origin keep working; GH_TOKEN still wins."""
+    root = tmp_path / "share"
+    for name, tok in (("acme-app", "ghs_app"), ("oss-bot", "ghp_oss")):
+        (root / name).mkdir(parents=True)
+        (root / name / "token").write_text(tok + "\n")
+    (root / "default").write_text("acme-app\n")
+    (root / "repos.tsv").write_text("acme/repo-b\toss-bot\n")
+    real = tmp_path / "real-gh"
+    real.write_text('#!/bin/sh\necho "token=$GH_TOKEN"\n')
+    real.chmod(0o755)
+    env = {"PATH": "/usr/bin:/bin", "HOME": str(tmp_path), "LAB_GITHUB_DIR": str(root),
+           "LAB_REAL_GH": str(real)}
+
+    def token(*args, cwd=tmp_path, **extra):
+        r = subprocess.run([str(SHIM), *args], capture_output=True, text=True, timeout=10,
+                           env={**env, **extra}, cwd=cwd)
+        assert r.returncode == 0, r.stderr
+        return r.stdout.strip().removeprefix("token="), r.stderr.strip()
+    mapped = [
+        ("repo", "view", "acme/repo-b", "--json", "viewerPermission", "-q", ".viewerPermission"),
+        ("repo", "view", "--json", "name", "Acme/Repo-B"),             # flags first, any case
+        ("repo", "clone", "https://github.com/acme/repo-b"),
+        ("repo", "clone", "https://github.com/acme/repo-b.git", "dir"),
+        ("repo", "clone", "git@github.com:acme/repo-b.git"),
+        ("api", "repos/acme/repo-b/pulls"),
+        ("api", "-X", "POST", "/repos/acme/repo-b/issues", "-f", "title=x"),
+        ("pr", "view", "https://github.com/acme/repo-b/pull/7"),
+        ("pr", "list", "-R", "acme/repo-b"),
+        ("issue", "list", "--repo=https://github.com/acme/repo-b"),
+    ]
+    for args in mapped:
+        assert token(*args)[0] == "ghp_oss", args
+    for args in [("repo", "view", "acme/other"), ("api", "repos/acme/other/pulls"),
+                 ("api", "user"), ("pr", "list"), ("repo", "view", "--json", "a/b.c")]:
+        assert token(*args)[0] == "ghs_app", args               # unmapped or none: default
+    # -R beats a repository in the arguments; GH_TOKEN beats everything
+    assert token("pr", "view", "https://github.com/acme/repo-b/pull/7", "-R", "acme/x")[0] \
+        == "ghs_app"
+    assert token("repo", "view", "acme/repo-b", GH_TOKEN="mine")[0] == "mine"
+    # the clone's origin still decides when nothing is named
+    clone = tmp_path / "clone"
+    clone.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=clone, check=True)
+    subprocess.run(["git", "remote", "add", "origin", "https://github.com/acme/repo-b.git"],
+                   cwd=clone, check=True)
+    assert token("pr", "list", cwd=clone)[0] == "ghp_oss"
+    assert token("repo", "view", "acme/other", cwd=clone)[0] == "ghs_app"  # named beats origin
+    # LAB_GH_DEBUG says which identity and why
+    _, why = token("repo", "view", "acme/repo-b", LAB_GH_DEBUG="1")
+    assert why == "lab gh: as oss-bot (argument acme/repo-b)"
+    assert token("pr", "list", cwd=clone, LAB_GH_DEBUG="1")[1] == \
+        "lab gh: as oss-bot (this clone's origin acme/repo-b)"
