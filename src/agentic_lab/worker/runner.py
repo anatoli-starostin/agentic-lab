@@ -41,7 +41,8 @@ MAX_SESSION_RESTARTS = 8        # grants applied within one task
 
 LAB_TOOLS = ("mcp__lab__report_progress", "mcp__lab__finish_task", "mcp__lab__run_status",
              "mcp__lab__stop_run", "mcp__lab__wait_for_runs")
-# a human approves each one, whatever grants say: a run is outside the sandbox
+# a human approves each one, whatever grants say: a run outlives the session and its
+# network isn't limited
 ALWAYS_ASK = ("mcp__lab__start_run",)
 KEEP_FREE_GB = 30          # a worker prunes its caches when free disk falls below this
 RUN_LOG_LINES = 30          # log lines a resumed session sees per run
@@ -143,6 +144,10 @@ Long jobs (training, big evaluations, anything over ~10 minutes):
 - While a task waits, you may get other tasks. Before using the GPU, check run_status:
   don't start GPU work that would compete with a running run unless the task says so.
 - finish_task only once the task's runs are over (stop_run the ones you don't need).
+- A run has the same rules as your commands here (it reads what you read, writes only
+  your working folder, /tmp and granted folders, sees only its own processes), with its
+  own /tmp and no network limit. Caches are shared with your commands. A stop gives the
+  job a TERM and a minute to save.
 
 Warm environments: setting up a project often takes longer than the experiment, so keep
 what you build and reuse it.
@@ -189,7 +194,7 @@ class SdkRunner:
         if self.events is not None:
             self.events.add(kind, text, **meta)
 
-    def _lab_server(self, task, store, outcome):
+    def _lab_server(self, task, store, outcome, fs=None):
         @tool("report_progress", "Report progress on the current task to the humans "
               "following it.", {"message": str})
         async def report_progress(args):
@@ -216,16 +221,19 @@ class SdkRunner:
 
         tools = [report_progress, finish_task]
         if self.runs is not None:
-            tools += self._run_tools(task, store, outcome)
+            tools += self._run_tools(task, store, outcome, fs)
         return create_sdk_mcp_server("lab", tools=tools)
 
-    def _run_tools(self, task, store, outcome):
+    def _run_tools(self, task, store, outcome, fs=None):
         runs = self.runs
 
         @tool("start_run", "Start a long job (training, a big evaluation...) as a run: it goes "
               "on by itself after this command and after this task's session, until it ends "
-              "or is stopped. It runs as you but OUTSIDE the sandbox, so a human approves "
-              "each run. Its output (stdout and stderr) goes to a log in your working folder. "
+              "or is stopped. It has the same file rules as your commands here (writes only "
+              "your working folder, /tmp and your write grants, a timed one into your home "
+              "excepted; the lab's folders hidden), but its network isn't limited and it "
+              "outlives your session, so a human approves each run. Its output (stdout and "
+              "stderr) goes to a log in your working folder. "
               "`cwd`: a folder in your working folder (default: the working folder).",
               {"type": "object",
                "properties": {"name": {"type": "string"}, "command": {"type": "string"},
@@ -233,7 +241,9 @@ class SdkRunner:
                "required": ["name", "command"]})
         async def start_run(args):
             try:
-                r = runs.start(task.id, args.get("name"), args["command"], args.get("cwd"))
+                # the run is held to the session's own sandbox policy (same rules, longer)
+                r = runs.start(task.id, args.get("name"), args["command"], args.get("cwd"),
+                               requester=task.requester, policy=fs)
             except R.RunError as e:
                 return _text(str(e), True)
             store.add_progress(task.id, f"started run {r['id']} ({r['name']}): {r['command']}")
@@ -338,7 +348,8 @@ class SdkRunner:
             setting_sources=[],
             permission_mode="default",
             can_use_tool=can_use_tool,
-            mcp_servers={"lab": self._lab_server(task, store, outcome)},
+            mcp_servers={"lab": self._lab_server(
+                task, store, outcome, (settings.get("sandbox") or {}).get("filesystem"))},
             allowed_tools=list(LAB_TOOLS),
             system_prompt={"type": "preset", "preset": "claude_code",
                            "append": _system_prompt(self.agent_id, task, self.keep_free_gb)

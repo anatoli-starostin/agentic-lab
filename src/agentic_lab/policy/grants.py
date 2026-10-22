@@ -55,8 +55,29 @@ def validate(kind, value):
             raise GrantError(f"write grant must be an absolute or ~/ path, got {value!r}")
         if os.path.normpath(os.path.expanduser(value)) in ("/", os.path.expanduser("~")):
             raise GrantError(f"write grant too broad: {value!r}")
+        _not_the_labs_own(value)
     if kind == "tool" and not _TOOL.match(value):
         raise GrantError(f"not a tool name or anchored mcp__server__ glob: {value!r}")
+
+
+def _in_home(value):
+    """~/x for ~/x and /home/<user>/x, else None."""
+    if value.startswith("~/"):
+        return "~" + os.path.normpath(value[1:])
+    parts = os.path.normpath(value).split("/")
+    return "~/" + "/".join(parts[3:]) if len(parts) > 3 and parts[1] == "home" else None
+
+
+def _not_the_labs_own(value):
+    """A write grant may not reach the lab's own folders (its secrets, state, GitHub setup),
+    nor contain them: a folder above a hidden one, made writable, would let it be moved."""
+    from .sandbox import NEBIUS, SECRETS, STATE
+    g = _in_home(value)
+    if g is None:
+        return
+    for own in (SECRETS, STATE, NEBIUS, "~/.local/share/agentic-lab"):
+        if g == own or g.startswith(own + "/") or own.startswith(g + "/"):
+            raise GrantError(f"write grant overlaps the lab's own {own}: {value!r}")
 
 
 def from_mapping(m, granted_by=None):

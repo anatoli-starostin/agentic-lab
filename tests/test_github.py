@@ -332,3 +332,37 @@ def test_gh_shim_finds_the_repository_in_the_arguments(tmp_path):
     assert why == "lab gh: as oss-bot (argument acme/repo-b)"
     assert token("pr", "list", cwd=clone, LAB_GH_DEBUG="1")[1] == \
         "lab gh: as oss-bot (this clone's origin acme/repo-b)"
+
+
+def test_a_run_finds_the_agents_git_setup(tmp_path, monkeypatch):
+    """A long run's home is its own; the git setup is bound in read-only, and the run's
+    environment must point there, the same way the agent's own does."""
+    from types import SimpleNamespace
+    from agentic_lab import cli
+    from agentic_lab.worker import runs as R
+    lab = lab_with_github(tmp_path)
+    w = first(lab, "worker")
+    lab.agents[w]["workdir"] = str(tmp_path / "work")
+    root, secrets = tmp_path / "share", tmp_path / "secrets"
+    secrets.mkdir()
+    written = GH.prepare(lab, w, root=str(root), secrets=str(secrets), helper=str(HELPER))
+    assert written == GH.environment(lab, w, root=str(root))       # one source of truth
+    env = GH.environment(lab, w)
+    # in a run, as in a command, the git setup is readable and not writable: the job's
+    # root is read-only and the setup is neither in what it may write nor in what's hidden
+    from agentic_lab.policy import sandbox
+    fs = sandbox.filesystem(str(tmp_path / "work"))
+    job = R.job_wrapper(fs, str(tmp_path / "work"))
+    assert job[2:5] == ["--ro-bind", "/", "/"]
+    setup = os.path.expanduser(GH.ROOT)
+    assert env["GIT_CONFIG_GLOBAL"].startswith(setup + os.sep) and env["LAB_GITHUB_DIR"] == setup
+    assert not any(setup.startswith(p) or p.startswith(setup)
+                   for p in fs["allowWrite"] + fs["denyRead"])
+    assert env["PATH"].startswith(GH.SHIM + ":")
+    seen = {}
+    monkeypatch.setattr("agentic_lab.registry.load", lambda p: lab)
+    monkeypatch.setattr("agentic_lab.worker.runs.run_exec",
+                        lambda store, run, env=None: seen.update(env or {}) or 0)
+    monkeypatch.setattr("agentic_lab.worker.runs.RunStore", lambda *a, **k: None)
+    cli.cmd_worker_run_exec(SimpleNamespace(lab="lab.yaml", agent=w, run="r-000000000000"))
+    assert seen["GIT_CONFIG_GLOBAL"] == env["GIT_CONFIG_GLOBAL"] and seen["PATH"] == env["PATH"]

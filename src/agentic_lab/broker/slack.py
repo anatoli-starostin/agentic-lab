@@ -40,7 +40,9 @@ def request_blocks(req: Request):
     task = f" (task `{req.task_id}`)" if req.task_id else ""
     blocks = [
         {"type": "section", "text": {"type": "mrkdwn",
-         "text": f"*{req.agent}* asks to do something outside its sandbox{task}:"}},
+         "text": f"*{req.agent}* asks "
+                 + ("to start a long run" if req.tool == "mcp__lab__start_run"
+                    else "to do something outside its sandbox") + f"{task}:"}},
         {"type": "section", "text": {"type": "mrkdwn", "text": f"```{req.detail[:2800]}```"}},
     ]
     if req.violations:

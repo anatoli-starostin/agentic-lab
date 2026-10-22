@@ -33,6 +33,9 @@ class Units:
         return run_id in self.active
 
 
+NO_WRAP = lambda *a: []     # noqa: E731  (no bwrap here: the job as is)
+
+
 def stores(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
@@ -43,23 +46,24 @@ def stores(tmp_path):
 
 def test_a_run_runs_logs_and_records_how_it_ended(tmp_path):
     tasks, runs, units = stores(tmp_path)
-    r = runs.start("t-1", "train big/model", "echo step 1; echo oops >&2; exit 3")
+    r = runs.start("t-1", "train big/model", "echo step 1; echo oops >&2; exit 3", requester="alice",
+                   policy={"allowWrite": ["/w"], "denyRead": ["/s"]})
     assert r["state"] == "starting" and r["name"] == "train-big-model"
     assert units.calls[0] == ("start", "worker-a", r["id"])
     assert r["log"].startswith(str(tmp_path / "work" / "runs"))
-    R.run_exec(runs, r["id"])                     # what the unit does
+    R.run_exec(runs, r["id"], wrapper=NO_WRAP)                     # what the unit does
     units.active.discard(r["id"])
     v = runs.view(r["id"], tail=10)
     assert v["state"] == "exited" and v["exit_code"] == 3
     assert "step 1" in v["log_tail"] and "oops" in v["log_tail"]
     assert runs.active() == []
     with pytest.raises(R.RunError):
-        runs.start("t-1", "x", "true", cwd="../../etc")
+        runs.start("t-1", "x", "true", cwd="../../etc", requester="alice")
 
 
 def test_a_run_whose_unit_vanished_is_lost(tmp_path):
     _, runs, units = stores(tmp_path)
-    r = runs.start("t-1", "train", "sleep 100")
+    r = runs.start("t-1", "train", "sleep 100", requester="alice")
     runs._write(runs._path(r["id"], ".status"), {"state": "running", "started": "x"})
     assert runs.view(r["id"])["state"] == "running"
     units.active.discard(r["id"])                 # e.g. the machine was powered off
@@ -70,7 +74,7 @@ def test_waiting_tasks_wake_when_a_run_ends_or_at_check_in(tmp_path):
     tasks, runs, units = stores(tmp_path)
     t = tasks.submit("train for 20 hours", "alice", "mgr-alice")
     tasks.update(t.id, state=T.RUNNING)
-    r = runs.start(t.id, "train", "sleep 100")
+    r = runs.start(t.id, "train", "sleep 100", requester="alice")
     soon = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=2)).isoformat()
     tasks.update(t.id, state=T.WAITING, waiting={"note": "training", "runs": [r["id"]],
                                                  "wake_at": soon})
@@ -90,7 +94,7 @@ def test_cancelling_a_waiting_task_stops_its_runs(tmp_path):
     tasks, runs, units = stores(tmp_path)
     t = tasks.submit("train", "alice", "mgr-alice")
     tasks.update(t.id, state=T.RUNNING)
-    r = runs.start(t.id, "train", "sleep 100")
+    r = runs.start(t.id, "train", "sleep 100", requester="alice")
     tasks.update(t.id, state=T.WAITING, waiting={"runs": [r["id"]]})
     tasks.request_cancel(t.id)
     wake_waiting(tasks, runs)
@@ -170,8 +174,9 @@ def test_starting_a_run_always_asks_a_human():
         assert allowed_without_asking(f"mcp__lab__{name}", {})
     from agentic_lab.broker.core import describe, grant_options
     assert grant_options("mcp__lab__start_run", {"command": "x"}, []) == []   # one-off only
-    assert "OUTSIDE the sandbox" in describe("mcp__lab__start_run",
-                                             {"name": "train", "command": "python t.py"})
+    d = describe("mcp__lab__start_run", {"name": "train", "command": "python t.py"})
+    assert "until it ends or is stopped" in d and "network not limited" in d
+    assert "python t.py" in d
 
 
 def test_detached_commands_get_a_hint():
@@ -252,8 +257,9 @@ def test_warm_environments(tmp_path, monkeypatch):
             "XDG_CACHE_HOME"} <= set(env)
     assert sandbox.settings("/w")["env"]["HF_HOME"] == "/w/.cache/huggingface"
     tasks, runs, units = stores(tmp_path)
-    r = runs.start("t-1", "env", "echo $TORCH_EXTENSIONS_DIR")
-    R.run_exec(runs, r["id"])
+    r = runs.start("t-1", "env", "echo $TORCH_EXTENSIONS_DIR", requester="alice",
+                   policy={"allowWrite": ["/w"], "denyRead": ["/s"]})
+    R.run_exec(runs, r["id"], wrapper=NO_WRAP)
     assert f"{tmp_path}/work/.cache/torch_extensions" in R.log_tail(r["log"], 40,
                                                                     str(tmp_path / "work"))
     t = tasks.submit("x", "alice", "mgr")

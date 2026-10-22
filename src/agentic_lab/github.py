@@ -149,6 +149,22 @@ async def keep_bot_repos(name, stop, token_dir, lister=list_repos, every=REPOS_E
             pass
 
 
+def environment(lab, agent_id, root=ROOT, shim=SHIM):
+    """Where git, gh and the credential helper find the agent's git setup at `root`, as
+    environment variables (nothing is written): what `prepare` returns, and what a long
+    run gets (its home is its own, the setup is bound in read-only). Empty for an agent
+    without GitHub."""
+    default, _ = lab.github_identities(agent_id)
+    if not default:
+        return {}
+    root = os.path.expanduser(root)
+    workdir = os.path.expanduser((lab.agents.get(agent_id) or {}).get("workdir") or "~/work")
+    return {"GIT_CONFIG_GLOBAL": os.path.join(root, "gitconfig"),
+            "GH_CONFIG_DIR": os.path.join(workdir, ".config", "gh"),
+            "LAB_GITHUB_DIR": root,
+            "PATH": shim + ":" + os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")}
+
+
 def prepare(lab, agent_id, root=ROOT, secrets=SECRETS, helper=HELPER, shim=SHIM):
     """Write the agent's git setup (and bot accounts' tokens). Returns its environment:
     empty for an agent without GitHub."""
@@ -179,17 +195,13 @@ def prepare(lab, agent_id, root=ROOT, secrets=SECRETS, helper=HELPER, shim=SHIM)
     # gh writes its config (migrations, state): a folder of its own the sandbox lets it
     # write, with no secrets in it
     workdir = os.path.expanduser((lab.agents.get(agent_id) or {}).get("workdir") or "~/work")
-    gh_config = os.path.join(workdir, ".config", "gh")
     try:                                # in the agent's folder: never through a link (safefs)
         from . import safefs
         os.makedirs(workdir, exist_ok=True)
         safefs.makedirs(workdir, os.path.join(".config", "gh"))
     except OSError:                     # gh makes it itself; never lose git's setup over it
         pass
-    return {"GIT_CONFIG_GLOBAL": os.path.join(root, "gitconfig"),
-            "GH_CONFIG_DIR": gh_config,
-            "LAB_GITHUB_DIR": root,
-            "PATH": shim + ":" + os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")}
+    return environment(lab, agent_id, root=root, shim=shim)
 
 
 def env_for(lab, agent_id, root=ROOT, secrets=SECRETS):
