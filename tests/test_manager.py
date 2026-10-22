@@ -721,3 +721,38 @@ def test_a_guest_in_the_owners_thread_gets_its_own_session(tmp_path):
     assert m.state.conversations["C1/100"].meanwhile == []
     asyncio.run(m.on_message(msg("bob", "hi", private=True)))        # bob's own DM: his
     assert seen[-1][0] == "D9" and "Bob is a guest here" not in seen[-1][3]
+
+
+
+def test_idle_stop_is_reliable(tmp_path):
+    """#60: the idle timer survives a restart; a host whose worker is down is reported;
+    a stop is called off if the host got busy since the snapshot."""
+    import datetime as dt
+    from agentic_lab.secretary import power as P
+    lab = registry.load(EXAMPLE)
+    t0 = dt.datetime(2026, 10, 17, 12, tzinfo=dt.timezone.utc)
+    snap = {"agents": {"worker-a": {"up": True, "queue": {}},
+                       "worker-b": {"up": False}}}
+    w = P.IdleWatch(str(tmp_path / "idle.json"))
+    w.candidates(lab, snap, now=t0)
+    w.save()
+    w2 = P.IdleWatch(str(tmp_path / "idle.json"))               # the secretary restarted
+    assert w2.idle_since["gpu-a"] == t0
+    assert w2.candidates(lab, snap, now=t0 + dt.timedelta(minutes=31)) == ["gpu-a"]
+    assert w2.down_too_long(now=t0 + dt.timedelta(minutes=30)) == []
+    assert w2.down_too_long(now=t0 + dt.timedelta(minutes=61)) == ["gpu-b"]
+
+    class Workers:
+        def __init__(self, tasks):
+            self.tasks = tasks
+
+        async def call(self, w, tool, args=None, retries=None):
+            return {"tasks": self.tasks, "runs": [], "gpus": [], "gpu_processes": []}
+    assert asyncio.run(P.recheck(lab, "gpu-a", Workers({}), snap)) is None
+    why = asyncio.run(P.recheck(lab, "gpu-a", Workers({"queued": 1}), snap))
+    assert why == "worker-a has 1 queued"                        # arrived since: no stop
+
+    class Down:
+        async def call(self, w, tool, args=None, retries=None):
+            raise RuntimeError("unreachable")
+    assert "couldn't re-check" in asyncio.run(P.recheck(lab, "gpu-a", Down(), snap))
