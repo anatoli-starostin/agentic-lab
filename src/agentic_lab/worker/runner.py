@@ -233,9 +233,10 @@ class SdkRunner:
         @tool("start_run", "Start a long job (training, a big evaluation...) as a run: it goes "
               "on by itself after this command and after this task's session, until it ends "
               "or is stopped. It has the same file rules as your commands here (writes only "
-              "your working folder, /tmp and standing write grants; the lab's folders hidden), "
-              "but its network isn't limited, a timed write grant into your home doesn't "
-              "reach it, and it outlives your session, so a human approves each run. Its output (stdout and stderr) goes to a log in your working folder. "
+              "your working folder, /tmp and your write grants, a timed one into your home "
+              "excepted; the lab's folders hidden), but its network isn't limited and it "
+              "outlives your session, so a human approves each run. Its output (stdout and "
+              "stderr) goes to a log in your working folder. "
               "`cwd`: a folder in your working folder (default: the working folder).",
               {"type": "object",
                "properties": {"name": {"type": "string"}, "command": {"type": "string"},
