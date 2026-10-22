@@ -174,8 +174,9 @@ def test_starting_a_run_always_asks_a_human():
         assert allowed_without_asking(f"mcp__lab__{name}", {})
     from agentic_lab.broker.core import describe, grant_options
     assert grant_options("mcp__lab__start_run", {"command": "x"}, []) == []   # one-off only
-    assert "OUTSIDE the sandbox" in describe("mcp__lab__start_run",
-                                             {"name": "train", "command": "python t.py"})
+    d = describe("mcp__lab__start_run", {"name": "train", "command": "python t.py"})
+    assert "until it ends or is stopped" in d and "network not limited" in d
+    assert "python t.py" in d
 
 
 def test_detached_commands_get_a_hint():

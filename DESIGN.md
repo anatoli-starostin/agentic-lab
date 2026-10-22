@@ -145,8 +145,8 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   session outlives it: a sandboxed command's processes die when it returns (the sandbox is
   a PID namespace), background commands when the session ends (`--die-with-parent`), and
   anything under the worker service when it restarts (its cgroup). So the agent asks for a
-  **run** (`start_run`): a human approves **each** run (it's outside the sandbox; never
-  granted for a while), and the worker service starts it as its own unit,
+  **run** (`start_run`): a human approves **each** run (it outlives the session and its
+  network isn't limited; never granted for a while), and the worker service starts it as its own unit,
   `lab-run-<agent>@<run-id>.service`, as the agent's user, output to a log in its working
   folder. The agent then calls `wait_for_runs`: the task becomes `waiting` (in progress,
   parked) and the queue moves on, so the worker can do other tasks meanwhile. The task is

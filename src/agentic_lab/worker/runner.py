@@ -41,7 +41,8 @@ MAX_SESSION_RESTARTS = 8        # grants applied within one task
 
 LAB_TOOLS = ("mcp__lab__report_progress", "mcp__lab__finish_task", "mcp__lab__run_status",
              "mcp__lab__stop_run", "mcp__lab__wait_for_runs")
-# a human approves each one, whatever grants say: a run is outside the sandbox
+# a human approves each one, whatever grants say: a run outlives the session and its
+# network isn't limited
 ALWAYS_ASK = ("mcp__lab__start_run",)
 KEEP_FREE_GB = 30          # a worker prunes its caches when free disk falls below this
 RUN_LOG_LINES = 30          # log lines a resumed session sees per run
@@ -231,8 +232,10 @@ class SdkRunner:
 
         @tool("start_run", "Start a long job (training, a big evaluation...) as a run: it goes "
               "on by itself after this command and after this task's session, until it ends "
-              "or is stopped. It runs as you but OUTSIDE the sandbox, so a human approves "
-              "each run. Its output (stdout and stderr) goes to a log in your working folder. "
+              "or is stopped. It has the same file rules as your commands here (writes only "
+              "your working folder, /tmp and standing write grants; the lab's folders hidden), "
+              "but its network isn't limited, a timed write grant into your home doesn't "
+              "reach it, and it outlives your session, so a human approves each run. Its output (stdout and stderr) goes to a log in your working folder. "
               "`cwd`: a folder in your working folder (default: the working folder).",
               {"type": "object",
                "properties": {"name": {"type": "string"}, "command": {"type": "string"},
