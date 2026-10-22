@@ -125,6 +125,7 @@ def host_plan(lab, host, tokens, intake=intake_secret):
     name = host_name(lab, host)
     files, users, units, envs, missing, later = {}, [], [], {}, [], []
     run_units = {}              # worker -> its user: the unit template for its long runs
+    run_workdirs = {}           # worker -> its working folder (writable by its runs)
     waiting = set()             # users whose service can't start yet (a secret is missing)
 
     def secret(user, fname, content, what):
@@ -154,6 +155,8 @@ def host_plan(lab, host, tokens, intake=intake_secret):
             envs[f"/etc/agentic-lab/worker-{aid}.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={port}\nLAB_NAME={name}\n"
             units.append(("lab-worker@.service", f"lab-worker@{aid}"))
             run_units[aid] = user
+            run_workdirs[aid] = os.path.normpath((a.get("workdir") or "~/work").replace(
+                "~", f"/home/{user}", 1))
         elif role == "manager":
             workers = [w for w, wa in lab.agents.items() if wa.get("role") == "worker" and (
                 wa.get("access", "dedicated") == "shared" or wa.get("human") == a.get("human"))]
@@ -226,7 +229,7 @@ def host_plan(lab, host, tokens, intake=intake_secret):
                     (a.get("workdir") or "~/work").replace("~", f"/home/{lab.unix_user(aid)}", 1))
                 for aid, a in here.items() if a.get("role") in ("worker", "manager")}
     return {"host": host, "name": name, "files": files, "users": users, "units": units,
-            "run_units": run_units,
+            "run_units": run_units, "run_workdirs": run_workdirs,
             "readers": list((lab.hosts.get(host) or {}).get("readers") or []),
             "readable": readable,
             "envs": envs, "missing": missing, "later": later,
@@ -300,7 +303,7 @@ def script(plan):
         sub = "worker" if "worker" in unit_file else "manager" if "manager" in unit_file else "secretary"
         lines.append(f"install -m 644 /opt/agentic-lab/src/deploy/{sub}/{unit_file} /etc/systemd/system/")
     if plan.get("run_units"):
-        lines += run_units_script(plan["run_units"])
+        lines += run_units_script(plan["run_units"], plan.get("run_workdirs") or {})
     lines += readers_script(plan.get("readers") or [], plan.get("readable") or {})
     lines.append("systemctl daemon-reload")
     held = set(plan.get("held") or [])
@@ -353,14 +356,14 @@ def readers_script(readers, readable):
     return lines
 
 
-def run_units_script(run_units):
+def run_units_script(run_units, workdirs=None):
     """Workers' long runs (worker/runs.py): a unit template per worker, and the sudo rule
     that lets each worker's service start and stop its own runs."""
     from .worker.runs import sudo_rule, unit_template
     lines = ['say "long runs"']
     for aid, user in sorted(run_units.items()):
         lines.append(f"cat > /etc/systemd/system/lab-run-{aid}@.service <<'UNIT'\n"
-                     f"{unit_template(aid, user)}UNIT")
+                     f"{unit_template(aid, user, workdir=(workdirs or {}).get(aid))}UNIT")
     rules = "".join(sudo_rule(user) for _, user in sorted(run_units.items()))
     lines += ["install -d /usr/local/libexec/agentic-lab",
               "install -m 755 /opt/agentic-lab/src/deploy/worker/lab-run-ctl "
