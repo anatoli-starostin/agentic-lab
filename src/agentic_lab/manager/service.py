@@ -243,7 +243,8 @@ async def serve(lab_path, agent_id, host=None, port=None):
         from .status import app as status_app
         status_server = uvicorn.Server(uvicorn.Config(
             status_app(_read_secret(f"{CONFIG}/monitor-token"), usage, events,
-                       check=(lambda: probe_now(usage, seat)) if seat else None),
+                       check=(lambda: probe_now(usage, seat)) if seat else None,
+                       github=lambda: GH.problems(lab, agent_id)),
             host=host, port=port, log_level="warning"))
         status_server.install_signal_handlers = lambda: None   # this process handles signals
         asyncio.create_task(status_server.serve())

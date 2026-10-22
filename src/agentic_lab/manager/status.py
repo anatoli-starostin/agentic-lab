@@ -14,7 +14,7 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 
-def app(token, usage, events, check=None):
+def app(token, usage, events, check=None, github=None):
     def authorized(request):
         scheme, _, given = request.headers.get("authorization", "").partition(" ")
         return scheme.lower() == "bearer" and token and hmac.compare_digest(
@@ -28,7 +28,8 @@ def app(token, usage, events, check=None):
         except ValueError:
             hours = 24
         return JSONResponse({"usage": usage.load(),
-                             "events": events.read(since=dt.timedelta(hours=hours), limit=2000)})
+                             "events": events.read(since=dt.timedelta(hours=hours), limit=2000),
+                             "github": github() if github is not None else {}})
 
     async def check_usage(request: Request):
         if not authorized(request):

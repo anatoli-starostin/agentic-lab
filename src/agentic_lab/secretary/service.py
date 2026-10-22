@@ -564,6 +564,13 @@ class Secretary:
                 done = {k: v for k, v in json.load(f).items() if k.endswith(today)}
         except (OSError, ValueError):
             done = {}
+        for aid, a in ((self.latest.get("state") or {}).get("agents") or {}).items():
+            for ident, problem in (a.get("github") or {}).items():     # #64
+                key = f"github:{aid}:{ident}:{today}"
+                if not done.get(key):
+                    await self.announce(f":warning: GitHub identity *{ident}* of "
+                                        f"{a.get('name') or aid} doesn't work: {problem}")
+                    done[key] = True
         for cred, left in expiry_notices(self.lab):
             key = f"{cred['name']}:{today}"
             if done.get(key):

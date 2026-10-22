@@ -288,7 +288,9 @@ def _hosts(state):
 def _agents(state):
     rows = "".join(
         f"<tr><td><b><a href='/logs/{e(aid)}'>{e(a['name'])}</a></b>"
-        f"<div class='muted small'>{e(aid)}</div></td>"
+        f"<div class='muted small'>{e(aid)}</div>"
+        + "".join(f"<div class='small bad'>⚠ GitHub {e(n)}: {e(p)}</div>"
+                  for n, p in (a.get("github") or {}).items()) + "</td>"
         f"<td>{e(a.get('role'))}</td><td>{e(a.get('human'))}</td><td>{e(a.get('host'))}</td>"
         f"<td class='{'ok' if a.get('service') == 'active' or a.get('up') else 'muted'}'>"
         f"{e(a.get('service') or ('up' if a.get('up') else '—'))}</td></tr>"

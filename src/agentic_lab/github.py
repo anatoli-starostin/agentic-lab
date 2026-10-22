@@ -36,6 +36,7 @@ import datetime as dt
 import json
 import logging
 import os
+import urllib.error
 import urllib.request
 
 log = logging.getLogger("agentic_lab.github")
@@ -113,12 +114,53 @@ def read_repos(identity_dir):
     return [ln.strip() for ln in lines if ln.strip() and not ln.startswith("#")], when
 
 
+def write_status(identity_dir, problem):
+    """<identity>/status: why the identity doesn't work right now (#64), or removed when it
+    does. The agent's prompt, the gh shim, health checks and the secretary show it."""
+    path = os.path.join(identity_dir, "status")
+    if problem:
+        _write(path, problem.strip() + "\n")
+    else:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
+def read_status(identity_dir):
+    try:
+        with open(os.path.join(identity_dir, "status")) as f:
+            return f.read().strip() or None
+    except OSError:
+        return None
+
+
+def problems(lab, agent_id, root=ROOT):
+    """{identity: problem} for the agent's GitHub identities that don't work right now."""
+    root = os.path.expanduser(root)
+    out = {}
+    for name in lab.github_names(agent_id):
+        p = read_status(os.path.join(root, name))
+        if p:
+            out[name] = p
+    return out
+
+
 def refresh_repos(token, app, identity_dir, lister=list_repos):
     """List and write an identity's repositories; on any failure keep the last list (the
     agent's GitHub access never depends on this)."""
     try:
         write_repos(identity_dir, lister(token, app))
+        if not app:
+            write_status(identity_dir, None)        # the bot's token works
         return True
+    except urllib.error.HTTPError as e:
+        if not app and e.code == 401:               # #64: say so, don't just fail later
+            write_status(identity_dir, "its token was rejected (expired or revoked): an "
+                         "admin must hand over a new one (lab secret request "
+                         f"service:github-{os.path.basename(identity_dir).lower()} github-token)")
+        log.warning("listing the repositories of %s: %s", os.path.basename(identity_dir), e)
+        return False
     except Exception as e:                  # no network, revoked token, rate limit...
         log.warning("listing the repositories of %s: %s", os.path.basename(identity_dir), e)
         return False
@@ -233,6 +275,9 @@ def instructions(lab, agent_id, root=ROOT):
                                          else "")
         return f"can reach: {shown} (as of {when})"
     text = f"\nGitHub: you act as {who(default)}; it {reach(default)}."
+    for name, problem in problems(lab, agent_id, root).items():
+        text += (f" ⚠ {who(name)} doesn't work right now: {problem}. Tell the member (an "
+                 "admin must fix it); don't conclude the repository is gone.")
     if mapped:
         rows = "; ".join(f"{p}: {who(n)}" for p, n in mapped)
         text += (f" For some repositories you act as another identity: {rows}. "

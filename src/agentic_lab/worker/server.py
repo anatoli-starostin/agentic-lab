@@ -104,7 +104,7 @@ def write_inbox_file(workdir, name, b64):
 
 
 def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=None,
-              usage=None, workdir=None, events=None, check=None, runs=None):
+              usage=None, workdir=None, events=None, check=None, runs=None, github=None):
     """The worker's MCP server. `guardrails()` returns its current settings and grants;
     `check()` probes the seat's limits now; `runs`: its RunStore (long runs)."""
     mcp = MCPServer(name=f"agentic-lab worker {agent_id}",
@@ -214,6 +214,8 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         who(ctx)
         # nvidia-smi can take seconds: not in the event loop serving the other calls
         h = await asyncio.to_thread(health or default_health, agent_id, store)
+        if github is not None:
+            h["github"] = github()          # identities that don't work right now (#64)
         if runs is not None:
             h["runs"] = [{k: r.get(k) for k in ("id", "name", "task", "state", "started")}
                          for r in await asyncio.to_thread(runs.active)]

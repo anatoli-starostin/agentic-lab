@@ -85,6 +85,9 @@ if [ -z "${GH_TOKEN:-}" ] && [ -f "$root/default" ]; then
         GH_TOKEN=$(head -n 1 "$root/$name/token")
         export GH_TOKEN
     fi
+    if [ -n "$name" ] && [ -s "$root/$name/status" ]; then     # why it doesn't work (#64)
+        echo "lab gh: the GitHub identity $name doesn't work right now: $(head -n 1 "$root/$name/status")" >&2
+    fi
     [ -n "${LAB_GH_DEBUG:-}" ] && echo "lab gh: as $name ($why)" >&2
 elif [ -n "${LAB_GH_DEBUG:-}" ]; then
     echo "lab gh: with the GH_TOKEN you set" >&2
