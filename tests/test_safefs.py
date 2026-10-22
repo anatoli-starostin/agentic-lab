@@ -91,13 +91,34 @@ def test_the_manager_posts_only_its_own_plain_files(folders):
     assert MT._read_own(ctx, "alias") is None and MT._read_own(ctx, "../other/kept") is None
 
 
-def test_the_folder_itself_is_never_a_link(tmp_path, folders):
+def test_the_folder_stays_the_one_pinned(tmp_path, folders):
     work, other = folders
+    safefs.pin(work)                        # at the service's start
     moved = tmp_path / "moved"
     work.rename(moved)
     work.symlink_to(other)
     with pytest.raises(OSError):
         safefs.read(work, "kept")
+
+
+def test_a_working_folder_on_another_disk_works(tmp_path):
+    disk = tmp_path / "nvme" / "work"
+    disk.mkdir(parents=True)
+    (disk / "result.txt").write_text("ok")
+    work = tmp_path / "home" / "work"
+    work.parent.mkdir()
+    work.symlink_to(disk)                   # e.g. ~/work -> /mnt/nvme/work
+    safefs.pin(work)
+    assert safefs.read(work, "result.txt") == b"ok"
+    assert safefs.read(work, str(work / "result.txt")) == b"ok"      # either form
+    assert safefs.read(work, str(disk / "result.txt")) == b"ok"
+    assert safefs.write(work, "inbox/a.txt", b"x").endswith("home/work/inbox/a.txt")
+    assert (disk / "inbox" / "a.txt").read_bytes() == b"x"
+    import os
+    os.close(safefs.open_append(work, "runs/r/log"))
+    assert (disk / "runs" / "r" / "log").exists()
+    b64 = read_workdir_file(str(work), "result.txt")["base64"]
+    assert base64.b64decode(b64) == b"ok"
 
 
 def test_only_files_with_a_single_name(folders):
