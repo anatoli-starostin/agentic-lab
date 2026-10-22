@@ -53,9 +53,17 @@ def _for_member(s, member):
             a["recent"] = [task_view(t, member) for t in a["recent"]]
         mine = {t["id"] for t in a.get("recent") or [] if t.get("requester") == member}
         for r in a.get("runs") or []:
-            if r.get("task") not in mine:
+            if r.get("requester") != member and r.get("task") not in mine:
                 r["name"] = None                # a run's name can say what the work is
     ap = s.get("approvals") or {}
+    agents = s.get("agents") or {}
+    for aid, grants in (ap.get("grants") or {}).items():
+        a = agents.get(aid) or {}
+        if a.get("access", "dedicated") != "shared" and a.get("human") != member:
+            # another member's own agent: what kinds of grants, not what they name
+            ap["grants"][aid] = [{"kind": g.get("kind"), "value": "(another member's)",
+                                  "expires": g.get("expires"), "granted_by": g.get("granted_by")}
+                                 for g in grants]
     ap["pending"] = [r if r.get("human") == member else
                      {**{k: r.get(k) for k in ("id", "agent", "human", "expires")},
                       "detail": "(another member's request)"}

@@ -107,6 +107,18 @@ def pr_link(lab_path, branch):
     return f"https://github.com/{m.group(1)}/compare/{BRANCH}...{branch}?expand=1"
 
 
+def is_older(lab_path, old, new):
+    """Is `old` a commit of the config repo strictly before `new`?"""
+    if not old or old == new:
+        return False
+    top, _ = repo_of(lab_path)
+    try:
+        git(top, "merge-base", "--is-ancestor", old, new)
+        return True
+    except ConfigError:
+        return False
+
+
 def applied_versions(path=APPLIED):
     """What this host runs (its last apply): config and framework commits, for health
     readings, so the secretary sees hosts that missed a deploy (#61)."""

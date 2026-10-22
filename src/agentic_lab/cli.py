@@ -297,16 +297,18 @@ def cmd_apply(args):
 
 
 def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_admin=None,
-           only_behind=False, locked=False):
+           only_behind=None, locked=False):
     """Ship `lab_path` (already the reviewed one) and framework `source` to the hosts.
-    `only_behind`: skip hosts that already run exactly this (a catch-up, #61); `locked`:
-    the caller holds the deploy lock."""
+    `only_behind(commit)`: a catch-up (#61): only hosts on a reviewed commit for which it
+    says True (strictly older), and each host checks for active work before it applies;
+    one line per host says what happened (`CATCH-UP <host> <outcome>`). `locked`: the
+    caller holds the deploy lock."""
     import os
 
     from . import configrepo as CR
     from . import lock
-    from .apply import (UNREACHABLE, ApplyError, applied_on, describe, has_work, plan_all,
-                        run_bundle, secretary_host)
+    from .apply import (BUSY, UNREACHABLE, ApplyError, applied_on, describe, has_work,
+                        plan_all, run_bundle, secretary_host)
     from .doctor import this_host
     try:
         record = CR.applied_record(info, lock.current(source)[1], admin)
@@ -334,15 +336,20 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
             continue
         if only_behind:
             cur = applied_on(p, local=(p["host"] == here), admin=admin)
+            said = None
             if cur == UNREACHABLE:
-                print("  -> skipped: unreachable\n")
+                said, why = "unreachable", "skipped: unreachable"
                 skipped.append(p["host"])
-                continue
-            if (cur.get("config_commit"), cur.get("framework_commit")) == (
+            elif (cur.get("config_commit"), cur.get("framework_commit")) == (
                     record.get("config_commit"), record.get("framework_commit")) \
                     and not cur.get("unreviewed"):
-                print("  -> up to date\n")
+                said, why = "current", "up to date"
+            elif cur.get("unreviewed") or not only_behind(cur.get("config_commit")):
+                said, why = "ahead", "runs a newer or unreviewed commit: left alone"
+            if said:
+                print(f"  -> {why}\nCATCH-UP {p['host']} {said}\n", flush=True)
                 continue
+            p["catch_up"] = True                # it checks for active work itself
         p["lab_path"], p["source"], p["applied"] = os.path.abspath(lab_path), source, record
         if p["host"] == sec_host and self_admin:
             sec = secretary_host(lab)[1]
@@ -353,8 +360,16 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
         if rc == UNREACHABLE:
             print("  -> skipped: unreachable (stopped?); deploy again once it's on\n")
             skipped.append(p["host"])
+            if only_behind:
+                print(f"CATCH-UP {p['host']} unreachable", flush=True)
+            continue
+        if rc == BUSY and p.get("catch_up"):
+            print(f"  -> not now: tasks are active there\nCATCH-UP {p['host']} busy\n",
+                  flush=True)
             continue
         print(f"  -> {'done' if rc == 0 else f'FAILED (exit {rc})'}\n")
+        if only_behind:
+            print(f"CATCH-UP {p['host']} {'done' if rc == 0 else 'failed'}", flush=True)
         failed += rc != 0
     if skipped:
         print(f"not deployed (unreachable): {', '.join(skipped)}")
@@ -462,7 +477,8 @@ def cmd_apply_main(args):
                     allow_missing=True,
                     self_admin={k: cfg[k] for k in ("config_url", "lab_rel", "framework_source",
                                                     "framework_owner")},
-                    only_behind=bool(commit), locked=held is not None)
+                    only_behind=(lambda old: CR.is_older(config, old, commit)) if commit
+                    else None, locked=held is not None)
     except SystemExit as e:
         print(e, flush=True)
         rc = 1

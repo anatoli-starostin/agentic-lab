@@ -53,6 +53,24 @@ DASHBOARD_PORT = 8774
 HOME_REFRESH_ROUNDS = 20        # Home tabs are republished every ~5 min (20 x 15 s)
 
 
+class IntakeDown(RuntimeError):
+    pass
+
+
+async def intake_up(url, wait_s=15):
+    """Does the intake answer (it starts within seconds of a code being opened)?"""
+    from urllib.parse import urlparse
+    u = urlparse(url)
+    for _ in range(int(wait_s * 2)):
+        try:
+            _, w = await asyncio.wait_for(asyncio.open_connection(u.hostname, u.port or 80), 2)
+            w.close()
+            return True
+        except (OSError, asyncio.TimeoutError):
+            await asyncio.sleep(0.5)
+    return False
+
+
 def sec_id_of(lab):
     return next(a for a, x in lab.agents.items() if x.get("role") == "secretary")
 
@@ -171,9 +189,16 @@ class Secretary:
             return SimpleNamespace(channel=ch, thread_ts=conv.thread_ts), False
         return SimpleNamespace(channel=ch, thread_ts=None), True
 
-    def _link(self, owner, name):
-        """A one-time link for a secret, and the line saying how long it's active."""
+    async def _link(self, owner, name):
+        """A one-time link for a secret, and the line saying how long it's active. The
+        intake starts on demand (#63): if it doesn't come up, say so (and tell the admins)
+        rather than hand out a link that leads nowhere."""
         code = self.intake.request(owner, name)
+        if not await intake_up(self.intake_url):
+            await self.announce(":warning: the secret intake failed to start (sudo journalctl "
+                                "-u lab-intake on the secretary host).")
+            raise IntakeDown("the secret intake failed to start: the admins are told; try "
+                             "again in a while")
         return form_url(code, self.intake_url), window(self.intake.expires(code))
 
     @staticmethod
@@ -206,7 +231,10 @@ class Secretary:
         dm, moved = where
         name = manifest["display_information"]["name"]
         if ready:
-            link, note = self._link(owner, "slack-app")
+            try:
+                link, note = await self._link(owner, "slack-app")
+            except IntakeDown as e:
+                return str(e)
             await self.slack.post(dm.channel, dm.thread_ts,
                                   f"*{name}*: paste both tokens here (never in Slack): {link}\n"
                                   f"{note}")
@@ -251,7 +279,11 @@ class Secretary:
             return "I can't DM you (no slack_user for you in lab.yaml)"
         dm, moved = where
         if ready:
-            link, note = self._link(f"service:github-{account.lower()}", "github-token")
+            try:
+                link, note = await self._link(f"service:github-{account.lower()}",
+                                              "github-token")
+            except IntakeDown as e:
+                return str(e)
             await self.slack.post(dm.channel, dm.thread_ts,
                                   f"*{account}'s token*: paste it here (never in Slack): "
                                   f"{link}\n{note}")
@@ -298,7 +330,10 @@ class Secretary:
             return "I can't DM you (no slack_user for you in lab.yaml)"
         dm, moved = where
         if ready:
-            link, note = self._link(f"service:github-{slug}", "github-app")
+            try:
+                link, note = await self._link(f"service:github-{slug}", "github-app")
+            except IntakeDown as e:
+                return str(e)
             await self.slack.post(dm.channel, dm.thread_ts,
                                   f"*{slug}[bot]'s private key*: paste the whole .pem here "
                                   f"(never in Slack): {link}\n{note}")
@@ -590,6 +625,10 @@ class Secretary:
             sent = "what to have ready; they ask for the command when they are"
         else:
             code = self.intake.request(member, "claude-token")
+            if not await intake_up(self.intake_url):
+                await self.announce(":warning: the secret intake failed to start (sudo "
+                                    "journalctl -u lab-intake on the secretary host).")
+                return "the secret intake failed to start: the admins are told; try again later"
             text = message(name, code, self.intake_url, until=self.intake.expires(code))
             sent = f"a one-time command (active {CODE_MINUTES} minutes)"
         if self.slack is None or not h.get("slack_user"):
@@ -807,7 +846,8 @@ async def serve(lab_path, host, port):
         idle.save()
         try:                    # hosts back from a stop that missed a deploy (#61)
             await CU.step(catch, lab, latest["state"] or {}, sec_host,
-                          lambda: SA.start_apply(catch_up=True), SA.apply_result, sec.announce)
+                          lambda: SA.start_apply(catch_up=True), SA.apply_result, sec.announce,
+                          repo=os.path.expanduser(SA.CLONE))
         except Exception:
             log.exception("catching up hosts failed")
 

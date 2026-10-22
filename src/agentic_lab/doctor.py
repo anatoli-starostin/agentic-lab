@@ -241,7 +241,12 @@ def run(lab_path, host=None):
             res, pw = user_checks("lab-broker" if svc == "broker" else "lab-secretary")
             if pw is not None and svc == "broker":
                 res += secret_checks(pw, SECRETS["broker"])
-            sections.append((svc, res + unit_checks(unit)))
+            res += unit_checks(unit)
+            if svc == "intake" and sh("systemctl", "is-failed", "--quiet", "lab-intake")[0] == 0:
+                res.append(Result(FAIL, "the intake failed when it last started (it runs only "
+                                  "while a one-time code is open)",
+                                  "sudo journalctl -u lab-intake -n 50"))
+            sections.append((svc, res))
     return sections
 
 

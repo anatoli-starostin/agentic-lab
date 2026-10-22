@@ -160,3 +160,24 @@ def test_lab_check_knows_the_visibility_values(tmp_path):
     p.write_text(yaml.safe_dump(d))
     errs = [str(i) for i in registry.check(registry.load(p)) if i.level == "error"]
     assert any("visibility" in e for e in errs)
+
+
+def test_others_dedicated_agents_show_grant_kinds_only():
+    s = dict(STATE, agents={**STATE["agents"],
+                            "worker-b": {"id": "worker-b", "role": "worker", "human": "bob",
+                                         "access": "dedicated"},
+                            "worker-c": {"id": "worker-c", "role": "worker", "human": "bob",
+                                         "access": "shared"}},
+             approvals={"pending": [], "grants": {
+                 "worker-b": [{"kind": "write", "value": "/data/bob-secret-project"}],
+                 "worker-c": [{"kind": "domain", "value": "shared.example.org"}]}})
+    seen = text(V.shape(s, lab(), "alice"))
+    assert "bob-secret-project" not in seen and "write" in seen
+    assert "shared.example.org" in seen
+
+
+def test_own_long_runs_keep_their_names():
+    s = dict(STATE, agents={"worker-a": dict(STATE["agents"]["worker-a"], recent=[], runs=[
+        {"id": "r-3", "name": "alice-old-sweep", "task": "t-old", "requester": "alice"}])})
+    assert "alice-old-sweep" in text(V.shape(s, lab(), "alice"))
+    assert "alice-old-sweep" not in text(V.shape(s, lab(), "bob"))

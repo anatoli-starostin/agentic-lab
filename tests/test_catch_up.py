@@ -15,7 +15,15 @@ from agentic_lab.secretary.web import render
 
 EXAMPLE = Path(__file__).parent.parent / "examples" / "minimal" / "lab.yaml"
 NOW = dt.datetime(2026, 10, 22, 12, 0, tzinfo=dt.timezone.utc)
-NEW, OLD, FW = "c" * 40, "a" * 40, "f" * 40
+NEW, OLD, NEWER, FW = "c" * 40, "a" * 40, "d" * 40, "f" * 40
+
+
+@pytest.fixture(autouse=True)
+def history(monkeypatch):
+    """OLD comes before NEW; NEWER after it."""
+    order = [OLD, NEW, NEWER]
+    monkeypatch.setattr(CU, "is_ancestor", lambda repo, old, new: (
+        old in order and new in order and order.index(old) < order.index(new)))
 
 
 def lab(**top):
@@ -24,26 +32,32 @@ def lab(**top):
     return lb
 
 
-def state(applied=OLD, queue=None, up=True):
+def state(applied=OLD, queue=None, up=True, unreviewed=False):
     """The secretary's host runs NEW; worker-a's host (gpu-a) reports `applied`."""
+    ap = {"config_commit": applied, "framework_commit": FW}
+    if unreviewed:
+        ap["unreviewed"] = True
     return {"applied": {"config_commit": NEW, "framework_commit": FW},
             "agents": {"worker-a": {"host": "gpu-a", "up": up, "queue": queue or {},
-                                    "applied": {"config_commit": applied,
-                                                "framework_commit": FW}}}}
+                                    "applied": ap}}}
 
 
 class Deploys:
-    def __init__(self, fail=False, busy=False):
-        self.started, self.fail, self.busy, self.said = 0, fail, busy, []
+    """A fake `lab apply-main --catch-up`: its log says what happened to each host."""
+
+    def __init__(self, tmp, outcome="done", busy=False):
+        self.tmp, self.started, self.outcome, self.busy, self.said = tmp, 0, outcome, busy, []
 
     def start(self):
         if self.busy:
             raise RuntimeError("couldn't start the deployment: a deploy is already running")
         self.started += 1
-        return f"/log/{self.started}"
+        log = self.tmp / f"apply-{self.started}.log"
+        log.write_text(f"CATCH-UP gpu-a {self.outcome}\n" if self.outcome else "")
+        return str(log)
 
     def result(self, log):
-        return (not self.fail, "")
+        return None if self.outcome is None else (self.outcome == "done", "")
 
     async def announce(self, text):
         self.said.append(text)
@@ -53,19 +67,33 @@ def run(cu, lb, st, d, now=NOW):
     asyncio.run(CU.step(cu, lb, st, "sec-host", d.start, d.result, d.announce, now=now))
 
 
+def later(minutes):
+    return NOW + dt.timedelta(minutes=minutes)
+
+
 def test_a_stale_host_is_caught_up_and_announced(tmp_path):
-    cu, d, lb = CU.CatchUp(str(tmp_path / "c.json")), Deploys(), lab()
-    assert CU.behind(state(), "sec-host") == {"gpu-a": {"config_commit": OLD,
-                                                        "framework_commit": FW}}
+    cu, d, lb = CU.CatchUp(str(tmp_path / "c.json")), Deploys(tmp_path), lab()
+    assert CU.behind(state(), "sec-host", "repo") == {"gpu-a": {"config_commit": OLD,
+                                                                "framework_commit": FW}}
     run(cu, lb, state(), d)
     assert d.started == 1 and cu.running["hosts"] == ["gpu-a"]
-    run(cu, lb, state(applied=NEW), d)                  # its worker now reports NEW
+    run(cu, lb, state(applied=NEW), d, now=later(3))      # its worker now reports NEW
     assert d.said == [f":white_check_mark: gpu-a is up (updated to {NEW[:7]})."]
     assert d.started == 1 and CU.CatchUp(str(tmp_path / "c.json")).attempts == {}
 
 
+def test_newer_or_unreviewed_hosts_are_left_alone(tmp_path):
+    d = Deploys(tmp_path)
+    for st in (state(applied=NEWER), state(applied=OLD, unreviewed=True)):
+        run(CU.CatchUp(str(tmp_path / "c.json")), lab(), st, d)
+        assert CU.behind(st, "sec-host", "repo") == {}
+    assert d.started == 0
+    info = CU.stale_info(state(applied=NEWER), "sec-host", "repo")["gpu-a"]
+    assert info["ahead"] and info["config_behind"] is None
+
+
 def test_busy_hosts_wait_and_nothing_runs_when_switched_off(tmp_path):
-    d = Deploys()
+    d = Deploys(tmp_path)
     run(CU.CatchUp(str(tmp_path / "a.json")), lab(), state(queue={"running": 1}), d)
     run(CU.CatchUp(str(tmp_path / "b.json")), lab(auto_catch_up=False), state(), d)
     assert d.started == 0
@@ -74,34 +102,49 @@ def test_busy_hosts_wait_and_nothing_runs_when_switched_off(tmp_path):
 def test_an_unreviewed_lab_is_never_spread(tmp_path):
     st = state()
     st["applied"]["unreviewed"] = True
-    d = Deploys()
+    d = Deploys(tmp_path)
     run(CU.CatchUp(str(tmp_path / "c.json")), lab(), st, d)
-    assert d.started == 0 and CU.behind(st, "sec-host") == {}
+    assert d.started == 0
 
 
-def test_attempts_are_limited_then_admins_are_told(tmp_path):
-    cu, d, lb = CU.CatchUp(str(tmp_path / "c.json")), Deploys(fail=True), lab()
-    t = NOW
-    for _ in range(6):
+def test_only_failures_count_and_are_limited(tmp_path):
+    cu, lb = CU.CatchUp(str(tmp_path / "c.json")), lab()
+    d = Deploys(tmp_path, outcome="unreachable")          # still booting: not an attempt
+    for i in range(5):
+        run(cu, lb, state(), d, now=later(3 * i))
+    assert cu.attempts.get(f"gpu-a {NEW}", {"n": 0})["n"] == 0
+    d.outcome = "failed"
+    t = later(30)
+    for _ in range(8):
         run(cu, lb, state(), d, now=t)
         t += dt.timedelta(minutes=30)
-    assert d.started == CU.MAX_ATTEMPTS
+    assert cu.attempts[f"gpu-a {NEW}"]["n"] == CU.MAX_ATTEMPTS
     assert len([s for s in d.said if "stays stale" in s]) == 1
-    run(cu, lb, state(), d, now=NOW + dt.timedelta(minutes=1))   # no retry in the pause
-    assert d.started == CU.MAX_ATTEMPTS
+    n = d.started
+    run(cu, lb, state(), d, now=t + dt.timedelta(hours=CU.FORGET_AFTER_H + 1))   # a day on
+    assert d.started == n + 1
 
 
 def test_pauses_between_attempts(tmp_path):
-    cu, d, lb = CU.CatchUp(str(tmp_path / "c.json")), Deploys(fail=True), lab()
+    cu, d, lb = CU.CatchUp(str(tmp_path / "c.json")), Deploys(tmp_path, "failed"), lab()
     run(cu, lb, state(), d)
-    run(cu, lb, state(), d, now=NOW + dt.timedelta(minutes=1))
+    run(cu, lb, state(), d, now=later(3))
     assert d.started == 1
-    run(cu, lb, state(), d, now=NOW + dt.timedelta(minutes=CU.PAUSE_MIN[0] + 1))
+    run(cu, lb, state(), d, now=later(CU.PAUSE_MIN[0] + 1))
     assert d.started == 2
 
 
+def test_a_catch_up_that_never_reports_is_given_up(tmp_path):
+    cu, d, lb = CU.CatchUp(str(tmp_path / "c.json")), Deploys(tmp_path, outcome=None), lab()
+    run(cu, lb, state(), d)
+    run(cu, lb, state(), d, now=later(10))
+    assert cu.running is not None and d.started == 1
+    run(cu, lb, state(), d, now=later(CU.RUN_TIMEOUT_MIN + 1))
+    assert cu.attempts[f"gpu-a {NEW}"]["n"] == 1
+
+
 def test_another_deploy_running_is_waited_for(tmp_path):
-    cu, d = CU.CatchUp(str(tmp_path / "c.json")), Deploys(busy=True)
+    cu, d = CU.CatchUp(str(tmp_path / "c.json")), Deploys(tmp_path, busy=True)
     run(cu, lab(), state(), d)
     assert cu.attempts == {} and cu.running is None
 
@@ -142,7 +185,7 @@ def test_only_a_commit_of_main_is_deployed(tmp_path):
         CR.fetch_main(str(work / "lab.yaml"), side)
 
 
-def test_a_catch_up_deploys_only_hosts_that_run_something_else(monkeypatch):
+def test_a_catch_up_deploys_only_older_hosts(monkeypatch, capsys):
     from agentic_lab import cli, doctor, lock
     plans = [{"host": h, "name": h, "missing": [], "units": [1]} for h in ("gpu-a", "gpu-b")]
     shipped = []
@@ -154,13 +197,43 @@ def test_a_catch_up_deploys_only_hosts_that_run_something_else(monkeypatch):
     monkeypatch.setattr(doctor, "this_host", lambda lb: "sec-host")
     monkeypatch.setattr(A, "describe", lambda p: p["host"])
     monkeypatch.setattr(A, "has_work", lambda p: True)
-    monkeypatch.setattr(A, "applied_on", lambda p, local, admin: (
-        {"config_commit": NEW, "framework_commit": FW} if p["host"] == "gpu-a" else
-        {"config_commit": OLD, "framework_commit": FW}))
-    monkeypatch.setattr(A, "run_bundle", lambda p, local, admin: shipped.append(p["host"]) or 0)
+    plans.append({"host": "gpu-c", "name": "gpu-c", "missing": [], "units": [1]})
+    runs = {"gpu-a": NEW, "gpu-b": OLD, "gpu-c": NEWER}
+    monkeypatch.setattr(A, "applied_on", lambda p, local, admin: {
+        "config_commit": runs[p["host"]], "framework_commit": FW})
+    monkeypatch.setattr(A, "run_bundle", lambda p, local, admin: shipped.append(
+        (p["host"], p.get("catch_up"))) or 0)
     monkeypatch.setattr(cli, "deploy_lock", lambda: None)
-    assert cli.deploy("lab.yaml", {"config_commit": NEW}, ".", "admin", only_behind=True) == 0
-    assert shipped == ["gpu-b"]
+    older = lambda old: old == OLD                          # noqa: E731
+    assert cli.deploy("lab.yaml", {"config_commit": NEW}, ".", "admin", only_behind=older) == 0
+    assert shipped == [("gpu-b", True)]       # not the current one, never the newer one
+    out = capsys.readouterr().out
+    assert "CATCH-UP gpu-a current" in out and "CATCH-UP gpu-c ahead" in out \
+        and "CATCH-UP gpu-b done" in out
+
+
+def test_the_host_checks_for_active_work_itself(tmp_path):
+    lb = registry.load(EXAMPLE)
+    plan = A.host_plan(lb, "gpu-a", SimpleNamespace(get=lambda k: "t"),
+                       lambda owner, name: "secret")
+    plan["catch_up"] = True
+    s = A.script(plan)
+    line = next(ln for ln in s.splitlines() if ln.startswith("if runuser -u lab-worker-a"))
+    assert f"exit {A.BUSY}" in line
+    assert subprocess.run(["bash", "-n"], input=s, text=True).returncode == 0
+    tasks = tmp_path / "home/lab-worker-a/.local/state/agentic-lab/tasks"
+    tasks.mkdir(parents=True)
+    import json
+    import shlex
+    check = shlex.split(line.split(" -- ", 1)[1].split(" >/dev/null")[0])[2]
+    check = check.replace("/home/", f"{tmp_path}/home/")
+
+    def busy():
+        return subprocess.run(["sh", "-c", check], capture_output=True).returncode == 0
+    (tasks / "t-1.json").write_text(json.dumps({"id": "t-1", "state": "done"}, indent=1))
+    assert not busy()
+    (tasks / "t-2.json").write_text(json.dumps({"id": "t-2", "state": "queued"}, indent=1))
+    assert busy()
 
 
 def test_the_secretary_may_run_the_catch_up():

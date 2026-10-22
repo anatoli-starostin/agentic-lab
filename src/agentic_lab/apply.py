@@ -30,6 +30,7 @@ INTAKE = "/home/lab-secretary/.local/state/agentic-lab/secrets"
 PORTS = {"worker": 8770, "intake": 8771, "broker": 8772, "secretary": 8774}
 UNREACHABLE = 255           # run_bundle: the host didn't answer (e.g. a stopped VM)
 SSH_FAILED = 254            # run_bundle: it answered, but ssh failed (host key, login...)
+BUSY = 75                   # a catch-up's host: tasks are active there, not now (#61)
 _NO_ANSWER = ("timed out", "no route to host", "connection refused", "network is unreachable",
               "could not resolve hostname", "name or service not known")
 SSH_OPTS = ["-o", "ConnectTimeout=10", "-o", "BatchMode=yes"]   # never hang on a host
@@ -279,8 +280,23 @@ systemctl enable --now lab-keep-awake.timer >/dev/null 2>&1
 """
 
 
+def busy_check(plan):
+    """A catch-up checks on the host itself, right before it applies, that none of its
+    workers has tasks running, queued or awaiting approval (a deploy restarts them, #61).
+    Read as each worker's own user."""
+    lines = ['say "active work (a catch-up waits for it)"']
+    for u in sorted(set((plan.get("run_units") or {}).values())):
+        check = ('grep -lsE \'"state": "(running|queued|awaiting_approval)"\' '
+                 f"/home/{u}/.local/state/agentic-lab/tasks/*.json")
+        lines.append(f"if runuser -u {u} -- sh -c {shlex.quote(check)} >/dev/null; then "
+                     f"echo '  {u} has active tasks: not now'; exit {BUSY}; fi")
+    return lines
+
+
 def script(plan):
     lines = [SCRIPT_HEAD.format(host=plan["host"])]
+    if plan.get("catch_up"):
+        lines += busy_check(plan)
     lines.append('say "users"')
     for u in dict.fromkeys(plan["users"]):
         lines.append(f"/opt/agentic-lab/src/deploy/worker/create-agent-user.sh {u} >/dev/null")

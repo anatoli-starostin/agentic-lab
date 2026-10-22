@@ -16,8 +16,11 @@ Group=lab-secretary
 WorkingDirectory=/home/lab-secretary/.local/state/agentic-lab
 EnvironmentFile=/etc/agentic-lab/intake.env
 ExecStart=/opt/agentic-lab/venv/bin/lab intake serve --host ${LAB_BIND} --port ${LAB_PORT} --client /opt/agentic-lab/client/lab-member.py --on-demand
-Restart=on-failure
-RestartSec=5
+# Started only by its path unit, never restarted by itself: one that fails takes the flag
+# away (or it would be started again and again), so a broken intake costs one failed
+# start per request, which the requester is told about.
+Restart=no
+ExecStopPost=/bin/sh -c '[ "$$SERVICE_RESULT" = success ] || rm -f /home/lab-secretary/.local/state/agentic-lab/intake-open'
 # Needs no privileges (#63): a read-only system, its own folders only, no devices, no
 # capabilities, the usual system calls.
 NoNewPrivileges=yes

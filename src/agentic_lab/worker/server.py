@@ -65,6 +65,13 @@ class Access:
         raise AccessError("unknown token")
 
 
+def _requester(store, task_id):
+    try:
+        return store.get(task_id).requester
+    except Exception:
+        return None
+
+
 def read_workdir_file(workdir, path):
     """A plain file in the worker's working folder (never outside it, never through a
     link: safefs), as base64."""
@@ -221,7 +228,8 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         from ..configrepo import applied_versions
         h["applied"] = applied_versions()   # what this host runs: missed deploys (#61)
         if runs is not None:
-            h["runs"] = [{k: r.get(k) for k in ("id", "name", "task", "state", "started")}
+            h["runs"] = [{**{k: r.get(k) for k in ("id", "name", "task", "state", "started")},
+                          "requester": _requester(store, r.get("task"))}
                          for r in await asyncio.to_thread(runs.active)]
         if usage is not None:
             h["usage"] = usage.load()

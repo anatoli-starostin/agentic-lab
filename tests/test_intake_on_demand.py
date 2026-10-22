@@ -53,7 +53,9 @@ def test_the_intake_is_started_by_its_path_unit_and_hardened():
     path = (REPO / "deploy/secretary/lab-intake.path").read_text()
     flag = os.path.join("/home/lab-secretary/.local/state/agentic-lab", I.OPEN_FLAG)
     assert f"PathExists={flag}" in path and "Unit=lab-intake.service" in path
-    assert "--on-demand" in svc and "Restart=on-failure" in svc and "[Install]" not in svc
+    assert "--on-demand" in svc and "Restart=no" in svc and "[Install]" not in svc
+    # a failed start takes the flag away: it isn't started again and again
+    assert "ExecStopPost=/bin/sh -c '[ \"$$SERVICE_RESULT\" = success ] || rm -f " + flag in svc
     broker = (REPO / "deploy/secretary/lab-broker.service").read_text()
     for unit in (svc, broker):
         for line in ("NoNewPrivileges=yes", "ProtectSystem=strict", "ProtectHome=tmpfs",
@@ -113,6 +115,10 @@ def secretary(tmp_path, monkeypatch):
     sec = Secretary(registry.load(EXAMPLE), {"state": None}, None, None,
                     ManagerState(str(tmp_path / "chat")), slack=Slack())
     sec.intake = I.Intake(str(tmp_path / "intake"))
+
+    async def up(url, wait_s=15):
+        return True
+    monkeypatch.setattr("agentic_lab.secretary.service.intake_up", up)
     return sec
 
 
@@ -138,3 +144,25 @@ def test_a_members_token_command_goes_to_them_when_they_ask(tmp_path, monkeypatc
     asyncio.run(sec.request_token("bob", asked_by="bob"))         # bob, ready
     ch, text = sec.slack.posts[-1]
     assert ch == "D-U-BOB" and "lab-member.py" in text and sec.intake.open_codes() == 1
+
+
+def test_a_failed_intake_is_said_not_a_dead_link(tmp_path, monkeypatch):
+    sec = secretary(tmp_path, monkeypatch)
+
+    async def down(url, wait_s=15):
+        return False
+    monkeypatch.setattr("agentic_lab.secretary.service.intake_up", down)
+    said = asyncio.run(sec.request_github_token("flash-bot", "alice",
+                                                SimpleNamespace(channel="C", thread_ts=None),
+                                                ready=True))
+    assert "failed to start" in said and not any("/s/" in t for _, t in sec.slack.posts)
+
+
+def test_bad_codes_are_counted_across_starts(tmp_path):
+    intake = I.Intake(str(tmp_path))
+    for _ in range(I.MAX_FAILURES):
+        with pytest.raises(I.IntakeError):
+            intake.receive("AAAA-BBBB", "claude-token", "x", source="100.1.2.3")
+    again = I.Intake(str(tmp_path))                  # started anew for the next code
+    with pytest.raises(I.IntakeError, match="too many"):
+        again.receive("AAAA-BBBB", "claude-token", "x", source="100.1.2.3")

@@ -141,7 +141,14 @@ class Intake:
         os.makedirs(self.requests_dir, mode=0o700, exist_ok=True)
         os.makedirs(self.secrets_dir, mode=0o700, exist_ok=True)
         self._lock = threading.Lock()
-        self._failures = {}         # source (the caller's address) -> times of bad codes
+        # source (the caller's address) -> times of bad codes; kept on disk, since the
+        # intake starts anew with every code (#63)
+        self._failures_path = os.path.join(self.requests_dir, "failures.json")
+        try:
+            with open(self._failures_path) as f:
+                self._failures = {s: list(ts) for s, ts in json.load(f).items()}
+        except (OSError, ValueError, AttributeError):
+            self._failures = {}
 
     # ── requests ─────────────────────────────────────────────────────────────
 
@@ -209,13 +216,17 @@ class Intake:
     def _too_many_failures(self, source):
         """Bad codes are counted per caller (#63): one device guessing can't lock out the
         others, who hold valid codes."""
-        cutoff = time.monotonic() - FAILURE_WINDOW_S
+        cutoff = time.time() - FAILURE_WINDOW_S
         self._failures = {s: [t for t in ts if t > cutoff]
                           for s, ts in self._failures.items() if any(t > cutoff for t in ts)}
-        return len(self._failures.get(source, [])) >= MAX_FAILURES
+        return len(self._failures.get(str(source), [])) >= MAX_FAILURES
 
     def _failed(self, source):
-        self._failures.setdefault(source, []).append(time.monotonic())
+        self._failures.setdefault(str(source), []).append(time.time())
+        try:
+            _write_private(self._failures_path, json.dumps(self._failures))
+        except OSError:
+            pass
 
     def receive(self, code, name, value, source=None) -> str:
         """Store `value` if `code` is a live request for secret `name`. Returns the human.

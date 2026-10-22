@@ -380,8 +380,9 @@ class SdkRunner:
     async def run(self, task, store):
         self._log("task", f"started for {task.requester} via {task.manager}: {task.instruction}",
                   task=task.id)
-        try:                        # its files for the member (#62)
-            os.makedirs(os.path.join(self.workdir, "tasks", task.id), exist_ok=True)
+        try:                        # its files for the member (#62), in the agent's folder
+            from .. import safefs
+            safefs.makedirs(self.workdir, os.path.join("tasks", task.id))
         except OSError:
             pass
         outcome = {}
