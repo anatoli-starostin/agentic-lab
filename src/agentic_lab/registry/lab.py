@@ -46,7 +46,7 @@ CHANNEL_TYPES = ("slack_dm",)   # first version: Slack DM only (DESIGN.md §7)
 ACCESS = ("shared", "dedicated")
 HOST_KINDS = ("onprem", "cloud")
 PROVIDERS = ("nebius", "aws")       # cloud providers lab.yaml knows
-POWERED = ("nebius",)               # ...and those the secretary can power (idle stop, on/off)
+POWERED = ("nebius", "aws")         # ...and those the secretary can power (idle stop, on/off)
 EXPIRY_WARN_DAYS = 14
 
 # key -> (type, required). Types are checked; unknown keys are errors.
@@ -75,6 +75,7 @@ _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "turn_budget_min": (int, False),  # a manager's turns are cut off after this
           "keep_free_gb": (int, False)}     # a worker prunes its caches below this (#45)
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
+         "region": (str, False),        # AWS: the instance's region (default: the chain's)
          # minutes idle before the secretary stops it (cloud hosts: required; 0: never)
          "idle_stop_min": (int, False), "tailnet_name": (str, False),
          "ssh_user": (str, False),      # who `lab apply` logs in as (default: the admin)

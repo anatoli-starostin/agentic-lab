@@ -62,10 +62,10 @@ def parse_worker(spec, tailnet):
 
 
 def cloud_host(provider, idle_stop_min):
-    """A cloud host's stanza. AWS hosts have no power control (yet): never idle-stopped, and
-    Ubuntu AMIs log in as `ubuntu`."""
+    """A cloud host's stanza. Ubuntu AMIs on AWS log in as `ubuntu`."""
     if provider == "aws":
-        return {"kind": "cloud", "provider": "aws", "idle_stop_min": 0, "ssh_user": "ubuntu"}
+        return {"kind": "cloud", "provider": "aws", "idle_stop_min": idle_stop_min,
+                "ssh_user": "ubuntu"}
     return {"kind": "cloud", "provider": provider, "idle_stop_min": idle_stop_min}
 
 

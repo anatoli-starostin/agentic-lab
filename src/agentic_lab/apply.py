@@ -215,6 +215,8 @@ def host_plan(lab, host, tokens, intake=intake_secret):
             nebius_cli = sec_user
         if any((h or {}).get("provider") == "nebius" for h in lab.hosts.values()):
             nebius_cli = sec_user      # VM power: the CLI the secretary (and nebius connect) use
+        if any((h or {}).get("provider") == "aws" for h in lab.hosts.values()):
+            aws_sdk = True             # VM power on AWS: boto3 in the lab's venv (#68)
         users += ["lab-broker"]
         agents = [aid for aid, a in lab.agents.items()
                   if a.get("role") in ("worker", "manager", "secretary")]
@@ -244,7 +246,8 @@ def host_plan(lab, host, tokens, intake=intake_secret):
             "readable": readable,
             "envs": envs, "missing": missing, "later": later,
             "secretary_host": host == sec_host,
-            "nebius_cli": locals().get("nebius_cli"), "held": held,
+            "nebius_cli": locals().get("nebius_cli"), "aws_sdk": locals().get("aws_sdk"),
+            "held": held,
             "ssh_user": (lab.hosts.get(host) or {}).get("ssh_user")}
 
 
@@ -310,6 +313,9 @@ def script(plan):
     lines.append('say "users"')
     for u in dict.fromkeys(plan["users"]):
         lines.append(f"/opt/agentic-lab/src/deploy/worker/create-agent-user.sh {u} >/dev/null")
+    if plan.get("aws_sdk"):
+        lines.append('say "AWS SDK (VM power)"')
+        lines.append("uv pip install -q -p /opt/agentic-lab/venv 'boto3>=1.34,<2'")
     if plan.get("nebius_cli"):
         u = plan["nebius_cli"]
         lines.append('say "Nebius CLI (VM power)"')

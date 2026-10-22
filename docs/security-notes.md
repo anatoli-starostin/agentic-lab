@@ -117,6 +117,12 @@ What it took:
 
 ## Accepted trade-offs
 
+- **AWS power uses the secretary's instance role** (#68), not stored keys: its credentials
+  come from the instance metadata service, readable by any process on that host unless
+  the host restricts it. Keep the role to start/stop on tagged instances plus
+  `DescribeInstances` (docs/install.md), so a leaked credential can only power the lab's
+  own tagged hosts.
+
 - **Local reads are free**, except `/run` and the agent's service's own secrets and state
   (`~/.config/agentic-lab`, `~/.local/state/agentic-lab`): the agent's Read tool is denied
   there and its sandbox hides them; the Claude token is stripped from sandboxed commands.
