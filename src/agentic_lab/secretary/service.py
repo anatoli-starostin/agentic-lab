@@ -564,13 +564,16 @@ class Secretary:
                 done = {k: v for k, v in json.load(f).items() if k.endswith(today)}
         except (OSError, ValueError):
             done = {}
+        broken = {}                 # identity -> (its problem, the agents using it)
         for aid, a in ((self.latest.get("state") or {}).get("agents") or {}).items():
             for ident, problem in (a.get("github") or {}).items():     # #64
-                key = f"github:{aid}:{ident}:{today}"
-                if not done.get(key):
-                    await self.announce(f":warning: GitHub identity *{ident}* of "
-                                        f"{a.get('name') or aid} doesn't work: {problem}")
-                    done[key] = True
+                broken.setdefault(ident, (problem, []))[1].append(a.get("name") or aid)
+        for ident, (problem, users) in broken.items():
+            key = f"github:{ident}:{today}"     # once a day per identity, however shared
+            if not done.get(key):
+                await self.announce(f":warning: GitHub identity *{ident}* (used by "
+                                    f"{', '.join(users)}) doesn't work: {problem}")
+                done[key] = True
         for cred, left in expiry_notices(self.lab):
             key = f"{cred['name']}:{today}"
             if done.get(key):
@@ -683,7 +686,8 @@ async def serve(lab_path, host, port):
                                          timespec="seconds")}
             except P.PowerError as e:
                 hosts_power[host] = {"state": "unknown", "error": str(e)[:200]}
-        for host in idle.candidates(lab, latest["state"] or {"agents": {}}):
+        power = {h: v.get("state") for h, v in hosts_power.items() if v.get("state")}
+        for host in idle.candidates(lab, latest["state"] or {"agents": {}}, power=power):
             if hosts_power.get(host, {}).get("state") != "RUNNING":
                 continue
             # still idle right now? (a task may have arrived since the snapshot, #60)

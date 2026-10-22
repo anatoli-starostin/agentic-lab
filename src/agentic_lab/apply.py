@@ -29,6 +29,9 @@ PRIVATE = "/etc/agentic-lab/private"
 INTAKE = "/home/lab-secretary/.local/state/agentic-lab/secrets"
 PORTS = {"worker": 8770, "intake": 8771, "broker": 8772, "secretary": 8774}
 UNREACHABLE = 255           # run_bundle: the host didn't answer (e.g. a stopped VM)
+SSH_FAILED = 254            # run_bundle: it answered, but ssh failed (host key, login...)
+_NO_ANSWER = ("timed out", "no route to host", "connection refused", "network is unreachable",
+              "could not resolve hostname", "name or service not known")
 SSH_OPTS = ["-o", "ConnectTimeout=10", "-o", "BatchMode=yes"]   # never hang on a host
 SOURCE_COPY = "/opt/agentic-lab/src"
 
@@ -339,6 +342,7 @@ def removed_agents_script(plan):
         '    systemctl disable --now "$u" >/dev/null 2>&1 || true',
         '    role=${u%%@*}; role=${role#lab-}; id=${u#*@}',
         '    rm -f "/etc/agentic-lab/$role-$id.env"',
+        '    systemctl stop "lab-run-$id@*" >/dev/null 2>&1 || true   # its long runs',
         '    echo "  stopped $u (no longer in lab.yaml for this host)"',
         "done",
         "for f in /etc/systemd/system/lab-run-*@.service; do",
@@ -513,9 +517,13 @@ def run_bundle(plan, local, admin):
                 for n in [root] + [os.path.join(root, x) for x in dirs + fnames]:
                     os.chown(n, pw.pw_uid, pw.pw_gid)
         # a stopped VM (the usual state of an idle GPU host) answers nothing: skip it fast
-        if subprocess.run(as_admin + ["ssh", *SSH_OPTS, target, "true"],
-                          capture_output=True).returncode == 255:
-            return UNREACHABLE
+        probe = subprocess.run(as_admin + ["ssh", *SSH_OPTS, target, "true"],
+                               capture_output=True, text=True)
+        if probe.returncode == 255:
+            if any(s in (probe.stderr or "").lower() for s in _NO_ANSWER):
+                return UNREACHABLE
+            print(f"  ssh to {target} failed: {(probe.stderr or '').strip()[-400:]}")
+            return SSH_FAILED
         r = subprocess.run(as_admin + ["scp", *SSH_OPTS, "-q", "-r", b, f"{target}:{remote}"])
         if r.returncode:
             return r.returncode

@@ -306,3 +306,18 @@ def test_a_run_ending_between_the_reads_is_not_lost(tmp_path):
     runs.systemctl = ends_now
     v = runs.view(r["id"])
     assert v["state"] == "exited" and v["exit_code"] == 0
+
+
+def test_ended_runs_arent_asked_about(tmp_path):
+    asked = []
+
+    def systemctl(verb, agent, run_id):
+        asked.append(run_id)
+        return False
+    runs = R.RunStore(str(tmp_path / "state"), str(tmp_path / "work"), "worker-a",
+                      systemctl=systemctl)
+    (tmp_path / "work").mkdir(exist_ok=True)
+    r = runs.start("t-1", "x", "true")
+    runs._write(runs._path(r["id"], ".status"), {"state": "exited", "exit_code": 0})
+    asked.clear()
+    assert runs.view(r["id"])["state"] == "exited" and asked == []

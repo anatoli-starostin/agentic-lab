@@ -140,10 +140,13 @@ class RunStore:
         """The run with its state: starting, running, exited (exit code), failed, stopped,
         or lost (its unit ended without a word, e.g. the machine was powered off)."""
         spec = self.get(run_id)
-        # systemd first, then the status file: a run that ends between the two reads then
-        # shows its exit, never "lost" (#59)
-        active = self.systemctl("is-active", self.agent_id, run_id)
         st = self._read(self._path(run_id, ".status")) or {}
+        active = False
+        if (st.get("state") or "starting") in ACTIVE:
+            # systemd, then the status file again: a run that ends between the two reads
+            # then shows its exit, never "lost" (#59); ended runs aren't asked about
+            active = self.systemctl("is-active", self.agent_id, run_id)
+            st = self._read(self._path(run_id, ".status")) or st
         state = st.get("state") or "starting"
         if state in ACTIVE and not active:
             st = self._read(self._path(run_id, ".status")) or st     # once more: just ended?

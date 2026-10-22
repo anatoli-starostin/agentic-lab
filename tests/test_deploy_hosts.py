@@ -26,12 +26,16 @@ def test_an_unreachable_host_is_skipped_fast(tmp_path, monkeypatch):
 
     def run(argv, **kw):
         calls.append(argv)
-        return subprocess.CompletedProcess(argv, 255)       # ssh: no route / timed out
+        return subprocess.CompletedProcess(argv, 255, "", stderr["text"])
+    stderr = {"text": "ssh: connect to host gpu-a port 22: Connection timed out"}
     monkeypatch.setattr(A, "bundle", lambda *a, **k: None)
     monkeypatch.setattr(A.subprocess, "run", run)
     monkeypatch.setattr(A.os, "geteuid", lambda: 1000)
     assert A.run_bundle(plan, local=False, admin="admin") == A.UNREACHABLE
     assert len(calls) == 1 and "ConnectTimeout=10" in calls[0] and "BatchMode=yes" in calls[0]
+    # it answered but ssh failed (a changed host key, a refused login): a failure, not a skip
+    stderr["text"] = "Host key verification failed."
+    assert A.run_bundle(plan, local=False, admin="admin") == A.SSH_FAILED
 
 
 def test_one_deploy_at_a_time(tmp_path):
@@ -79,7 +83,8 @@ def test_the_cleanup_keeps_listed_agents_and_stops_the_rest(tmp_path):
     r = subprocess.run(["bash", "-c", 'say() { echo "== $*"; }\n' + frag], text=True,
                        capture_output=True, env={"PATH": f"{fake}:/usr/bin:/bin"})
     assert r.returncode == 0, r.stderr
-    assert log.read_text().strip() == "disable --now lab-worker@old-worker"
+    assert log.read_text().split("\n")[:2] == ["disable --now lab-worker@old-worker",
+                                                "stop lab-run-old-worker@*"]   # its runs too
     assert not (root / "etc/agentic-lab/worker-old-worker.env").exists()
     assert (root / "etc/agentic-lab/worker-worker-a.env").exists()
     assert not (root / "etc/systemd/system/lab-run-old-worker@.service").exists()

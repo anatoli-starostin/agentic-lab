@@ -386,22 +386,51 @@ async def run_tasks(store: T.TaskStore, runner, stop: asyncio.Event, runs=None):
     approver = getattr(runner, "approver", None)
     for t in store.recover():
         log.info("requeued %s after restart", t.id)
-        for rid in t.pending_requests:      # its old approval requests: no longer waited for
-            if approver is not None:
-                await approver.withdraw(rid)
-        if t.pending_requests:
-            store.update(t.id, pending_requests=[])
-    loop = asyncio.get_running_loop()
-    last_wake = 0.0
-    while not stop.is_set():
-        if loop.time() - last_wake >= WAKE_CHECK_S:
-            last_wake = loop.time()
+        if t.pending_requests:              # its old approval requests: no longer waited for
+            store.update(t.id, stale_requests=t.stale_requests + t.pending_requests,
+                         pending_requests=[])
+    # waking parked tasks, stopping orphaned runs, withdrawing old requests: on their own,
+    # so they go on while a task runs (#59), and never hold up the start (#58)
+    keeper = asyncio.create_task(housekeeping(store, runs, approver, stop))
+    try:
+        await _task_loop(store, runner, stop)
+    finally:
+        keeper.cancel()
+
+
+async def withdraw_stale(store, approver):
+    """Withdraw the requests of tasks requeued after a crash; keep those the broker
+    couldn't be asked about, for the next round."""
+    for t in store.all():
+        left = []
+        for rid in t.stale_requests:
             try:
-                for t in await asyncio.to_thread(wake_waiting, store, runs):
-                    log.info("woke %s: %s", t.id, t.wake)
-                await asyncio.to_thread(stop_orphaned_runs, store, runs)
+                ok = await approver.withdraw(rid) if approver is not None else True
             except Exception:
-                log.exception("checking waiting tasks failed")
+                ok = False
+            if ok is False:
+                left.append(rid)
+        if left != t.stale_requests:
+            store.update(t.id, stale_requests=left)
+
+
+async def housekeeping(store, runs, approver, stop):
+    while not stop.is_set():
+        try:
+            for t in await asyncio.to_thread(wake_waiting, store, runs):
+                log.info("woke %s: %s", t.id, t.wake)
+            await asyncio.to_thread(stop_orphaned_runs, store, runs)
+            await withdraw_stale(store, approver)
+        except Exception:
+            log.exception("checking waiting tasks failed")
+        try:
+            await asyncio.wait_for(stop.wait(), WAKE_CHECK_S)
+        except asyncio.TimeoutError:
+            pass
+
+
+async def _task_loop(store, runner, stop):
+    while not stop.is_set():
         task = store.next_queued()
         if task is None:
             try:
