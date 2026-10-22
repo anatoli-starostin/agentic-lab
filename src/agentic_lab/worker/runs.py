@@ -258,11 +258,10 @@ def run_exec(store: RunStore, run_id, env=None):
         stopped = {}
 
         def on_term(signum, frame):
+            # Only noted: a stop (KillMode=control-group) already sends TERM to every process
+            # in the unit, the job's included. Passing it on as well made the job see it
+            # twice. We wait for the job to finish (its grace period) and record that.
             stopped["at"] = _now()
-            try:
-                os.killpg(p.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
         signal.signal(signal.SIGTERM, on_term)
         code = p.wait()
         st = store._status(run_id)
