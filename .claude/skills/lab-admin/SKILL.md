@@ -164,7 +164,9 @@ asking before each one. The whole lab, one host, or one agent.
   `~/work/runs/<name>-<id>/log` (`sudo cat`); stop one with
   `sudo systemctl stop lab-run-<agent>@<id>` (or cancel its task: that stops its runs).
   A run that won't start: `lab doctor` (its unit template and sudo rule come from
-  `lab apply`).
+  `lab apply`). A run that fails on "Read-only file system" or "Permission denied" for a
+  path in the home: a run's home is read-only except the working folder; see
+  docs/long-runs.md for what doesn't work in runs and the workaround for each.
 - **A machine wasn't stopped when idle** (or the secretary refuses to power it off): it's
   *busy*. The secretary says why: a worker task running, queued, awaiting approval or
   waiting on its long runs; a long run going; a

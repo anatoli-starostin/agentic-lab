@@ -47,7 +47,11 @@ def unit(agent_id, run_id):
     return f"lab-run-{agent_id}@{run_id}.service"
 
 
-BWRAP = "/usr/bin/bwrap --die-with-parent --unshare-pid --dev-bind / / --proc /proc --"
+# No --die-with-parent: on `systemctl stop` the job gets its TERM and its grace period (a
+# checkpoint), bounded by TimeoutStopSec; KillMode=control-group then kills whatever is
+# left in the unit, inside the namespace or not, and if bwrap itself dies the unit ends and
+# the same happens.
+BWRAP = "/usr/bin/bwrap --unshare-pid --dev-bind / / --proc /proc --"
 STATUS_KEYS = ("started", "ended", "exit_code", "pid", "stop_requested", "error")
 
 
@@ -206,12 +210,24 @@ def log_tail(path, lines, root):
 
 
 def home_env(workdir):
-    """A run's home is read-only to it: what tools keep in the home (settings, data, state)
-    goes into the working folder instead."""
+    """A run's home is read-only to it: what tools keep in the home (settings, data, state,
+    per-user installs, package caches) goes into the working folder instead
+    (docs/long-runs.md lists what still can't work)."""
     w = os.path.abspath(workdir)
-    return {"XDG_CONFIG_HOME": os.path.join(w, ".config"),
-            "XDG_DATA_HOME": os.path.join(w, ".local", "share"),
-            "XDG_STATE_HOME": os.path.join(w, ".local", "state")}
+    j = lambda *p: os.path.join(w, *p)          # noqa: E731
+    return {"XDG_CONFIG_HOME": j(".config"),
+            "XDG_DATA_HOME": j(".local", "share"),
+            "XDG_STATE_HOME": j(".local", "state"),
+            "PYTHONUSERBASE": j(".local"),                 # pip install --user
+            "IPYTHONDIR": j(".config", "ipython"),
+            "JUPYTER_CONFIG_DIR": j(".config", "jupyter"),
+            "KERAS_HOME": j(".cache", "keras"),
+            "npm_config_cache": j(".cache", "npm"),
+            "npm_config_prefix": j(".local"),              # npm install -g
+            "CARGO_HOME": j(".cache", "cargo"),
+            "GOPATH": j(".cache", "go"),
+            "CONDA_PKGS_DIRS": j(".cache", "conda", "pkgs"),
+            "CONDA_ENVS_PATH": j("envs")}
 
 
 def _systemctl(verb, agent_id, run_id):
