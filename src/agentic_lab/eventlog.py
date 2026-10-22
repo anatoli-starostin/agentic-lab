@@ -28,27 +28,46 @@ def short(x, n=MAX_TEXT):
 
 class TurnClock:
     """Where a conversation turn's time goes (#69): Claude Code's start-up (until its init
-    message), the first reply, the whole turn. Logged as a `timing` event."""
+    message), its first output (text or a tool call), the first text the member sees, the
+    whole turn, and how it ended (ok, cut_off, error). Used as `async with`, it logs a
+    `timing` event however the turn ends, and lets an exception through unchanged."""
 
-    def __init__(self, now=time.monotonic):
-        self.now, self.t0 = now, now()
-        self.startup = self.first = None
+    def __init__(self, log=None, now=time.monotonic):
+        self.log, self.now, self.t0 = log, now, now()
+        self.startup = self.first = self.first_text = None
+        self.cut = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, tb):
+        outcome = "error" if exc_type else "cut_off" if self.cut else "ok"
+        if self.log:
+            text, meta = self.done(outcome)
+            self.log("timing", text, **meta)
+        return False
+
+    def _at(self, seen):
+        return seen if seen is not None else self.now() - self.t0
 
     def started(self):
-        if self.startup is None:
-            self.startup = self.now() - self.t0
+        self.startup = self._at(self.startup)
 
-    def replied(self):
-        if self.first is None:
-            self.first = self.now() - self.t0
+    def output(self, text=False):
+        self.first = self._at(self.first)
+        if text:
+            self.first_text = self._at(self.first_text)
 
-    def done(self):
+    def done(self, outcome="ok"):
         """(text, meta) for the event log."""
         total = self.now() - self.t0
-        parts = [("start-up", self.startup), ("first reply", self.first), ("total", total)]
+        parts = [("start-up", self.startup), ("first output", self.first),
+                 ("first text", self.first_text), ("total", total)]
         text = ", ".join(f"{name} {s:.1f} s" for name, s in parts if s is not None)
-        return text, {"startup_s": _secs(self.startup), "first_reply_s": _secs(self.first),
-                      "total_s": _secs(total)}
+        return f"{text} ({outcome})", {
+            "startup_s": _secs(self.startup), "first_output_s": _secs(self.first),
+            "first_text_s": _secs(self.first_text), "total_s": _secs(total),
+            "outcome": outcome}
 
 
 def _secs(s):

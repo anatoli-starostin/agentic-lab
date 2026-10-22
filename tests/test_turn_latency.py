@@ -12,20 +12,22 @@ def test_the_lab_tools_load_up_front():
 
 
 def test_a_turn_clock_says_where_the_time_went():
-    t = iter([0.0, 5.8, 7.1, 9.0])
+    t = iter([0.0, 5.8, 7.1, 8.0, 9.0])
     clock = TurnClock(now=lambda: next(t))
     clock.started()
-    clock.replied()
-    clock.replied()                     # only the first reply counts
+    clock.output()                      # a tool call: output, not yet text for the member
+    clock.output(text=True)
+    clock.output(text=True)             # only the first of each counts
     text, meta = clock.done()
-    assert text == "start-up 5.8 s, first reply 7.1 s, total 9.0 s"
-    assert meta == {"startup_s": 5.8, "first_reply_s": 7.1, "total_s": 9.0}
+    assert text == "start-up 5.8 s, first output 7.1 s, first text 8.0 s, total 9.0 s (ok)"
+    assert meta == {"startup_s": 5.8, "first_output_s": 7.1, "first_text_s": 8.0,
+                    "total_s": 9.0, "outcome": "ok"}
 
 
 def test_a_turn_without_a_reply_still_has_a_total():
     t = iter([0.0, 2.5])
-    text, meta = TurnClock(now=lambda: next(t)).done()
-    assert text == "total 2.5 s" and meta["startup_s"] is None
+    text, meta = TurnClock(now=lambda: next(t)).done("error")
+    assert text == "total 2.5 s (error)" and meta["startup_s"] is None
 
 
 class _Client:
@@ -59,6 +61,43 @@ def test_a_manager_turn_logs_its_timing():
     timing = [e for e in logged if e[0] == "timing"]
     assert len(timing) == 1
     kind, text, meta = timing[0]
-    assert text.startswith("start-up ") and "first reply" in text and "total" in text
-    assert meta["conv"] == "c" and meta["member"] == "alice"
-    assert meta["total_s"] >= meta["first_reply_s"] >= meta["startup_s"] >= 0
+    assert text.startswith("start-up ") and "first text" in text and text.endswith("(ok)")
+    assert meta["conv"] == "c" and meta["member"] == "alice" and meta["outcome"] == "ok"
+    assert meta["total_s"] >= meta["first_text_s"] >= meta["first_output_s"] \
+        >= meta["startup_s"] >= 0
+
+
+def test_the_timing_is_logged_however_the_turn_ends():
+    import pytest
+    logged = []
+
+    async def turn(fail=False, cut=False):
+        async with TurnClock(lambda kind, text="", **m: logged.append(m)) as clock:
+            clock.cut = cut
+            if fail:
+                raise RuntimeError("claude died")
+    asyncio.run(turn())
+    asyncio.run(turn(cut=True))
+    with pytest.raises(RuntimeError, match="claude died"):     # passed on unchanged
+        asyncio.run(turn(fail=True))
+    assert [m["outcome"] for m in logged] == ["ok", "cut_off", "error"]
+
+
+class _Failing(_Client):
+    async def receive_response(self):
+        raise RuntimeError("the claude process exited")
+        yield
+
+
+def test_a_manager_turn_that_raises_still_logs_its_timing():
+    import pytest
+    from agentic_lab.manager import brain as B
+    logged = []
+    events = SimpleNamespace(add=lambda kind, text="", **m: logged.append((kind, m)))
+    br = B.Brain("Flash", "lab", "/tmp", lambda grants: {}, turn_budget_s=30, events=events)
+    br.client_factory = _Failing
+    ctx = SimpleNamespace(conv=SimpleNamespace(key="c", session_id=None), requester="alice",
+                          state=SimpleNamespace(save=lambda: None))
+    with pytest.raises(RuntimeError, match="exited"):
+        asyncio.run(br.turn(ctx, "hello"))
+    assert [m["outcome"] for k, m in logged if k == "timing"] == ["error"]
