@@ -33,6 +33,7 @@ prepared by `deploy/worker/setup-sandbox.sh`.
 | Raw sockets to the internet | refused |
 | `.git/hooks`, `.git/config` of repos existing when a command starts (nested too) | write-protected |
 | `systemd-run --user` (start a process outside the sandbox) | refused: `/run` is hidden |
+| The agent's own file tools (Read, Edit, Write, Glob, Grep) on the lab's folders | **not yet verified live.** Until `policy/session.py`, only Claude Code's permission rules kept them off; now the session itself starts with those folders covered (below) |
 
 What it took:
 
@@ -118,8 +119,15 @@ What it took:
 ## Accepted trade-offs
 
 - **Local reads are free**, except `/run` and the agent's service's own secrets and state
-  (`~/.config/agentic-lab`, `~/.local/state/agentic-lab`): the agent's Read tool is denied
-  there and its sandbox hides them; the Claude token is stripped from sandboxed commands.
+  (`~/.config/agentic-lab`, `~/.local/state/agentic-lab`, `~/.nebius`). The agent's own
+  session starts with them covered (`lab-claude`, `policy/session.py`: bwrap around the
+  `claude` process, so its file tools and everything it starts can't reach them; the
+  permission rules that deny its Read and Edit tools there stay as a second layer); its
+  sandbox, its runs and approved commands hide them too, the same core
+  (`sandbox.lab_own`) plus each one's own extras. No bwrap, no session: the host stops
+  serving rather than run the agent unconfined (`session.REFUSE_UNCONFINED`). The Claude
+  token stays in the `claude` process's environment (it needs it) and is stripped from
+  sandboxed commands; approved commands and runs have their own process namespace.
   Other agents' files are protected by Unix permissions (one user per agent).
 - **An agent can read its current GitHub token** (so git and `gh` work). For a bot account
   that's its fine-grained token; for a GitHub App, an installation token that expires

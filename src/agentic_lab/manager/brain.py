@@ -18,6 +18,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
 
 from ..eventlog import tool_summary
 
+from ..policy import session as S
 from ..policy.confine import approved_input
 from ..policy.grants import Grant
 
@@ -187,7 +188,7 @@ class Brain:
                                            getattr(ctx, "guest_name", ctx.requester))
                               if guest else (self.prompt_extra() if callable(self.prompt_extra)
                                              else self.prompt_extra))},
-            model=self.model, cli_path=self.cli_path,
+            model=self.model, cli_path=self.cli_path or S.cli_path(),   # confined
             env={k: v for k, v in self.env.items() if not (guest and k in GIT_ENV)},
             resume=ctx.conv.session_id)
 

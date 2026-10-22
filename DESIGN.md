@@ -313,6 +313,11 @@ rendered per agent from `lab.yaml` (`lab settings <agent>`):
   `/run` is hidden instead (closing a `systemd-run` escape). Host setup:
   `deploy/worker/setup-sandbox.sh` (AppArmor profile for bubblewrap, the wrapper, the
   managed settings).
+- **The session itself**: `claude` starts through `lab-claude` (bwrap; `policy/session.py`)
+  with the lab's own folders covered, so its built-in file tools, and everything it starts,
+  can't reach them; Claude Code's permission rules deny them there as well. The same core
+  (`sandbox.lab_own`) is hidden from sandboxed commands, runs and approved commands, each
+  with its own extras. No bwrap, no session.
 - **Outside the sandbox**: Bash re-run unsandboxed, writes outside the allowed folders, other
   tools — each is a permission request (§6.3).
 - **The tailnet is trusted by design for now**; this may tighten to per-host lists.

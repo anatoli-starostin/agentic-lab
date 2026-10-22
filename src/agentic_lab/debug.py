@@ -58,7 +58,9 @@ def debug_session(lab_path, agent_id, session=None, new=False, ask=None):
         with open(token_file) as f:
             env["CLAUDE_CODE_OAUTH_TOKEN"] = f.read().strip()
 
-    argv = [claude_cli(), "--settings", settings_path, "--setting-sources="]
+    from .policy import session as S
+    # as the service starts it: confined (policy/session.py)
+    argv = [S.cli_path() or claude_cli(), "--settings", settings_path, "--setting-sources="]
     sid = None if new else (session or latest_session(agent_id))
     if sid:
         argv += ["--resume", sid]

@@ -16,7 +16,7 @@ import glob
 import os
 import shlex
 
-from .sandbox import NEBIUS, SECRET_ENV, SECRETS, STATE
+from .sandbox import SECRET_ENV, lab_own
 
 BWRAP = "/usr/bin/bwrap"
 GITHUB_IDENTITIES = "~/.local/share/agentic-lab/github/*"   # each identity's folder
@@ -26,26 +26,35 @@ def _plain_dir(p):
     return os.path.isdir(p) and not os.path.islink(p)
 
 
-def confined(command, home=None):
-    """`command` as it's run: in its own process namespace, the lab's own credentials and
-    state hidden, nothing else changed."""
-    home = os.path.abspath(home or os.path.expanduser("~"))
-    at = lambda p: p.replace("~", home, 1)                    # noqa: E731
-    covered = [d for d in [at(SECRETS), at(STATE), at(NEBIUS)]
-               + sorted(glob.glob(at(GITHUB_IDENTITIES))) if _plain_dir(d)]
-    held = []                   # the folders above them, up to the home: kept in place
+def covers(home, folders):
+    """bwrap arguments covering `folders` (those that are plain folders) with empty ones. The
+    folders above them, up to the home, are bound onto themselves first: still writable,
+    but a mount point can't be renamed or removed, so nothing can move a covered folder."""
+    covered = [d for d in folders if _plain_dir(d)]
+    held = []
     for d in covered:
         parent = os.path.dirname(d)
         while parent.startswith(home + os.sep):
             if parent not in held and parent not in covered:
                 held.append(parent)
             parent = os.path.dirname(parent)
-    args = [BWRAP, "--die-with-parent", "--unshare-pid", "--dev-bind", "/", "/",
-            "--proc", "/proc"]
+    args = []
     for d in sorted(held, key=lambda p: p.count(os.sep)):
         args += ["--bind", d, d]
     for d in covered:
         args += ["--tmpfs", d]
+    return args
+
+
+def confined(command, home=None):
+    """`command` as it's run: in its own process namespace, the lab's own credentials and
+    state hidden, nothing else changed."""
+    home = os.path.abspath(home or os.path.expanduser("~"))
+    # extra: the GitHub identities' folders (their tokens; #76), which the agent's session,
+    # commands and runs read for git push
+    extra = sorted(glob.glob(GITHUB_IDENTITIES.replace("~", home, 1)))
+    args = [BWRAP, "--die-with-parent", "--unshare-pid", "--dev-bind", "/", "/",
+            "--proc", "/proc"] + covers(home, lab_own(home) + extra)
     for name in SECRET_ENV:
         args += ["--unsetenv", name]
     return shlex.join(args + ["--", "/bin/bash", "-c", command])

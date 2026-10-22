@@ -33,6 +33,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
 
 from ..eventlog import tool_summary
 
+from ..policy import session as S
 from ..policy.confine import approved_input
 from ..policy.grants import Grant, grantable_tool
 from . import runs as R
@@ -384,7 +385,7 @@ class SdkRunner:
                               else self.prompt_extra)},
             model=self.model,
             env=self.env,
-            cli_path=self.cli_path,
+            cli_path=self.cli_path or S.cli_path(),     # the session, confined
             resume=store.get(task.id).session_id,
             hooks={"PostToolUse": [HookMatcher(matcher="Bash", hooks=[_detach_hint])]},
         )

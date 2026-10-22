@@ -17,6 +17,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
 from ..eventlog import tool_summary
 
 from ..manager.workers import WorkerError
+from ..policy import session as S
 from ..worker.runner import allowed_without_asking
 
 warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
@@ -244,7 +245,8 @@ class SecretaryBrain:
             mcp_servers={"lab": build_tools(ctx)}, allowed_tools=list(LAB_TOOLS),
             system_prompt={"type": "preset", "preset": "claude_code",
                            "append": system_prompt(self.name, self.lab_name)},
-            model=self.model, env=self.env, resume=conv.session_id)
+            model=self.model, env=self.env, resume=conv.session_id,
+            cli_path=S.cli_path())          # the session, confined (policy/session.py)
         reply, last = None, None
         async with ClaudeSDKClient(options) as client:
             await client.query(prompt)

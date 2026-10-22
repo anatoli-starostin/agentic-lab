@@ -21,6 +21,7 @@ dev = ["pytest>=8"]
 
 [project.scripts]
 lab = "agentic_lab.cli:main"
+lab-claude = "agentic_lab.policy.session:main"
 
 [build-system]
 requires = ["setuptools>=68"]

@@ -287,6 +287,10 @@ per agent from \code{lab.yaml} (\code{lab settings <agent>} prints it):
     hidden instead (closing a \code{systemd-run} escape).
   \item \textbf{Host setup} (\code{setup-sandbox.sh}): an AppArmor profile that lets
     bubblewrap create its namespaces on Ubuntu, the GPU wrapper, the managed settings.
+  \item \textbf{The session itself}: Claude Code starts through \code{lab-claude}, a
+    bubblewrap wrapper that covers the service's secret and state folders, so the agent's
+    own file tools and everything it starts can't reach them (Claude Code's permission
+    rules deny them as well). No bubblewrap, no session.
 \end{itemize}
 Any Bash command that stays in the sandbox is allowed without asking. Caches
 (\code{XDG\_CACHE\_HOME}) point into the working folder. Managers auto-compact their context

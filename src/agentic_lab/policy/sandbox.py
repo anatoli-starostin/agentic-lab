@@ -41,12 +41,21 @@ NEBIUS = "~/.nebius"
 GPU_VISIBLE = ["/run/nvidia-persistenced"]
 
 
+def lab_own(home=None):
+    """The lab's own folders in the agent's home, hidden from everything the agent runs: its
+    session (policy/session.py), its short commands and runs (`filesystem`) and approved
+    commands (policy/confine.py). Each adds its own extras beside it."""
+    home = os.path.abspath(home or os.path.expanduser("~"))
+    return [os.path.normpath(p.replace("~", home, 1)) for p in (SECRETS, STATE, NEBIUS)]
+
+
 def filesystem(workdir, writes=(), gpu=False):
     """What anything running as the agent may write and may not read: its short commands
     (Claude Code's sandbox, `settings`) and its long runs (worker/runs.py, which apply it
     themselves because a run outlives the session). One place, so the two can't drift."""
     return {"allowWrite": _dedup([_abs(workdir), TMP] + [_abs(w) for w in writes]),
-            "denyRead": list(HIDDEN) + [_abs(SECRETS), _abs(STATE), _abs(NEBIUS)],
+            # extra: /run, the host's sockets (above)
+            "denyRead": list(HIDDEN) + lab_own(),
             "allowRead": list(GPU_VISIBLE) if gpu else []}
 
 

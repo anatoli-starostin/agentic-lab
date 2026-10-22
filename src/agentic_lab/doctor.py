@@ -76,6 +76,11 @@ def host_checks(gpu):
     for tool in ("bwrap", "socat"):
         out.append(Result(OK, f"{tool} installed") if shutil.which(tool) else
                    Result(FAIL, f"{tool} missing", "run deploy/worker/setup-sandbox.sh"))
+    from .policy import session as S
+    ready = all(os.access(p, os.X_OK) for p in (S.BWRAP, S.LAUNCHER))
+    out.append(Result(OK, "agents' sessions start confined (lab-claude)") if ready else
+               Result(FAIL, "agents' sessions can't start: no /usr/bin/bwrap or lab-claude "
+                      "(they run with the lab's folders covered)", "sudo lab apply"))
     code, val = sh("sysctl", "-n", "kernel.apparmor_restrict_unprivileged_userns")
     if val.strip() == "1":
         code, prof = sh("aa-status")
