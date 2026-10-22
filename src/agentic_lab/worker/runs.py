@@ -142,10 +142,11 @@ class RunStore:
 
     def start(self, task_id, name, command, cwd=None, requester=None):
         """Start a run (already approved) for task `task_id` of member `requester` (from the
-        task, never from the job). Returns its view."""
+        task, never from the job). Returns its view. Without a member its job won't start
+        (run_exec fails closed)."""
         if not (command or "").strip():
             raise RunError("a run needs a command")
-        home = self.run_home(requester)
+        home = self.run_home(requester) if requester is not None else None
         name = _NAME.sub("-", (name or "run").strip())[:40].strip("-") or "run"
         cwd = os.path.normpath(os.path.join(self.workdir, os.path.expanduser(cwd or ".")))
         if not os.path.isdir(cwd):
@@ -157,7 +158,8 @@ class RunStore:
                 "command": command, "cwd": cwd, "log": os.path.join(logdir, "log"),
                 "created": _now()}
         self._write(self._path(run_id), spec)
-        os.makedirs(home, mode=0o700, exist_ok=True)
+        if home:
+            os.makedirs(home, mode=0o700, exist_ok=True)
         os.makedirs(os.path.dirname(self._path(run_id, ".status")), mode=0o700, exist_ok=True)
         try:
             self.systemctl("start", self.agent_id, run_id)

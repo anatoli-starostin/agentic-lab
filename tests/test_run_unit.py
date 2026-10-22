@@ -77,9 +77,17 @@ def test_each_member_has_a_home_of_their_own(tmp_path):
     w = " ".join(R.job_wrapper(str(tmp_path), ha, str(tmp_path / "work"), str(tmp_path)))
     assert ha in w and hb not in w                  # bob's home isn't in alice's runs
     with pytest.raises(R.RunError):
-        rs.start("t-3", "x", "true")                # no member: no run
-    with pytest.raises(R.RunError):
         rs.run_home("../bob")
+    with pytest.raises(R.RunError):
+        rs.start("t-3", "x", "true", requester="../bob")
+
+
+def test_no_member_no_job(tmp_path):
+    rs = runs(tmp_path)
+    marker = tmp_path / "ran"
+    r = rs.start("t-1", "x", f"touch {marker}")
+    assert R.run_exec(rs, r["id"], wrapper=lambda *a: []) == 1
+    assert not marker.exists() and rs.view(r["id"])["state"] == "failed"
 
 
 def test_no_bwrap_no_job(tmp_path, monkeypatch):
