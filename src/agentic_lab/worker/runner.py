@@ -33,6 +33,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
 
 from ..eventlog import tool_summary
 
+from ..policy.confine import approved_input
 from ..policy.grants import Grant, grantable_tool
 from . import runs as R
 from . import tasks as T
@@ -350,8 +351,9 @@ class SdkRunner:
                     store.update(task.id, pending_requests=left)
             self._log("approval", f"decided: {d.kind}" + (f" ({d.message[:200]})" if d.message
                                                          else ""), task=task.id)
-            if d.kind == "allow":
-                return PermissionResultAllow()
+            if d.kind == "allow":           # as approved; started confined (policy/confine)
+                return PermissionResultAllow(
+                    updated_input=approved_input(tool_name, tool_input))
             if d.kind == "grant":
                 if all(g["kind"] == "tool" for g in d.grants):
                     if tool_name in ALWAYS_ASK:     # approved this once, never as a grant
