@@ -183,8 +183,19 @@ class RunStore:
         or lost (its unit ended without a word, e.g. the machine was powered off)."""
         spec = self.get(run_id)
         st = self._status(run_id)
+        active = False
+        if (st.get("state") or "starting") in ACTIVE:
+            # systemd, then the status file again: a run that ends between the two reads
+            # then shows its exit, never "lost" (#59); ended runs aren't asked about
+            active = self.systemctl("is-active", self.agent_id, run_id)
+            st = self._status(run_id) or st
         state = st.get("state") or "starting"
-        if state in ACTIVE and not self.systemctl("is-active", self.agent_id, run_id):
+        if state in ACTIVE and not active:
+            st = self._status(run_id) or st     # once more: just ended?
+            state = st.get("state") or "starting"
+        if state in ACTIVE and not active and st.get("stop_requested"):
+            state = "stopped"               # stopped before it could say so itself
+        if state in ACTIVE and not active:
             age = (dt.datetime.now(dt.timezone.utc)
                    - dt.datetime.fromisoformat(spec["created"])).total_seconds()
             if state == "running" or age > START_GRACE_S:

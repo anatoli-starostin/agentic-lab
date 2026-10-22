@@ -86,7 +86,10 @@ def test_web_check_now():
     lim = {"five_hour": {"status": "allowed", "utilization": 0.12, "from": "mgr-a",
                          "observed_at": NOW.isoformat()}}
     s = state(lim, {"ana": {"at": NOW.isoformat(), "error": "check failed: boom"}})
-    client = TestClient(web.app(lambda: s, check_usage=check))
+    async def viewer(ip):
+        return "ana"
+    client = TestClient(web.app(lambda: s, viewer=viewer, check_usage=check,
+                                may_check=lambda m, h: m == h))
     page = client.get("/").text
     assert "12% used" in page and "/usage/check/ana" in page and "check failed: boom" in page
     r = client.post("/usage/check/ana", follow_redirects=False)

@@ -5,6 +5,7 @@ answering. That member is decided by code (from the Slack event), never by the L
 who a submitted task is for, and who is asked to approve anything it leads to.
 """
 import base64
+import logging
 import os
 
 import httpx2
@@ -17,6 +18,8 @@ TOOL_NAMES = ("list_workers", "submit_task", "my_tasks", "task_status", "task_re
               "cancel_task", "pending_approvals", "add_approval_note", "post_file",
               "post_worker_file", "send_file_to_worker", "recall", "remember")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
+
+log = logging.getLogger("agentic_lab.manager")
 
 
 class BrokerClient:
@@ -50,6 +53,14 @@ def _text(s):
 
 def _err(e):
     return {"content": [{"type": "text", "text": f"error: {e}"}], "is_error": True}
+
+
+def _pending_visible(ctx, r):
+    """A pending approval request this conversation may see: of a task it may see, or the
+    member's own request in their DM (#62)."""
+    t = ctx.state.tasks.get(r.get("task_id") or "")
+    return (t is not None and visible(ctx, t)) or (
+        t is None and ctx.private and r.get("human") == ctx.requester)
 
 
 def _read_own(ctx, path, limit=20 * 1024 * 1024):
@@ -90,13 +101,24 @@ def build(ctx):
             t = await ctx.workers.call(args["worker"], "submit_task", retries=0, args={
                 "instruction": args["instruction"], "requester": ctx.requester,
                 **({"project": args["project"]} if args.get("project") else {})})
-            if ctx.broker is not None:
-                await ctx.broker.register_task(args["worker"], t["id"], ctx.requester)
-            ctx.state.track(t["id"], args["worker"], ctx.conv.key, ctx.requester)
+            tid, state = t["id"], t["state"]
         except (WorkerError, KeyError, TypeError) as e:
             return _err(e)
-        return _text(f"Submitted {t['id']} to {args['worker']} (state: {t['state']}). Its "
-                     f"progress and result will be posted in this conversation.")
+        # followed from the moment the worker has it, whatever happens next (#58)
+        ctx.state.track(tid, args["worker"], ctx.conv.key, ctx.requester,
+                        registered=ctx.broker is None)
+        note = ""
+        if ctx.broker is not None:
+            try:
+                await ctx.broker.register_task(args["worker"], tid, ctx.requester)
+                ctx.state.tasks[tid].registered = True
+                ctx.state.save()
+            except Exception as e:      # the follow-up retries it; never resubmit
+                log.warning("registering %s with the broker: %s", tid, e)
+                note = (" (Routing its approvals to the member is still pending; it's retried "
+                        "automatically. Don't submit it again.)")
+        return _text(f"Submitted {tid} to {args['worker']} (state: {state}). Its progress "
+                     f"and result will be posted in this conversation.{note}")
 
     @tool("my_tasks", "The tasks you submitted that this conversation may see, with their "
           "last known state.", {})
@@ -142,13 +164,9 @@ def build(ctx):
             pending = await ctx.broker.pending()
         except WorkerError as e:
             return _err(e)
-        shown = []
-        for r in pending:
-            t = ctx.state.tasks.get(r.get("task_id") or "")
-            if (t is not None and visible(ctx, t)) or (
-                    t is None and ctx.private and r.get("human") == ctx.requester):
-                shown.append({k: r[k] for k in ("id", "agent", "task_id", "human", "detail",
-                                                "options", "expires", "context")})
+        shown = [{k: r[k] for k in ("id", "agent", "task_id", "human", "detail", "options",
+                                    "expires", "context")}
+                 for r in pending if _pending_visible(ctx, r)]
         return _text(str(shown) if shown else "nothing pending")
 
     @tool("add_approval_note", "Add a note to a pending approval request, shown to the "
@@ -158,6 +176,10 @@ def build(ctx):
         if ctx.broker is None:
             return _text("no approval broker is configured")
         try:
+            # only a request this conversation may see (a shared manager: the member's own)
+            if not any(r.get("id") == args["request_id"] and _pending_visible(ctx, r)
+                       for r in await ctx.broker.pending()):
+                return _err(f"no pending request {args['request_id']} here")
             await ctx.broker.add_context(args["request_id"], args["note"])
         except WorkerError as e:
             return _err(e)

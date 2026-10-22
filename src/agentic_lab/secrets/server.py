@@ -63,7 +63,8 @@ def app(intake: Intake, client_path):
             return JSONResponse({"error": "too large"}, status_code=413)
         try:
             data = json.loads(body)
-            human = intake.receive(data.get("code"), data.get("name"), data.get("value"))
+            human = intake.receive(data.get("code"), data.get("name"), data.get("value"),
+                                   source=request.client.host if request.client else None)
         except (ValueError, AttributeError) as e:
             status = 403 if isinstance(e, IntakeError) else 400
             return JSONResponse({"error": str(e) if status == 403 else "bad request"},
@@ -89,7 +90,8 @@ def app(intake: Intake, client_path):
         fields = {k: str(form.get(k) or "") for k, _, _ in FIELDS[req.name]}
         value = next(iter(fields.values())) if len(fields) == 1 else fields   # one field: its text
         try:
-            intake.receive(code, req.name, value)
+            intake.receive(code, req.name, value,
+                           source=request.client.host if request.client else None)
         except IntakeError as e:
             return _form(code, req.name, req.human, error=str(e))
         return _page("<h2>✅ Stored.</h2><p>The lab has it. You can close this tab.</p>")

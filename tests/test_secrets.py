@@ -57,14 +57,16 @@ def test_expired_and_unknown(tmp_path):
         it.request("alice", "ssh-key")
 
 
-def test_failed_attempts_lock_the_intake(tmp_path):
+def test_failed_attempts_lock_out_only_that_caller(tmp_path):
+    """#63: bad codes from one device lock that device out, not everyone else."""
     it = I.Intake(tmp_path)
     good = it.request("alice", "claude-token")
     for _ in range(I.MAX_FAILURES):
         with pytest.raises(I.IntakeError):
-            it.receive("ZZZZ-ZZZZ", "claude-token", TOKEN)
+            it.receive("ZZZZ-ZZZZ", "claude-token", TOKEN, source="100.64.0.9")
     with pytest.raises(I.IntakeError, match="too many"):
-        it.receive(good, "claude-token", TOKEN)
+        it.receive(good, "claude-token", TOKEN, source="100.64.0.9")
+    assert it.receive(good, "claude-token", TOKEN, source="100.64.0.2") == "alice"
 
 
 def test_message_has_the_command():

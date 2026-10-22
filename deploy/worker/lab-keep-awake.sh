@@ -4,7 +4,7 @@
 # can read it (home folders are private). The secretary never stops a machine while the
 # list isn't empty. One line per person: "<user> <first line of their file>".
 out=${LAB_KEEP_AWAKE_OUT:-/var/lib/agentic-lab/keep-awake}
-passwd=${LAB_PASSWD:-/etc/passwd}   # (tests point these elsewhere)
+passwd=${LAB_PASSWD:-}              # (tests point these elsewhere)
 mkdir -p "$(dirname "$out")"
 tmp=$(mktemp "$(dirname "$out")/.keep-awake.XXXXXX")
 while IFS=: read -r user _ uid _ _ home _; do
@@ -19,6 +19,7 @@ while IFS=: read -r user _ uid _ _ home _; do
         note=$(head -c 200 -- "$f" 2>/dev/null | head -n 1 | tr -d '\r')   # (tests)
     fi
     printf '%s %s\n' "$user" "$note" >> "$tmp"
-done < "$passwd"
+done < <(if [ -n "$passwd" ]; then cat "$passwd"; else getent passwd; fi)
+# getent: directory users (LDAP, sssd) too, not just /etc/passwd ones
 chmod 644 "$tmp"
 mv "$tmp" "$out"

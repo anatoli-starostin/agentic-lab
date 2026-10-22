@@ -3,9 +3,9 @@
 # with the same sandbox, MCP, broker and Slack DM approvals as a real deployment. Agents
 # reach each other by the VM's tailnet name.
 #
-# Differences from production: the secretary can't power off the VM it runs on (power
-# actions are logged only), and there is a single worker, since workers on one GPU would
-# compete for it.
+# Differences from production: the secretary can't power the VM it runs on (power actions
+# on its own host are refused), and there is a single worker, since workers on one GPU
+# would compete for it.
 
 lab: dev-lab
 tailnet: example.ts.net

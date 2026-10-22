@@ -113,6 +113,7 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
 
     mcp = build_mcp(agent_id, store, access, guardrails=guardrails, usage=usage,
                     workdir=workdir, events=events, runs=runs,
+                    github=lambda: GH.problems(lab, agent_id),
                     check=(lambda: probe_now(usage, seat_token)) if seat_token else None)
     # the names managers may use to reach us: the bind address, and e.g. the tailnet name
     allowed = [f"{h}:{port}" for h in (host, *names)]

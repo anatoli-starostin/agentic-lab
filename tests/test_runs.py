@@ -280,3 +280,50 @@ def test_keep_free_gb_is_for_workers(tmp_path):
     p.write_text(yaml.safe_dump(d))
     errs = [str(i) for i in registry.check(registry.load(p)) if i.level == "error"]
     assert len(errs) == 1 and "agents.mgr-alice: 'keep_free_gb' applies to workers only" in errs[0]
+
+
+def test_runs_never_outlive_their_task(tmp_path):
+    """#59: a run whose task ended or vanished is stopped by the loop's sweep; cancelling
+    a queued task (e.g. woken at check-in) stops its runs at once."""
+    from agentic_lab.worker.server import stop_orphaned_runs
+    tasks, runs, units = stores(tmp_path)
+    t = tasks.update(tasks.submit("train", "alice", "m").id, state=T.RUNNING)
+    r = runs.start(t.id, "train", "sleep 100")
+    tasks.update(t.id, state=T.WAITING, waiting={"runs": [r["id"]]})
+    tasks.update(t.id, state=T.QUEUED, wake="check-in time")     # woken, not picked up yet
+    assert stop_orphaned_runs(tasks, runs) == []                # its task is still alive
+    tasks.request_cancel(t.id)                                  # cancelled while queued
+    assert tasks.get(t.id).state == T.CANCELLED
+    assert [x["id"] for x in stop_orphaned_runs(tasks, runs)] == [r["id"]]
+    assert ("stop", "worker-a", r["id"]) in units.calls
+    other = runs.start("t-gone", "x", "sleep 1")                # its task is unknown
+    assert [x["id"] for x in stop_orphaned_runs(tasks, runs)] == [other["id"]]
+
+
+def test_a_run_ending_between_the_reads_is_not_lost(tmp_path):
+    _, runs, units = stores(tmp_path)
+    r = runs.start("t-1", "train", "true")
+    runs._write(runs._path(r["id"], ".status"), {"state": "running"})
+
+    def ends_now(verb, agent, run_id):
+        # systemd says inactive because the run just ended and wrote its status
+        runs._write(runs._path(run_id, ".status"), {"state": "exited", "exit_code": 0})
+        return False
+    runs.systemctl = ends_now
+    v = runs.view(r["id"])
+    assert v["state"] == "exited" and v["exit_code"] == 0
+
+
+def test_ended_runs_arent_asked_about(tmp_path):
+    asked = []
+
+    def systemctl(verb, agent, run_id):
+        asked.append(run_id)
+        return False
+    runs = R.RunStore(str(tmp_path / "state"), str(tmp_path / "work"), "worker-a",
+                      systemctl=systemctl)
+    (tmp_path / "work").mkdir(exist_ok=True)
+    r = runs.start("t-1", "x", "true")
+    runs._write(runs._path(r["id"], ".status"), {"state": "exited", "exit_code": 0})
+    asked.clear()
+    assert runs.view(r["id"])["state"] == "exited" and asked == []

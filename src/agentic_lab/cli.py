@@ -278,13 +278,15 @@ def cmd_apply(args):
     return deploy(lab_path, info, source, admin, args.host, args.allow_missing, self_admin)
 
 
-def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_admin=None):
+def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_admin=None,
+           locked=False):
     """Ship `lab_path` (already the reviewed one) and framework `source` to the hosts."""
     import os
 
     from . import configrepo as CR
     from . import lock
-    from .apply import ApplyError, describe, has_work, plan_all, run_bundle, secretary_host
+    from .apply import (UNREACHABLE, ApplyError, describe, has_work, plan_all, run_bundle,
+                        secretary_host)
     from .doctor import this_host
     try:
         record = CR.applied_record(info, lock.current(source)[1], admin)
@@ -292,8 +294,11 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
     except (ApplyError, lock.LockError) as e:
         sys.exit(f"lab apply: {e}")
     here, sec_host = this_host(lab), secretary_host(lab)[0]
+    lock_fd = None if locked else deploy_lock()     # `locked`: the caller holds it
+    if lock_fd is False:
+        sys.exit("lab apply: a deploy is already running; try again when it's done")
     tokens.save()                  # generated tokens are kept before anything uses them
-    failed = 0
+    failed, skipped = 0, []
     for p in plans:
         if not has_work(p):
             print(f"host {p['host']}: nothing to install (no agents there)\n")
@@ -310,9 +315,34 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
                                # its GitHub identity reaches the config repo (no deploy key)
                                "github": lab.github_identities(sec)[0]}
         rc = run_bundle(p, local=(p["host"] == here), admin=admin)
+        if rc == UNREACHABLE:
+            print("  -> skipped: unreachable (stopped?); deploy again once it's on\n")
+            skipped.append(p["host"])
+            continue
         print(f"  -> {'done' if rc == 0 else f'FAILED (exit {rc})'}\n")
         failed += rc != 0
+    if skipped:
+        print(f"not deployed (unreachable): {', '.join(skipped)}")
     return 1 if failed else 0
+
+
+DEPLOY_LOCK = "/run/agentic-lab-deploy.lock"
+
+
+def deploy_lock(path=DEPLOY_LOCK):
+    """One deploy at a time (#61): a held lock (kept for the process's life), False if
+    another deploy holds it, None where it can't be taken (not root)."""
+    import fcntl
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_RDWR, 0o600)
+    except OSError:
+        return None
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        os.close(fd)
+        return False
+    return fd
 
 
 def cmd_apply_main(args):
@@ -336,6 +366,11 @@ def cmd_apply_main(args):
     except OSError:
         sys.exit(f"lab apply-main: no {APPLY_MAIN} (run sudo lab apply once from the console)")
     if not args.run:
+        held = deploy_lock()
+        if held is False:
+            sys.exit("lab apply-main: a deploy is already running")
+        if held:
+            os.close(held)          # free again for the deploy itself
         os.makedirs(LOG_DIR, mode=0o755, exist_ok=True)
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
         log = os.path.join(LOG_DIR, f"apply-{stamp}.log")
@@ -351,6 +386,10 @@ def cmd_apply_main(args):
     def done(ok):
         print(f"{RESULT} {'ok' if ok else 'failed'}", flush=True)
         return 0 if ok else 1
+    held = deploy_lock()        # held from the fetch to the end (#61)
+    if held is False:
+        print("lab apply-main: a deploy is already running", flush=True)
+        return done(False)
     os.environ["LAB_GIT_USER"] = cfg["config_owner"]       # its clone, its deploy key
     config = os.path.join(os.path.expanduser(f"~{cfg['config_owner']}"),
                           ".local/state/agentic-lab/config-repo", cfg.get("lab_rel", "lab.yaml"))
@@ -375,7 +414,8 @@ def cmd_apply_main(args):
     try:
         rc = deploy(lab_path, {**info, "via": "slack"}, src, owner, allow_missing=True,
                     self_admin={k: cfg[k] for k in ("config_url", "lab_rel", "framework_source",
-                                                    "framework_owner")})
+                                                    "framework_owner")},
+                    locked=held is not None)
     except SystemExit as e:
         print(e, flush=True)
         rc = 1

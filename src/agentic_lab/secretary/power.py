@@ -26,6 +26,8 @@ if not os.path.exists(NEBIUS) and os.path.exists("/usr/local/bin/nebius"):
 PROFILE = "lab"
 BUSY = ("running", "queued", "awaiting_approval", "waiting")
 GPU_IDLE_READINGS = 5           # a GPU is idle only at 0% in this many readings in a row
+STALE_AFTER_MIN = 10       # idle timers older than this (the secretary was down) start over
+DOWN_GRACE_MIN = 60             # a running host whose worker is down this long is announced
 _gpu_recent = {}                # worker -> its GPUs' highest utilization, last readings
 
 
@@ -179,14 +181,45 @@ def busy(lab, host, snapshot):
 
 
 class IdleWatch:
-    """Remembers since when each on-demand host has been idle."""
+    """Remembers since when each on-demand host has been idle (and since when a host's
+    worker has been down), across the secretary's restarts when given a `path` (#60)."""
 
-    def __init__(self):
-        self.idle_since = {}
+    def __init__(self, path=None):
+        self.path = path
+        self.idle_since, self.down_since = {}, {}
+        try:
+            with open(path) as f:
+                d = json.load(f)
+            saved = dt.datetime.fromisoformat(d["saved"]) if d.get("saved") else None
+            fresh = saved is not None and (dt.datetime.now(dt.timezone.utc) - saved
+                                           < dt.timedelta(minutes=STALE_AFTER_MIN))
+            # after a long outage nobody watched the hosts: idle timers start over
+            self.idle_since = {h: dt.datetime.fromisoformat(t)
+                               for h, t in (d.get("idle_since") or {}).items()} if fresh else {}
+            self.down_since = {h: dt.datetime.fromisoformat(t)
+                               for h, t in (d.get("down_since") or {}).items()}
+        except (TypeError, OSError, ValueError):
+            pass
 
-    def candidates(self, lab, snapshot, now=None):
+    def save(self):
+        if not self.path:
+            return
+        tmp = self.path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump({**{k: {h: t.isoformat() for h, t in getattr(self, k).items()}
+                          for k in ("idle_since", "down_since")},
+                       "saved": dt.datetime.now(dt.timezone.utc).isoformat()}, f)
+        os.replace(tmp, self.path)
+
+    def down_too_long(self, now=None, grace=dt.timedelta(minutes=DOWN_GRACE_MIN)):
+        """Hosts whose worker has been down (or unknown) for longer than the grace."""
+        now = now or dt.datetime.now(dt.timezone.utc)
+        return [h for h, t in self.down_since.items() if now - t >= grace]
+
+    def candidates(self, lab, snapshot, now=None, power=None):
         """Hosts to stop now: idle_stop_min above 0, with workers (and managers, unless
-        idle_stop_with_managers: false), all workers idle for idle_stop_min."""
+        idle_stop_with_managers: false), all workers idle for idle_stop_min. `power`:
+        host -> its power state, if known (a stopped host's workers aren't "down")."""
         now = now or dt.datetime.now(dt.timezone.utc)
         out = []
         for host, h in lab.hosts.items():
@@ -199,8 +232,13 @@ class IdleWatch:
                 continue
             seen = [snapshot["agents"].get(a, {}) for a in agents]
             if not all(s.get("up") for s in seen):
-                self.idle_since.pop(host, None)     # down or unreachable: not ours to judge
+                self.idle_since.pop(host, None)     # down or unreachable: not ours to judge,
+                if (power or {}).get(host, "RUNNING") == "RUNNING":
+                    self.down_since.setdefault(host, now)   # but said once it lasts (#60)
+                else:
+                    self.down_since.pop(host, None)     # stopped: of course they're down
                 continue
+            self.down_since.pop(host, None)
             if any(worker_busy(a, s) for a, s in zip(agents, seen)):
                 self.idle_since.pop(host, None)
                 continue
@@ -208,3 +246,23 @@ class IdleWatch:
             if now - since >= dt.timedelta(minutes=h["idle_stop_min"]):
                 out.append(host)
         return out
+
+
+async def recheck(lab, host, workers, snapshot):
+    """Right before an idle stop: is the host still idle? Its workers' health read again
+    now (the snapshot may be minutes old, #60). Returns why it's busy, or None."""
+    agents = dict((snapshot or {}).get("agents") or {})
+    for aid, a in lab.agents.items():
+        if a.get("host") != host or a.get("role") != "worker":
+            continue
+        try:
+            h = await workers.call(aid, "health_check", retries=0)
+        except Exception as e:
+            return f"couldn't re-check {lab.display_name(aid)} ({e})"
+        prev = agents.get(aid, {})
+        agents[aid] = {"up": True, "queue": h.get("tasks"), "runs": h.get("runs"),
+                       "keep_awake": h.get("keep_awake"), "gpus": h.get("gpus"),
+                       "gpu_processes": h.get("gpu_processes"),
+                       "gpu_recent_max": prev.get("gpu_recent_max"),
+                       "gpu_readings": prev.get("gpu_readings")}
+    return busy(lab, host, {"agents": agents})

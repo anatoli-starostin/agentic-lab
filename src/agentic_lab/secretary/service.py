@@ -561,6 +561,16 @@ class Secretary:
                 done = {k: v for k, v in json.load(f).items() if k.endswith(today)}
         except (OSError, ValueError):
             done = {}
+        broken = {}                 # identity -> (its problem, the agents using it)
+        for aid, a in ((self.latest.get("state") or {}).get("agents") or {}).items():
+            for ident, problem in (a.get("github") or {}).items():     # #64
+                broken.setdefault(ident, (problem, []))[1].append(a.get("name") or aid)
+        for ident, (problem, users) in broken.items():
+            key = f"github:{ident}:{today}"     # once a day per identity, however shared
+            if not done.get(key):
+                await self.announce(f":warning: GitHub identity *{ident}* (used by "
+                                    f"{', '.join(users)}) doesn't work: {problem}")
+                done[key] = True
         for cred, left in expiry_notices(self.lab):
             key = f"{cred['name']}:{today}"
             if done.get(key):
@@ -656,8 +666,9 @@ async def serve(lab_path, host, port):
     # uvicorn handles SIGTERM/SIGINT (a graceful shutdown); when it returns, the rest stops
     stop = asyncio.Event()
 
-    idle = P.IdleWatch()
+    idle = P.IdleWatch(os.path.expanduser(f"{STATE}/idle.json"))     # kept across restarts
     hosts_power = {}
+    down_noted = {}                 # host -> the day its worker being down was announced
     rounds = {"n": 0}
 
     async def check_power():
@@ -672,10 +683,36 @@ async def serve(lab_path, host, port):
                                          timespec="seconds")}
             except P.PowerError as e:
                 hosts_power[host] = {"state": "unknown", "error": str(e)[:200]}
-        for host in idle.candidates(lab, latest["state"] or {"agents": {}}):
-            if hosts_power.get(host, {}).get("state") == "RUNNING":
-                await sec.power(host, "off", f"idle for {lab.hosts[host]['idle_stop_min']} min")
+        power = {h: v.get("state") for h, v in hosts_power.items() if v.get("state")}
+        for host in idle.candidates(lab, latest["state"] or {"agents": {}}, power=power):
+            if hosts_power.get(host, {}).get("state") != "RUNNING":
+                continue
+            # still idle right now? (a task may have arrived since the snapshot, #60)
+            why = await P.recheck(lab, host, workers, latest["state"])
+            if why:
+                log.info("idle stop of %s called off: %s", host, why)
                 idle.idle_since.pop(host, None)
+                continue
+            result = await sec.power(host, "off",
+                                     f"idle for {lab.hosts[host]['idle_stop_min']} min")
+            if result.startswith(("couldn't", "refused")):   # retried next round
+                log.warning("idle stop of %s failed: %s", host, result)
+                if sec.events is not None:
+                    sec.events.add("power", f"{host} off failed: {result}", host=host,
+                                   action="off", why="idle stop")
+                await sec.announce(f":warning: couldn't stop idle {host}: {result}")
+            else:
+                idle.idle_since.pop(host, None)
+        today = dt.date.today().isoformat()
+        for host in idle.down_too_long():           # billed, and nothing can tell if idle
+            if (hosts_power.get(host, {}).get("state") == "RUNNING"
+                    and down_noted.get(host) != today):
+                down_noted[host] = today
+                await sec.announce(
+                    f":warning: {host} is running, but its worker has been down or unreachable "
+                    f"since {idle.down_since[host]:%Y-%m-%d %H:%M} UTC: it can't be "
+                    "idle-stopped like this. Check it (lab doctor), or power it off.")
+        idle.save()
 
     async def collector():
         while not stop.is_set():
@@ -773,7 +810,10 @@ async def serve(lab_path, host, port):
     from .web import log_access
     server = uvicorn.Server(uvicorn.Config(app(state_with_checks, get_events, viewer,
                                                check_usage,
-                                               access=lambda m, a: log_access(lab, m, a)),
+                                               access=lambda m, a: log_access(lab, m, a),
+                                               may_check=lambda m, h: m is not None and (
+                                                   m == h or bool((lab.humans.get(m) or {})
+                                                                  .get("admin")))),
                                            host=host, port=port, log_level="warning"))
     log.info("secretary: watching %d worker(s), slack=%s, web UI on http://%s:%d/",
              len(workers.known()), sec.slack is not None, host, port)

@@ -165,9 +165,10 @@ class Manager:
         await self.slack.post(conv.channel, conv.thread_ts, text)
 
     async def finished(self, conv, task, view):
+        """The wrap-up of a finished task (posted by the follow-up, which retries a failed
+        post without a new turn)."""
         private = conv.channel.startswith("D")
-        reply = await self._turn(conv, task.requester, private, finished_prompt(task, view))
-        await self.slack.post(conv.channel, conv.thread_ts, reply)
+        return await self._turn(conv, task.requester, private, finished_prompt(task, view))
 
 
 async def serve(lab_path, agent_id, host=None, port=None):
@@ -234,8 +235,10 @@ async def serve(lab_path, agent_id, host=None, port=None):
              agent_id, lab.display_name(agent_id), len(workers.known()), bool(broker),
              len(members))
     GH.start(lab, agent_id, stop)       # a GitHub App identity: keep its token fresh
-    follower = asyncio.create_task(follow(state, workers, mgr.post, mgr.finished, stop,
-                                          mention=mgr.mention))
+    follower = asyncio.create_task(follow(
+        state, workers, mgr.post, mgr.finished, stop, mention=mgr.mention,
+        register=(lambda t: broker.register_task(t.worker, t.task_id, t.requester))
+        if broker is not None else None))
     status_server = None
     if host and port:               # the secretary's view: usage and events
         import uvicorn
@@ -243,7 +246,8 @@ async def serve(lab_path, agent_id, host=None, port=None):
         from .status import app as status_app
         status_server = uvicorn.Server(uvicorn.Config(
             status_app(_read_secret(f"{CONFIG}/monitor-token"), usage, events,
-                       check=(lambda: probe_now(usage, seat)) if seat else None),
+                       check=(lambda: probe_now(usage, seat)) if seat else None,
+                       github=lambda: GH.problems(lab, agent_id)),
             host=host, port=port, log_level="warning"))
         status_server.install_signal_handlers = lambda: None   # this process handles signals
         asyncio.create_task(status_server.serve())

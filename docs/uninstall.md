@@ -23,8 +23,11 @@ Ask the admin which of these they want:
 2. **One host** (e.g. a GPU VM leaving the lab): first remove its agents from `lab.yaml`
    through the usual PR (docs/install.md, "Afterwards") and deploy; then stages B to E
    on that host only.
-3. **One agent**: remove it from `lab.yaml` through a PR, then deploy. On its host, then:
-   `sudo systemctl disable --now lab-<role>@<id>` and stage C for its user only.
+3. **One agent**: remove it from `lab.yaml` through a PR, then deploy: the deploy stops and
+   disables its service and removes its env file (`/etc/agentic-lab/<role>-<id>.env`), its
+   run unit (`/etc/systemd/system/lab-run-<id>@.service`) and, if it was the host's last
+   worker, the runs sudo rule. Check with `systemctl status lab-<role>@<id>` on its host,
+   then stage C for its user only.
 
 Read `lab.yaml` from the config repo's `main` for the hosts and agents
 (`git -C ~/lab-config fetch && git -C ~/lab-config show origin/main:lab.yaml`). A Unix
@@ -73,6 +76,7 @@ sudo systemctl disable --now lab-keep-awake.timer 2>/dev/null
 sudo rm -f /etc/systemd/system/lab-keep-awake.service /etc/systemd/system/lab-keep-awake.timer
 sudo rm -rf /etc/agentic-lab /opt/agentic-lab /var/log/agentic-lab /var/lib/agentic-lab
 sudo rm -f /usr/local/bin/lab /etc/sudoers.d/agentic-lab /etc/sudoers.d/agentic-lab-runs
+sudo rm -f /usr/local/libexec/agentic-lab/lab-run-ctl  # what that sudo rule allowed
 sudo rm -f /etc/systemd/system/lab-run-*@.service     # workers' long runs (stopped with lab-*)
 sudo groupdel lab-readers 2>/dev/null                 # hosts with readers
 sudo rm -f /etc/systemd/system/lab-worker@.service /etc/systemd/system/lab-manager@.service \
@@ -98,7 +102,7 @@ stage's pieces (the GPU wrapper and AppArmor profile help them too) and say so.
   sudo rm -f /etc/apparmor.d/disable/bwrap-userns-restrict
   sudo apparmor_parser -r /etc/apparmor.d/bwrap-userns-restrict 2>/dev/null
   ```
-- Leave the packages the lab installed (`bubblewrap`, `socat`, `gh`, `librsvg2-bin`) and
+- Leave the packages the lab installed (`bubblewrap`, `socat`, `acl`, `gh`, `librsvg2-bin`) and
   `/usr/local/bin/uv` unless the admin asks; they're harmless and may be used.
 
 ## F. Outside the hosts (the admin, in their browsers; Claude lists it)

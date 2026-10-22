@@ -60,7 +60,7 @@ Background: `DESIGN.md` (§11a for this workflow, §6 for the sandbox, §10 for 
 | Open a PR for the current config branch | `lab --lab ~/lab-config/lab.yaml pr-link` (after `git push -u origin <branch>`) |
 | Preview a branch's changes | `sudo lab --lab ~/lab-config/lab.yaml plan --working-tree` |
 | What a host runs | `sudo lab doctor` (config + framework commits, reviewed or not) |
-| Upgrade the framework | `git -C ~/agentic-lab pull` → `lab apply --update-framework` (rewrites `framework.lock` only) → PR |
+| Upgrade the framework | `git -C ~/agentic-lab fetch origin && git -C ~/agentic-lab checkout --detach origin/main` (the checkout is detached, so no `pull`) → `lab apply --update-framework` (rewrites `framework.lock` only) → PR |
 | A Slack app manifest | `lab --lab ~/lab-config/lab.yaml slack-manifest <manager or secretary>` / `slack-manifest approvals` |
 | VM power | after the admin's one Nebius browser login: `sudo lab --lab ~/lab-config/lab.yaml nebius connect --project <id> [--forget-admin]` (Nebius only; AWS hosts have no power control yet) |
 | Talk to an agent without Slack | `sudo -u lab-<id> lab manager ask <id> --as <member> "..."` (or `secretary ask --as <member> "..."`) |
@@ -93,8 +93,9 @@ or updates users, secrets and services on every host.
   (install step 7) and one more deploy; a GPU host must exist, be on the tailnet and give
   the admin SSH with passwordless sudo (install step 10).
 - **GitHub for an agent** (two kinds; both may be used in one lab):
-  - *A GitHub App*: the admin picks its name; `lab secret request service:github-<slug>
-    github-app` (a one-time link for its private key); guide the admin through creating the
+  - *A GitHub App*: the admin picks its name; `sudo -u lab-secretary lab secret request
+    service:github-<slug> github-app --url http://<secretary host>:8771` (a one-time link
+    for its private key); guide the admin through creating the
     app (organisation Settings → Developer settings → GitHub Apps → New: no webhook;
     Contents, Pull requests, Issues read and write; its key under *Credentials → Key pairs →
     New key*; install on the

@@ -106,7 +106,7 @@ def write_inbox_file(workdir, name, b64):
 
 
 def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=None,
-              usage=None, workdir=None, events=None, check=None, runs=None):
+              usage=None, workdir=None, events=None, check=None, runs=None, github=None):
     """The worker's MCP server. `guardrails()` returns its current settings and grants;
     `check()` probes the seat's limits now; `runs`: its RunStore (long runs)."""
     mcp = MCPServer(name=f"agentic-lab worker {agent_id}",
@@ -163,7 +163,10 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
     def cancel_task(task_id: str, ctx: Context) -> dict:
         who(ctx, writes=True)
         task(task_id)
-        return store.request_cancel(task_id).view(with_progress=False)
+        t = store.request_cancel(task_id)
+        if t.state in T.TERMINAL:           # cancelled at once (queued): its runs too (#59)
+            stop_runs(runs, task_id)
+        return t.view(with_progress=False)
 
     @mcp.tool(description="All tasks on this worker, oldest first. Optionally only one state.")
     def list_tasks(ctx: Context, state: str | None = None) -> list[dict]:
@@ -213,6 +216,8 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         who(ctx)
         # nvidia-smi can take seconds: not in the event loop serving the other calls
         h = await asyncio.to_thread(health or default_health, agent_id, store)
+        if github is not None:
+            h["github"] = github()          # identities that don't work right now (#64)
         if runs is not None:
             h["runs"] = [{k: r.get(k) for k in ("id", "name", "task", "state", "started")}
                          for r in await asyncio.to_thread(runs.active)]
@@ -314,6 +319,27 @@ def _num(s):
         return None
 
 
+def stop_orphaned_runs(store: T.TaskStore, runs):
+    """Runs whose task is over (done, failed, cancelled) or unknown: stopped, so nothing
+    runs for nobody and keeps the machine from being idle-stopped (#59). Returns them."""
+    if runs is None:
+        return []
+    out = []
+    for r in runs.active():
+        try:
+            over = store.get(r["task"]).state in T.TERMINAL
+        except T.TaskError:
+            over = True
+        if over:
+            log.warning("run %s outlived its task %s: stopping it", r["id"], r["task"])
+            try:
+                runs.stop(r["id"])
+                out.append(r)
+            except (R.RunError, OSError, subprocess.SubprocessError) as e:
+                log.warning("couldn't stop run %s: %s", r["id"], e)
+    return out
+
+
 def wake_waiting(store: T.TaskStore, runs, now=None):
     """Waiting tasks: queue again those whose run ended or whose check-in time came;
     cancel (stopping their runs) those a manager cancelled. Returns the tasks woken."""
@@ -357,18 +383,54 @@ def stop_runs(runs, task_id):
 async def run_tasks(store: T.TaskStore, runner, stop: asyncio.Event, runs=None):
     """The task loop: recover after a restart, then run queued tasks one at a time, and
     wake waiting tasks when their runs need them."""
+    approver = getattr(runner, "approver", None)
     for t in store.recover():
         log.info("requeued %s after restart", t.id)
-    loop = asyncio.get_running_loop()
-    last_wake = 0.0
-    while not stop.is_set():
-        if loop.time() - last_wake >= WAKE_CHECK_S:
-            last_wake = loop.time()
+        if t.pending_requests:              # its old approval requests: no longer waited for
+            store.update(t.id, stale_requests=t.stale_requests + t.pending_requests,
+                         pending_requests=[])
+    # waking parked tasks, stopping orphaned runs, withdrawing old requests: on their own,
+    # so they go on while a task runs (#59), and never hold up the start (#58)
+    keeper = asyncio.create_task(housekeeping(store, runs, approver, stop))
+    try:
+        await _task_loop(store, runner, stop)
+    finally:
+        keeper.cancel()
+
+
+async def withdraw_stale(store, approver):
+    """Withdraw the requests of tasks requeued after a crash; keep those the broker
+    couldn't be asked about, for the next round."""
+    for t in store.all():
+        left = []
+        for rid in t.stale_requests:
             try:
-                for t in await asyncio.to_thread(wake_waiting, store, runs):
-                    log.info("woke %s: %s", t.id, t.wake)
+                ok = await approver.withdraw(rid) if approver is not None else True
             except Exception:
-                log.exception("checking waiting tasks failed")
+                ok = False
+            if ok is False:
+                left.append(rid)
+        if left != t.stale_requests:
+            store.update(t.id, stale_requests=left)
+
+
+async def housekeeping(store, runs, approver, stop):
+    while not stop.is_set():
+        try:
+            for t in await asyncio.to_thread(wake_waiting, store, runs):
+                log.info("woke %s: %s", t.id, t.wake)
+            await asyncio.to_thread(stop_orphaned_runs, store, runs)
+            await withdraw_stale(store, approver)
+        except Exception:
+            log.exception("checking waiting tasks failed")
+        try:
+            await asyncio.wait_for(stop.wait(), WAKE_CHECK_S)
+        except asyncio.TimeoutError:
+            pass
+
+
+async def _task_loop(store, runner, stop):
+    while not stop.is_set():
         task = store.next_queued()
         if task is None:
             try:

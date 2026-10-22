@@ -62,8 +62,10 @@ def mint(app_id, key_pem, installation_id=None, call=_call):
             raise AppError("the app isn't installed anywhere yet: install it on the lab's "
                            "repositories (the app's page → Install App)")
         if len(inst) > 1:
-            raise AppError("the app is installed in several places: set installation_id "
-                           "for it in lab.yaml")
+            where = ", ".join(f"{(i.get('account') or {}).get('login', '?')} "
+                              f"(installation_id: {i['id']})" for i in inst)
+            raise AppError(f"the app is installed in several places: {where}; set the "
+                           "installation_id of the right one for it in lab.yaml")
         installation_id = inst[0]["id"]
     t = call("POST", f"/app/installations/{installation_id}/access_tokens", j, body={})
     return t["token"], dt.datetime.fromisoformat(t["expires_at"].replace("Z", "+00:00"))
@@ -99,17 +101,37 @@ def write_token(token, login, token_dir=TOKEN_DIR):
     write(token, login, os.path.expanduser(token_dir))
 
 
+def clock_skew(opener=urllib.request.urlopen):
+    """Seconds this host's clock is off from GitHub's (its Date header), or None."""
+    import email.utils
+    try:
+        with opener(urllib.request.Request(API, method="HEAD",
+                                           headers={"User-Agent": "agentic-lab"}),
+                    timeout=10) as r:
+            theirs = email.utils.parsedate_to_datetime(r.headers["Date"])
+    except Exception:
+        return None
+    return (dt.datetime.now(dt.timezone.utc) - theirs).total_seconds()
+
+
+FAILS_BEFORE_REPORTING = 2
+
+
 async def keep_token(app_id, login, stop, installation_id=None, key_path=KEY,
-                     token_dir=TOKEN_DIR, mint_fn=mint, lister=None):
+                     token_dir=TOKEN_DIR, mint_fn=mint, lister=None, skew_fn=clock_skew):
     """Beside an agent's service: keep a fresh installation token for the agent, and with
     each token, the installation's repositories (repos.txt; a failure keeps the last list)."""
-    from .github import list_repos, refresh_repos
+    from .github import list_repos, refresh_repos, write_status
+    tdir = os.path.expanduser(token_dir)
+    fails, expires = 0, None
     while not stop.is_set():
         wait = 60
         try:
             with open(os.path.expanduser(key_path)) as f:
                 key = f.read()
             token, expires = await asyncio.to_thread(mint_fn, app_id, key, installation_id)
+            fails = 0
+            write_status(tdir, None)
             write_token(token, login, token_dir)
             await asyncio.to_thread(refresh_repos, token, True,
                                     os.path.expanduser(token_dir), lister or list_repos)
@@ -119,6 +141,21 @@ async def keep_token(app_id, login, stop, installation_id=None, key_path=KEY,
             wait = 300                              # the key hasn't been handed over yet
         except Exception as e:
             log.warning("GitHub App token for %s: %s", login, e)
+            fails += 1
+            if fails >= FAILS_BEFORE_REPORTING:     # #64: visible, not just a log line
+                problem = str(e)
+                if "401" in problem:
+                    skew = await asyncio.to_thread(skew_fn)
+                    if skew is not None and abs(skew) > 30:
+                        problem += (f" (this host's clock is {abs(skew):.0f} s "
+                                    f"{'ahead of' if skew > 0 else 'behind'} GitHub's: fix the "
+                                    "clock, e.g. timedatectl set-ntp true)")
+                write_status(tdir, f"no token for the GitHub App {login}: {problem}")
+                if expires is None or dt.datetime.now(dt.timezone.utc) >= expires:
+                    try:                            # an expired token only hides the cause
+                        os.remove(os.path.join(tdir, "token"))
+                    except OSError:
+                        pass
         try:
             await asyncio.wait_for(stop.wait(), wait)
         except asyncio.TimeoutError:

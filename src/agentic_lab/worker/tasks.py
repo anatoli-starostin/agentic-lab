@@ -55,8 +55,15 @@ class Task:
     error: str | None = None
     session_id: str | None = None   # the agent session, for resume and `lab debug`
     cancel_requested: bool = False
+    progress_total: int = 0         # progress lines ever added (the list keeps the last ones)
+    pending_requests: list = field(default_factory=list)   # broker requests awaiting a human
     waiting: dict | None = None     # parked on its runs: {note, runs, since, wake_at}
     wake: str | None = None         # why a parked task was woken (for its resumed session)
+    stale_requests: list = field(default_factory=list)  # to withdraw (after a crash), retried
+
+    def __post_init__(self):
+        # a task saved before progress_total existed: its lines so far count (#58)
+        self.progress_total = max(self.progress_total, len(self.progress))
 
     def view(self, with_progress=True):
         d = asdict(self)
@@ -144,6 +151,7 @@ class TaskStore:
         with self._lock:
             task = self.get(task_id)
             task.progress = (task.progress + [{"at": _now(), "message": message}])[-MAX_PROGRESS:]
+            task.progress_total += 1
             self._write(task)
             return task
 
