@@ -236,9 +236,9 @@ def test_when_it_cant_tell_it_doesnt_wait(tmp_path):
     assert slept == [1, 1, 1]
 
 
-def _run_exec_in_child(tmp_path, run_id, procs):
+def _run_exec_in_child(tmp_path, run_id, procs, setup=""):
     import sys
-    code = ("import sys; from agentic_lab.worker import runs as R; "
+    code = (f"import sys; from agentic_lab.worker import runs as R; {setup}"
             f"s = R.RunStore({str(tmp_path / 'state')!r}, {str(tmp_path / 'work')!r}, 'w', "
             "systemctl=lambda *a: True); "
             f"R.run_exec(s, sys.argv[1], wrapper=lambda *a: [], procs_file={procs!r})")
@@ -271,6 +271,31 @@ def test_a_stopped_run_is_recorded_when_the_job_has_really_ended(tmp_path):
     st = rs._status(r["id"])
     assert st["state"] == "stopped" and dt.datetime.fromisoformat(st["ended"]) >= job_end
     assert st["exit_code"] is None                  # the job's own code isn't visible
+
+
+def test_a_job_past_its_grace_period_is_recorded_as_killed_without_a_second_term(tmp_path):
+    import signal
+    import time
+    rs = runs(tmp_path)
+    ready = tmp_path / "ready"
+    r = rs.start("t-1", "x", f"touch {ready}; sleep 30", requester="alice",
+                 policy={"allowWrite": ["/w"], "denyRead": ["/s"]})
+    procs = tmp_path / "cgroup.procs"
+    proc = _run_exec_in_child(tmp_path, r["id"], str(procs), setup="R.STOP_WAIT_MAX_S = 1; ")
+    procs.write_text(f"{proc.pid} 424242")          # the job never ends by itself
+    deadline = time.time() + 10
+    while not ready.exists() and time.time() < deadline:
+        time.sleep(0.05)
+    os.killpg(rs._status(r["id"])["pid"], signal.SIGTERM)
+    proc.send_signal(signal.SIGTERM)
+    time.sleep(2.5)
+    st = rs._status(r["id"])
+    assert st["state"] == "stopped" and st["ended"] and "killed" in st["error"]
+    assert proc.poll() is None                      # still there: systemd's kill ends it
+    procs.write_text(f"{proc.pid}")                 # the job ended after all
+    assert proc.wait(10) == 0
+    st = rs._status(r["id"])
+    assert st["state"] == "stopped" and st["ended"] and "error" not in st
 
 
 def test_a_normal_run_is_recorded_as_before(tmp_path):

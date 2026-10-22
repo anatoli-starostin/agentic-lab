@@ -266,8 +266,9 @@ def job_wrapper(policy, cwd):
 
 
 STOP_POLL_S = 0.5
-STOP_WAIT_MAX_S = 50        # under TimeoutStopSec (60): a job that ignores its TERM is
-                            # recorded as ended just before systemd kills what's left
+STOP_WAIT_MAX_S = 50        # under TimeoutStopSec (60): a job still there is recorded as
+                            # killed before systemd's SIGKILL, which ends run-exec too
+STOP_WAIT_KILL_S = 600      # after that, only a bound: systemd's SIGKILL comes first
 
 
 def own_cgroup_procs():
@@ -357,7 +358,16 @@ def run_exec(store: RunStore, run_id, env=None, wrapper=job_wrapper,
             # again (the job would get it twice). So we stay until the job is gone too:
             # the run is "stopped" meanwhile, "ended" is when the job really ended.
             store._write(status, {**st, "state": "stopped"})
-            wait_alone(procs_file() if callable(procs_file) else procs_file)
+            procs = procs_file() if callable(procs_file) else procs_file
+            if not wait_alone(procs, limit=STOP_WAIT_MAX_S):
+                # Not ended within its grace period: systemd will kill it (and us). Record
+                # that now, but stay: exiting would restart systemd's stop (a second TERM,
+                # a new timeout). If the job ends after all, the record below replaces it.
+                store._write(status, {**st, "state": "stopped", "ended": _now(),
+                                      "exit_code": None,
+                                      "error": "still running at the end of its grace "
+                                               "period: killed"})
+                wait_alone(procs, limit=STOP_WAIT_KILL_S)
             # the job's own exit code isn't ours to see once bwrap is gone (its init has it)
             code = None if code < 0 else code
         state = "stopped" if stopped or st.get("stop_requested") else "exited"
