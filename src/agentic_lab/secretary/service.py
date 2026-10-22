@@ -25,7 +25,7 @@ from ..worker.service import _read_secret
 from ..manager.workers import Workers
 from ..broker.service import _env_file
 from ..manager.state import ManagerState
-from ..secrets.intake import Intake, form_url, message
+from ..secrets.intake import CODE_MINUTES, PREREQUISITES, Intake, form_url, message, window
 from ..slackio import SILENT, SlackIO
 from .brain import SecretaryBrain, expiry_notices
 from ..eventlog import EventLog
@@ -92,15 +92,15 @@ class Secretary:
                 self.propose_change(summary, lab_yaml, framework_commit, asked_by=human),
             offer_apply=lambda redeploy=False: self.offer_apply(asked_by=human, conv=conv,
                                                                 redeploy=redeploy),
-            request_slack_app=lambda agent: self.request_slack_app(agent, asked_by=human,
-                                                                   conv=conv),
+            request_slack_app=lambda agent, ready=False: self.request_slack_app(
+                agent, asked_by=human, conv=conv, ready=ready),
             redraw_app_icon=lambda agent: self.redraw_app_icon(agent, asked_by=human,
                                                                conv=conv),
             slack_verify=lambda owner: self.slack_verify(owner, asked_by=human),
-            request_github_token=lambda account: self.request_github_token(
-                account, asked_by=human, conv=conv),
-            request_github_app=lambda name: self.request_github_app(name, asked_by=human,
-                                                                    conv=conv),
+            request_github_token=lambda account, ready=False: self.request_github_token(
+                account, asked_by=human, conv=conv, ready=ready),
+            request_github_app=lambda name, ready=False: self.request_github_app(
+                name, asked_by=human, conv=conv, ready=ready),
             check_github_app=lambda slug, app_id: self.check_github_app(slug, app_id,
                                                                         asked_by=human))
 
@@ -159,10 +159,33 @@ class Secretary:
                 f"and merge; you never merge): {r['link'] or '(not GitHub: open it by hand)'}\n"
                 f"diff:\n{r['diff'][:6000]}")
 
-    async def request_slack_app(self, agent, asked_by=None, conv=None):
+    async def _dm(self, human, conv):
+        """Where something for `human` alone goes (#63): a DM with them, never a channel.
+        Returns (where to post, moved: whether that isn't this conversation), or None."""
+        uid = (self.lab.humans.get(human) or {}).get("slack_user")
+        if self.slack is None or not uid:
+            return None
+        im = await self.slack.web.conversations_open(users=uid)
+        ch = im["channel"]["id"]
+        if conv is not None and conv.channel == ch:
+            return SimpleNamespace(channel=ch, thread_ts=conv.thread_ts), False
+        return SimpleNamespace(channel=ch, thread_ts=None), True
+
+    def _link(self, owner, name):
+        """A one-time link for a secret, and the line saying how long it's active."""
+        code = self.intake.request(owner, name)
+        return form_url(code, self.intake_url), window(self.intake.expires(code))
+
+    @staticmethod
+    def _sent(what, moved):
+        return what + (" in a DM to the admin (one-time links never go in a channel): say "
+                       "here only that you sent them a DM" if moved else "")
+
+    async def request_slack_app(self, agent, asked_by=None, conv=None, ready=False):
         """Hand an admin what they need to create a manager's (or the secretary's, or the
-        approvals') Slack app: the manifest, the link, the clicks, and a one-time link for
-        its tokens. Posted as is (no retyping by the model)."""
+        approvals') Slack app: the manifest, the link, the clicks; the one-time link for
+        its tokens when they're ready to paste them (`ready`: it's active 5 minutes, #63).
+        In a DM with them (#63). Posted as is (no retyping by the model)."""
         refused = self._admin_only(asked_by, "set up Slack apps")
         if refused:
             return refused
@@ -177,9 +200,19 @@ class Secretary:
                     "propose it, have it merged, deploy it, then ask again")
         if self.slack is None or conv is None:
             return "this needs Slack; from the console: lab slack-manifest + lab secret request"
-        code = self.intake.request(owner, "slack-app")
+        where = await self._dm(asked_by, conv)
+        if where is None:
+            return "I can't DM you (no slack_user for you in lab.yaml)"
+        dm, moved = where
         name = manifest["display_information"]["name"]
-        steps = (f"*Slack app for {name}* (one-time link valid 24 h)\n"
+        if ready:
+            link, note = self._link(owner, "slack-app")
+            await self.slack.post(dm.channel, dm.thread_ts,
+                                  f"*{name}*: paste both tokens here (never in Slack): {link}\n"
+                                  f"{note}")
+            return self._sent(f"sent the one-time link for {name}'s tokens", moved) + \
+                ". When the admin says done: check_slack_app, then offer_deploy with redeploy."
+        steps = (f"*Slack app for {name}*\n"
                  "1. Open https://api.slack.com/apps?new_app=1 → *From a manifest* → this "
                  "workspace → *Next*.\n"
                  "2. *YAML* tab, replace everything with the manifest below → *Next* → *Create*.\n"
@@ -187,21 +220,23 @@ class Secretary:
                  "OAuth Token* (xoxb-…).\n"
                  "4. *Basic Information* → *App-Level Tokens* → *Generate Token and Scopes* → "
                  "any name → scope `connections:write` → *Generate*. Copy it (xapp-…).\n"
-                 f"5. Paste both here (never in Slack): {form_url(code, self.intake_url)}\n"
+                 "5. Tell me *ready*: I send you a one-time link to paste both into (never "
+                 "in Slack). It's active for 5 minutes, so ask when you have both.\n"
                  "6. Optional, its icon: *Basic Information* → *Display Information* → *App "
                  "icon*: upload the image I post below.\n"
                  "Then tell me \"done\": I check the tokens and offer the deploy that starts it.")
-        await self.slack.post(conv.channel, conv.thread_ts, steps)
-        await self.slack.post(conv.channel, conv.thread_ts,
-                              f"```{M.render(manifest)}```")
+        await self.slack.post(dm.channel, dm.thread_ts, steps)
+        await self.slack.post(dm.channel, dm.thread_ts, f"```{M.render(manifest)}```")
         role = ("approvals" if owner == "service:broker"
                 else self.lab.agents.get(agent, {}).get("role", ""))
-        await self.post_icon(name, role, conv, "The app icon (step 6)")
-        return (f"posted the steps, the manifest and the one-time link for {name}'s app. "
-                "When the admin says done: check_slack_app, then offer_deploy with redeploy.")
+        await self.post_icon(name, role, dm, "The app icon (step 6)")
+        return self._sent(f"posted the steps, the manifest and the icon for {name}'s app",
+                          moved) + (". When the admin says ready: request_slack_app again "
+                                    "with ready=true (the one-time link).")
 
-    async def request_github_token(self, account, asked_by=None, conv=None):
-        """A one-time link for a GitHub bot account's token, with how to make one."""
+    async def request_github_token(self, account, asked_by=None, conv=None, ready=False):
+        """How to make a GitHub bot account's token, and (`ready`) a one-time link for it,
+        active 5 minutes; in a DM with the admin (#63)."""
         refused = self._admin_only(asked_by, "set up GitHub bot accounts")
         if refused:
             return refused
@@ -211,9 +246,19 @@ class Secretary:
         if self.slack is None or conv is None:
             return ("this needs Slack; from the console: lab secret request "
                     f"service:github-{account.lower()} github-token")
-        code = self.intake.request(f"service:github-{account.lower()}", "github-token")
-        await self.slack.post(conv.channel, conv.thread_ts, (
-            f"*GitHub token for the bot {account}* (one-time link valid 24 h)\n"
+        where = await self._dm(asked_by, conv)
+        if where is None:
+            return "I can't DM you (no slack_user for you in lab.yaml)"
+        dm, moved = where
+        if ready:
+            link, note = self._link(f"service:github-{account.lower()}", "github-token")
+            await self.slack.post(dm.channel, dm.thread_ts,
+                                  f"*{account}'s token*: paste it here (never in Slack): "
+                                  f"{link}\n{note}")
+            return self._sent(f"sent the one-time link for {account}'s token", moved) + \
+                ". Then: the expiry date into lab.yaml (a PR), and offer_deploy with redeploy."
+        await self.slack.post(dm.channel, dm.thread_ts, (
+            f"*GitHub token for the bot {account}*\n"
             f"1. Log in to GitHub *as {account}* (a private window helps).\n"
             "2. https://github.com/settings/personal-access-tokens/new (fine-grained token).\n"
             "3. Resource owner: the organisation; Repository access: only the repos the "
@@ -227,14 +272,15 @@ class Secretary:
             "hides its repos from fine-grained tokens: a classic token instead "
             "(https://github.com/settings/tokens/new) with only `public_repo` (public repos) "
             "or `repo` (private). A GitHub App avoids both.\n"
-            f"6. Paste the token here (never in Slack): {form_url(code, self.intake_url)}\n"
+            "6. Tell me *ready* when you've copied it: I send you a one-time link to paste "
+            "it into (never in Slack), active for 5 minutes.\n"
             "Then: offer a redeploy, so the agents that use this bot get it.\n"
             "On GitHub, protect each repo's main: require a pull request with a review from "
             "code owners (people only), and don't let bots bypass it."))
-        return (f"posted how to make {account}'s token and the one-time link. Then: the "
-                "expiry date into lab.yaml (a PR), and offer_deploy with redeploy.")
+        return self._sent(f"posted how to make {account}'s token", moved) + (
+            ". When the admin says ready: request_github_token again with ready=true.")
 
-    async def request_github_app(self, name, asked_by=None, conv=None):
+    async def request_github_app(self, name, asked_by=None, conv=None, ready=False):
         """Steps to create a GitHub App as an agent's GitHub identity, and a one-time link
         for its private key. lab.yaml can name the app only once it exists (its App ID):
         after "done", check_github_app, then propose the change."""
@@ -247,10 +293,21 @@ class Secretary:
         if self.slack is None or conv is None:
             return ("this needs Slack; from the console: lab secret request "
                     f"service:github-{slug} github-app")
-        code = self.intake.request(f"service:github-{slug}", "github-app")
-        await self.slack.post(conv.channel, conv.thread_ts, (
+        where = await self._dm(asked_by, conv)
+        if where is None:
+            return "I can't DM you (no slack_user for you in lab.yaml)"
+        dm, moved = where
+        if ready:
+            link, note = self._link(f"service:github-{slug}", "github-app")
+            await self.slack.post(dm.channel, dm.thread_ts,
+                                  f"*{slug}[bot]'s private key*: paste the whole .pem here "
+                                  f"(never in Slack): {link}\n{note}")
+            return self._sent(f"sent the one-time link for {slug}'s key", moved) + (
+                ". When the admin says done with the App ID: check_github_app, then "
+                "propose_lab_change (github.accounts, the agent's github:), then offer_deploy.")
+        await self.slack.post(dm.channel, dm.thread_ts, (
             f"*A GitHub App for an agent: {name}* (it will appear on GitHub as "
-            f"`{slug}[bot]`; one-time link valid 24 h)\n"
+            f"`{slug}[bot]`)\n"
             "1. GitHub: your organisation → *Settings* → *Developer settings* → *GitHub Apps* "
             "→ *New GitHub App* (https://github.com/organizations/<org>/settings/apps/new).\n"
             f"2. *GitHub App name*: `{name}`. *Homepage URL*: anything (e.g. the lab's repo).\n"
@@ -259,17 +316,16 @@ class Secretary:
             "write, *Issues* read and write (Metadata read comes with them). Nothing else.\n"
             "5. *Only on this account* → *Create GitHub App*.\n"
             "6. On the app's page: note the *App ID*; then *Credentials* → *Key pairs* → "
-            "*New key* (a .pem file downloads): paste its whole contents here (never in "
-            f"Slack): "
-            f"{form_url(code, self.intake_url)}\n"
+            "*New key* (a .pem file downloads). Tell me *ready*: I send you a one-time link "
+            "to paste its whole contents into (never in Slack), active for 5 minutes.\n"
             "7. *Install App* → your organisation → *Only select repositories*: the lab's repos.\n"
             "Then tell me \"done\" and the App ID: I check the app and propose the lab.yaml "
             "change.\n"
             "On GitHub, protect each repo's main: require a pull request with a review from "
             "code owners (people only), and don't let apps or bots bypass it."))
-        return (f"posted the steps for the app {slug}[bot] and the one-time link for its key. "
-                "When the admin says done with the App ID: check_github_app, then "
-                "propose_lab_change (github.accounts, the agent's github:), then offer_deploy.")
+        return self._sent(f"posted the steps for the app {slug}[bot]", moved) + (
+            ". When the admin is at step 6 and says ready: request_github_app again with "
+            "ready=true (the link for its key).")
 
     async def check_github_app(self, slug, app_id, asked_by=None):
         refused = self._admin_only(asked_by, "set up GitHub identities")
@@ -517,19 +573,30 @@ class Secretary:
                          f"({t.get('state')}) and owner, not its content"}
 
     async def request_token(self, member, asked_by=None):
+        """A member's Claude-token command, by DM to them (#63). The member asking for it
+        themselves gets it at once (active 5 minutes); asked by someone else (an admin, a
+        notice), they get what to have ready and ask for the command when they are."""
         if member not in self.lab.humans:
             return f"no member {member!r} in lab.yaml"
         if asked_by is not None and asked_by != member and not self.is_admin(asked_by):
             return (f"refused: only {member} themselves or an admin ({self.admins()}) may "
                     "ask for their Claude token.")
         h = self.lab.humans[member] or {}
-        code = self.intake.request(member, "claude-token")
-        text = message(h.get("name") or member, code, self.intake_url)
+        name = h.get("name") or member
+        if asked_by != member:
+            text = (f"Hi {name}! Your lab agents need your Claude seat token. {PREREQUISITES} "
+                    "When you have that, tell me *send my token command*: you get a one-time "
+                    f"command, active for {CODE_MINUTES} minutes.")
+            sent = "what to have ready; they ask for the command when they are"
+        else:
+            code = self.intake.request(member, "claude-token")
+            text = message(name, code, self.intake_url, until=self.intake.expires(code))
+            sent = f"a one-time command (active {CODE_MINUTES} minutes)"
         if self.slack is None or not h.get("slack_user"):
             return f"no Slack for {member}; give them this message:\n{text}"
         im = await self.slack.web.conversations_open(users=h["slack_user"])
         await self.slack.post(im["channel"]["id"], None, text)
-        return f"sent {member} a DM with a one-time command (valid 24 h)"
+        return f"sent {member} a DM with {sent}"
 
     async def announce(self, text):
         channel = self.lab.data.get("announcements")
@@ -575,8 +642,8 @@ class Secretary:
             log.exception("publishing the Home tab for %s failed", human_id)
 
     async def notices(self):
-        """Once a day: credentials expiring within 14 days, announced (and the owner of a
-        Claude token gets a DM with a fresh one-time command)."""
+        """Once a day: credentials expiring within 14 days, and GitHub identities that
+        don't work, announced."""
         today = dt.date.today().isoformat()
         path = os.path.expanduser(f"{STATE}/noticed.json")   # survives restarts (deploys)
         try:

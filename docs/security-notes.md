@@ -127,6 +127,10 @@ What it took:
   off (`force_off`).
 - **`sudo` on a lab host is admin power**: it reads every agent's files and logs there.
   Give members SSH without `sudo`.
+- **The secret intake is open only minutes at a time** (#63): it runs while a one-time
+  code is open (5 minutes each), links go only by DM to the person who pastes the secret,
+  and it runs hardened. It still runs as the secretary's Unix user: a flaw in it, while
+  it runs, reaches what the secretary holds.
 - **What members see of each other** (#62): the web UI, the Home tab and the secretary
   show a member the lab's state (machines, task states and owners, usage), not other
   members' instructions, results, files or approval details; anonymous tailnet devices and

@@ -215,12 +215,13 @@ def host_plan(lab, host, tokens, intake=intake_secret):
         envs["/etc/agentic-lab/broker.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={PORTS['broker']}\n"
         envs["/etc/agentic-lab/intake.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={PORTS['intake']}\n"
         envs["/etc/agentic-lab/secretary.env"] = f"LAB_BIND=@TAILNET_IP@\nLAB_PORT={PORTS['secretary']}\n"
-        units += [("lab-broker.service", "lab-broker"), ("lab-intake.service", "lab-intake"),
+        # the intake runs only while a one-time code is open: its path unit starts it (#63)
+        units += [("lab-broker.service", "lab-broker"), ("lab-intake.path", "lab-intake.path"),
                   ("lab-secretary.service", "lab-secretary")]
         if "lab-secretary" not in users:
             users.append("lab-secretary")
     unit_user = {u: (f"lab-{u.split('@', 1)[1]}" if "@" in u else
-                     {"lab-broker": "lab-broker", "lab-intake": "lab-secretary",
+                     {"lab-broker": "lab-broker", "lab-intake.path": "lab-secretary",
                       "lab-secretary": "lab-secretary"}.get(u)) for _, u in units}
     held = sorted(u for u, owner in unit_user.items() if owner in waiting)
     # who may read its agents' working folders (#43): {agent user: its working folder}
@@ -300,9 +301,14 @@ def script(plan):
     if plan.get("self_admin"):
         lines += self_admin_script(plan["self_admin"])
     lines.append('say "services"')
+    if plan.get("secretary_host"):      # the hardened services see only these (#63)
+        for u in ("lab-secretary", "lab-broker"):
+            lines.append(f"runuser -u {u} -- mkdir -p -m 700 /home/{u}/.local/state/agentic-lab")
     for unit_file, _ in plan["units"]:
         sub = "worker" if "worker" in unit_file else "manager" if "manager" in unit_file else "secretary"
-        lines.append(f"install -m 644 /opt/agentic-lab/src/deploy/{sub}/{unit_file} /etc/systemd/system/")
+        for f in [unit_file] + ([unit_file[:-5] + ".service"] if unit_file.endswith(".path")
+                                else []):
+            lines.append(f"install -m 644 /opt/agentic-lab/src/deploy/{sub}/{f} /etc/systemd/system/")
     lines += removed_agents_script(plan)
     if plan.get("run_units"):
         lines += run_units_script(plan["run_units"])
@@ -316,6 +322,9 @@ def script(plan):
             lines.append(f"systemctl disable --now {unit} >/dev/null 2>&1 || true")
         else:
             lines.append(f"systemctl enable {unit} >/dev/null 2>&1; systemctl restart {unit}")
+        if unit.endswith(".path"):      # its service starts on demand, never at boot
+            svc = unit[:-5] + ".service"
+            lines.append(f"systemctl disable {svc} >/dev/null 2>&1; systemctl try-restart {svc}")
     lines.append('sleep 3; say "status"')
     for _, unit in plan["units"]:
         note = " (waiting for its secrets)" if unit in held else ""

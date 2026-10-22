@@ -10,12 +10,31 @@ Wants=network-online.target
 [Service]
 User=lab-broker
 Group=lab-broker
-WorkingDirectory=~
+WorkingDirectory=/home/lab-broker/.local/state/agentic-lab
 EnvironmentFile=/etc/agentic-lab/broker.env
 ExecStart=/opt/agentic-lab/venv/bin/lab --lab /etc/agentic-lab/lab.yaml broker serve --host ${LAB_BIND} --port ${LAB_PORT}
 Restart=always
 RestartSec=5
+# Needs no privileges (#63): a read-only system, its own folders only, no devices, no
+# capabilities, the usual system calls.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=tmpfs
 PrivateTmp=yes
+PrivateDevices=yes
+CapabilityBoundingSet=
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallFilter=@system-service
+SystemCallArchitectures=native
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+BindReadOnlyPaths=/home/lab-broker/.config/agentic-lab
+BindPaths=/home/lab-broker/.local/state/agentic-lab
 
 [Install]
 WantedBy=multi-user.target

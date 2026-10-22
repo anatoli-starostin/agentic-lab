@@ -110,8 +110,9 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
 
 6. **The secretary's own services** (Claude)
    - `sudo lab apply --host <secretary host> --allow-missing`: installs the framework in
-     `/opt/agentic-lab`, creates the users `lab-secretary` and `lab-broker`, starts the
-     secret intake and the secretary (state + web UI on `http://<secretary host>:8774/`).
+     `/opt/agentic-lab`, creates the users `lab-secretary` and `lab-broker`, sets up the
+     secret intake (it starts by itself whenever a one-time code is open, and stops when
+     none is) and starts the secretary (state + web UI on `http://<secretary host>:8774/`).
      Services whose Slack app doesn't exist yet (the broker's, a manager's) are installed
      but held back, and listed; other missing secrets (Claude tokens) are listed too. The
      next steps provide them, and the final `lab apply` starts everything.
@@ -140,9 +141,11 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      1. the manifest itself, pasted in full in a code block (`lab slack-manifest
         approvals | secretary | <manager id>`; a manifest holds no secrets);
      2. the link to create it: https://api.slack.com/apps?new_app=1
-     3. the one-time link for its tokens, from
-        `sudo -u lab-secretary lab secret request service:<broker|secretary|manager id> slack-app --url http://<secretary host>:8771`
-     4. the clicks below, as a numbered list.
+     3. the clicks below, as a numbered list;
+     4. when the admin is at step 5 below (both tokens copied): the one-time link for its
+        tokens, from
+        `sudo -u lab-secretary lab secret request service:<broker|secretary|manager id> slack-app --url http://<secretary host>:8771`.
+        It's active for 5 minutes; a missed one is simply requested again.
    - Admin, in the browser:
      1. *Create New App* → **From a manifest** → pick the workspace → *Next*.
      2. Select the **YAML** tab, delete what's there, paste the manifest → *Next* →
@@ -169,8 +172,10 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      the tokens.
 
 8. **The admin's Claude token** (Admin, once a year)
-   - `sudo -u lab-secretary lab secret request <admin> claude-token --url http://<secretary host>:8771`
-     prints a one-time command. The admin runs it on their own computer: it runs
+   - First on the admin's computer: Claude Code installed and logged in, on the tailnet,
+     `python3`. Then `sudo -u lab-secretary lab secret request <admin> claude-token --url
+     http://<secretary host>:8771` prints a one-time command, active for 5 minutes. The
+     admin runs it on their own computer: it runs
      `claude setup-token` and sends the token straight to the lab, which checks it
      with Anthropic before storing it.
    - The token is a password. **Never paste it, or the terminal's output, into a chat**
@@ -267,9 +272,10 @@ deployed, and the secretary checks in code that the person asking is an admin.
   others are guests there: questions and discussion, no tasks, no tools. A *shared* manager
   works for everyone.
 - **Add a manager:** its name → PR → merge → deploy (its service waits for its Slack
-  app) → the secretary posts the app's manifest, the clicks and a one-time link for its
-  tokens → you create the app (~3 minutes, in the browser) → "done" → it checks the
-  tokens and offers a redeploy, which starts the manager.
+  app) → the secretary DMs you the app's manifest and the clicks → you create the app
+  (~3 minutes, in the browser) → "ready" → it DMs you a one-time link for its tokens
+  (active 5 minutes) → "done" → it checks the tokens and offers a redeploy, which starts
+  the manager. One-time links always come by DM, never in a channel.
 - **Add a GPU worker:** first create the VM (Nebius console, Ubuntu with NVIDIA drivers),
   join it to the tailnet and give the admin SSH with passwordless sudo (step 10); then tell
   the secretary its tailnet name (and Nebius instance id for power) → PR → merge → deploy.
@@ -277,8 +283,9 @@ deployed, and the secretary checks in code that the person asking is an admin.
   kind (both can be used in one lab):
   - **A GitHub App** (simplest: nothing to create but the app; it appears as
     `<name>[bot]`): tell the secretary the app's name → it posts the steps (create the app
-    in the organisation's settings, permissions, install it on the lab's repos) and a
-    one-time link for its private key → you say "done" with the App ID → it checks the
+    in the organisation's settings, permissions, install it on the lab's repos) → at the
+    key step you say "ready" and it DMs you a one-time link for the private key (active 5
+    minutes) → you say "done" with the App ID → it checks the
     app and proposes the `lab.yaml` change → merge → deploy. Console:
     `sudo -u lab-secretary lab secret request service:github-<slug> github-app --url
     http://<secretary host>:8771`, `sudo lab github-app-check
@@ -286,7 +293,8 @@ deployed, and the secretary checks in code that the person asking is an admin.
   - **A full bot account** (a GitHub user with its own email, e.g. `flash-bot`, added to
     the org with access to the lab's repos only): the secretary adds it to `lab.yaml` →
     PR → merge → deploy; then it posts how to make the bot's fine-grained token (contents,
-    pull requests and issues of those repos) and a one-time link for it; then a redeploy.
+    pull requests and issues of those repos); "ready" → a one-time link for it by DM
+    (active 5 minutes); then a redeploy.
     Two traps of fine-grained tokens: they can't reach a repository owned by *another
     personal account*, even as a collaborator (only the bot's own and its organisations'
     repos), and an organisation's policy on fine-grained tokens can hide all its

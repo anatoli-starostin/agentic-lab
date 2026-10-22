@@ -32,7 +32,7 @@ def test_single_vm_plan(tmp_path):
         ("service:broker", "slack-app"): "SLACK_BOT_TOKEN=b\n"}))
     assert p["missing"] == [] and p["secretary_host"]
     assert {u for _, u in p["units"]} == {"lab-worker@worker-a", "lab-manager@mgr-alice",
-                                          "lab-broker", "lab-intake", "lab-secretary"}
+                                          "lab-broker", "lab-intake.path", "lab-secretary"}
     # the secretary monitors the worker with a read-only token the worker knows
     mon = yaml.safe_load(p["files"]["/home/lab-secretary/.config/agentic-lab/monitor.yaml"][2])
     wtok = yaml.safe_load(p["files"]["/home/lab-worker-a/.config/agentic-lab/manager-tokens.yaml"][2])

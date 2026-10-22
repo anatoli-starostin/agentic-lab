@@ -234,7 +234,8 @@ def run(lab_path, host=None):
             res.append(Result(WARN, f"{role} agents get a service in a later milestone"))
         sections.append((f"{role} {aid} ({lab.display_name(aid)})", res))
 
-    for svc, unit in (("broker", "lab-broker"), ("intake", "lab-intake")):
+    # the intake itself runs only while a code is open: its path unit is what's always on
+    for svc, unit in (("broker", "lab-broker"), ("intake", "lab-intake.path")):
         code, _ = sh("systemctl", "cat", unit)
         if code == 0:                                 # this host runs it
             res, pw = user_checks("lab-broker" if svc == "broker" else "lab-secretary")

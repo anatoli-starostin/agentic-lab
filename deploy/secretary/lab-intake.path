@@ -1,0 +1,12 @@
+# Starts the secret intake while a one-time code is open (#63): creating a code creates
+# this flag file; the intake removes it (and stops) when no code is open any more.
+
+[Unit]
+Description=Agentic Lab secret intake, on demand
+
+[Path]
+PathExists=/home/lab-secretary/.local/state/agentic-lab/intake-open
+Unit=lab-intake.service
+
+[Install]
+WantedBy=multi-user.target

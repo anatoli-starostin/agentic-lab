@@ -133,13 +133,15 @@ def cmd_secret_request(args):
             sys.exit("lab: Claude tokens belong to members, not services")
     elif owner not in lab.humans:
         sys.exit(f"lab: no human {owner!r} in {args.lab}")
+    from .secrets.intake import window
     intake = Intake(os.path.expanduser(args.state))
     code = intake.request(owner, args.name)
     if args.form or owner.startswith("service:"):
         print(form_url(code, args.url))
+        print(window(intake.expires(code)))
     else:
         name = (lab.humans[owner] or {}).get("name", owner)
-        print(message(name, code, args.url, args.name))
+        print(message(name, code, args.url, args.name, until=intake.expires(code)))
     return 0
 
 
@@ -152,7 +154,26 @@ def cmd_intake_serve(args):
     from .secrets.server import app
     intake = Intake(os.path.expanduser(args.state), verify={"claude-token": verify_claude_token,
                                                             "github-token": verify_github_token})
-    uvicorn.run(app(intake, args.client), host=args.host, port=args.port, log_level="info")
+    server = uvicorn.Server(uvicorn.Config(app(intake, args.client), host=args.host,
+                                           port=args.port, log_level="info"))
+    if args.on_demand:              # lab-intake.path started it: stop when no code is open
+        import asyncio
+
+        async def until_idle():
+            while not server.should_exit:
+                await asyncio.sleep(10)
+                if intake.close_if_idle():
+                    server.should_exit = True
+
+        async def main():
+            watch = asyncio.create_task(until_idle())
+            try:
+                await server.serve()
+            finally:
+                watch.cancel()
+        asyncio.run(main())
+    else:
+        server.run()
     return 0
 
 
@@ -673,6 +694,8 @@ def main(argv=None):
     iserve.add_argument("--host", default="127.0.0.1", help="the tailnet IP in production")
     iserve.add_argument("--port", type=int, default=8771)
     iserve.add_argument("--state", default=STATE)
+    iserve.add_argument("--on-demand", action="store_true",
+                        help="stop once no one-time code is open (lab-intake.path restarts it)")
     iserve.add_argument("--client", default="/opt/agentic-lab/client/lab-member.py",
                         help="the member client file to serve")
     iserve.set_defaults(fn=cmd_intake_serve)
