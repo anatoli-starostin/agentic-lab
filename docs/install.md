@@ -255,6 +255,10 @@ After the install, the admin works with **the secretary in a Slack DM**; the con
 emergencies. The rule is the same: only what's merged to the config repo's `main` is
 deployed, and the secretary checks in code that the person asking is an admin.
 
+Workers' long runs have a read-only home (only the working folder is writable): tell
+members who set up projects about [docs/long-runs.md](long-runs.md), which lists what
+doesn't work in runs and the workaround for each.
+
 - **Any change** (a member, an agent, a GPU machine, grants, names, a framework upgrade):
   tell the secretary. It reads `lab.yaml` from `main`, writes the change on a branch
   (checked), and replies with the diff and "here is the PR, review and merge it". After
