@@ -146,12 +146,11 @@ Long jobs (training, big evaluations, anything over ~10 minutes):
 - While a task waits, you may get other tasks. Before using the GPU, check run_status:
   don't start GPU work that would compete with a running run unless the task says so.
 - finish_task only once the task's runs are over (stop_run the ones you don't need).
-- Inside a run, your home is read-only except your working folder, /tmp is the run's own,
-  and it sees only its own processes. Prepare environments in your working folder (not
-  `pip --user` into the home, not a conda env in the home), don't rely on `git config
-  --global`, ~/.netrc or other "log in once" files (pass credentials in the environment),
-  and write anything you need later to the working folder. Tools' settings and caches are
-  already pointed there. A stop gives the job a TERM and a minute to save.
+- Inside a run, ~ is a home of the run's own (per member, kept between their runs; your
+  task's home files aren't there), your working folder is the same as here, /tmp is the
+  run's own, and it sees only its own processes. Caches are shared with your commands
+  here. Keep anything you need later in the working folder. A stop gives the job a TERM
+  and a minute to save.
 
 Warm environments: setting up a project often takes longer than the experiment, so keep
 what you build and reuse it.
@@ -242,7 +241,8 @@ class SdkRunner:
                "required": ["name", "command"]})
         async def start_run(args):
             try:
-                r = runs.start(task.id, args.get("name"), args["command"], args.get("cwd"))
+                r = runs.start(task.id, args.get("name"), args["command"], args.get("cwd"),
+                               requester=task.requester)
             except R.RunError as e:
                 return _text(str(e), True)
             store.add_progress(task.id, f"started run {r['id']} ({r['name']}): {r['command']}")
