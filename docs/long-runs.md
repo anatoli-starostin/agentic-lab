@@ -51,3 +51,29 @@ home into the working folder:
 
 If a run fails because of one of these, its log in `work/runs/<name>-<id>/log` normally says
 "Read-only file system" or "Permission denied" for a path in the home.
+
+## Stopping a run
+
+`stop_run`, cancelling its task, or an admin's `systemctl stop` sends **SIGTERM to every
+process of the run at once**, then waits up to **60 seconds** before killing whatever is
+left. That minute is the job's chance to save a checkpoint and exit. The lab itself sends
+each process one TERM, but your own launcher may pass it on again (`torchrun`,
+`accelerate`, `mpirun`, a shell script that traps and forwards), so a worker process can
+see it twice. Make the handler idempotent: note the request, and let the training loop
+save and exit once.
+
+```python
+import signal, sys
+
+stop = False
+def on_term(signum, frame):
+    global stop
+    stop = True                     # a second TERM changes nothing
+
+signal.signal(signal.SIGTERM, on_term)
+for step in range(start, total):
+    train_step()
+    if stop:
+        save_checkpoint(step)       # well inside the 60 s
+        sys.exit(0)
+```
