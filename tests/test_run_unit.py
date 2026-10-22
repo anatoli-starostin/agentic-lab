@@ -166,30 +166,73 @@ def test_the_runs_page_lists_the_cache_redirects():
     assert not hasattr(R, "home_env")
 
 
-def test_a_stop_reaches_the_job_once(tmp_path):
-    """A stop as systemd does it (KillMode=control-group): TERM to every process of the
-    run, the wrapper and the job alike. The job must see it once, and the run is
-    recorded as stopped once the job has ended."""
-    import os
-    import signal
+def test_after_a_stop_run_exec_waits_until_its_cgroup_is_empty(tmp_path):
+    """systemd TERMs the rest of a unit again when its main process exits during a stop,
+    so run-exec must outlive the job: it waits until it's alone in its cgroup."""
+    procs = tmp_path / "cgroup.procs"
+    states = ["100 200 300", "100 300", "100"]          # the job's tree ends
+    procs.write_text(states.pop(0))
+    slept = []
+
+    def sleep(s):
+        slept.append(s)
+        procs.write_text(states.pop(0))
+    assert R.wait_alone(str(procs), me=100, sleep=sleep) is True
+    assert slept == [R.STOP_POLL_S, R.STOP_POLL_S]      # it sleeps between looks
+
+
+def test_when_it_cant_tell_it_doesnt_wait(tmp_path):
+    slept = []
+    assert R.wait_alone(None, sleep=slept.append) is False
+    assert R.wait_alone(str(tmp_path / "missing"), sleep=slept.append) is False
+    (tmp_path / "junk").write_text("not pids")
+    assert R.wait_alone(str(tmp_path / "junk"), sleep=slept.append) is False
+    (tmp_path / "busy").write_text("1 2")
+    assert R.wait_alone(str(tmp_path / "busy"), me=1, limit=2, poll=1,
+                        sleep=slept.append) is False                  # bounded
+    assert slept == [1, 1, 1]
+
+
+def _run_exec_in_child(tmp_path, run_id, procs):
     import sys
-    import time
-    rs = runs(tmp_path)
-    count, ready = tmp_path / "count", tmp_path / "ready"
-    r = rs.start("t-1", "x", f"trap 'echo t >> {count}' TERM; touch {ready}; "
-                              "for i in $(seq 40); do sleep 0.05; done", requester="alice")
     code = ("import sys; from agentic_lab.worker import runs as R; "
             f"s = R.RunStore({str(tmp_path / 'state')!r}, {str(tmp_path / 'work')!r}, 'w', "
-            "systemctl=lambda *a: False); R.run_exec(s, sys.argv[1], wrapper=lambda *a: [])")
-    wrapper = subprocess.Popen([sys.executable, "-c", code, r["id"]])
+            "systemctl=lambda *a: True); "
+            f"R.run_exec(s, sys.argv[1], wrapper=lambda *a: [], procs_file={procs!r})")
+    return subprocess.Popen([sys.executable, "-c", code, run_id])
+
+
+def test_a_stopped_run_is_recorded_when_the_job_has_really_ended(tmp_path):
+    import datetime as dt
+    import signal
+    import time
+    rs = runs(tmp_path)
+    ready = tmp_path / "ready"
+    r = rs.start("t-1", "x", f"touch {ready}; sleep 30", requester="alice")
+    procs = tmp_path / "cgroup.procs"
+    proc = _run_exec_in_child(tmp_path, r["id"], str(procs))
+    procs.write_text(f"{proc.pid} 424242")          # the job (inside bwrap) still there
     deadline = time.time() + 10
     while not ready.exists() and time.time() < deadline:
         time.sleep(0.05)
-    job = rs._status(r["id"])["pid"]
-    os.kill(wrapper.pid, signal.SIGTERM)        # every process in the unit...
-    time.sleep(0.3)                             # (the order varies: spaced, they'd count)
-    os.killpg(job, signal.SIGTERM)              # ...the job's group included
-    assert wrapper.wait(10) == 0
-    time.sleep(0.2)
-    assert count.read_text().splitlines() == ["t"]
-    assert rs.view(r["id"])["state"] == "stopped"
+    os.killpg(rs._status(r["id"])["pid"], signal.SIGTERM)   # the wrapper's side ends...
+    proc.send_signal(signal.SIGTERM)                         # ...and run-exec is told
+    time.sleep(1.5)
+    st = rs._status(r["id"])
+    assert proc.poll() is None                      # still there: the job hasn't ended
+    assert st["state"] == "stopped" and "ended" not in st
+    job_end = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+    procs.write_text(f"{proc.pid}")                 # now only run-exec is left
+    assert proc.wait(10) == 0
+    st = rs._status(r["id"])
+    assert st["state"] == "stopped" and dt.datetime.fromisoformat(st["ended"]) >= job_end
+    assert st["exit_code"] is None                  # the job's own code isn't visible
+
+
+def test_a_normal_run_is_recorded_as_before(tmp_path):
+    rs = runs(tmp_path)
+    r = rs.start("t-1", "x", "exit 3", requester="alice")
+    proc = _run_exec_in_child(tmp_path, r["id"], str(tmp_path / "never-read"))
+    assert proc.wait(10) == 0
+    st = rs._status(r["id"])
+    assert st["state"] == "exited" and st["exit_code"] == 3 and st["ended"]
