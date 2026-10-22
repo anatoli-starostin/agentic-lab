@@ -64,9 +64,11 @@ What it took:
   network, writes wherever that user may, the user's files, and any socket server it starts
   is reachable from the agent's sandbox while it lives. Its lab secrets are hidden from the
   run (`InaccessiblePaths=` on `~/.config/agentic-lab`: the member's Claude seat token, the
-  lab tokens), so a careless or injected command can't send them away, and its home is
-  read-only to it except the working folder (tools' settings and data go there:
-  `XDG_CONFIG_HOME` and friends point into it). That's why a human approves **each** run: no grant is
+  lab tokens), so a careless or injected command can't send them away. The job itself
+  runs with a home of its own (one per member, mounted over the real home; the working
+  folder bound back, the git setup read-only): the lab's secrets and state aren't in it
+  at all. Underneath, the unit keeps the real home read-only and the secrets hidden, in
+  case those mounts were ever wrong (docs/long-runs.md). That's why a human approves **each** run: no grant is
   offered, `lab check` refuses one in `lab.yaml`, and the runner ignores any. Review what
   the command runs (a script the agent wrote can do anything that user can). What stays
   in place: the run unit has `NoNewPrivileges` (it can't use the worker's sudo rule to
