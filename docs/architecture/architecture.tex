@@ -307,7 +307,9 @@ sandbox violations that explain it.
   \item[Timeout] Off by default: a request waits until the human answers. A member may set
     one (\code{timeout\_s} in \code{lab.yaml}); then a request nobody answers in time is
     closed as \emph{denied}: silence counts as ``no'', never as ``yes'' (\code{on\_timeout}
-    can only be \code{deny}), and the agent is told it was a timeout, not a refusal. If the
+    can only be \code{deny}), and the agent is told it was a timeout, not a refusal. A
+    member changes their own timeout from Slack, through the secretary (an admin anyone's;
+    it applies to new requests). If the
     agent stops waiting (its task is cancelled, or a manager's turn is cut off), the
     request is \emph{withdrawn}, so nobody is asked about it any more.
   \item[Grants] ``For a while'' answers become \emph{grants} that widen the sandbox

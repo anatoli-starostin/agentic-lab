@@ -3,7 +3,8 @@
 A worker that needs something outside its sandbox files a request here. The broker asks the
 human (through a channel: Slack DM), and records the decision only when it comes from that
 human's own verified interaction. A request waits for its human's answer; if the human set
-a timeout (`timeout_s`), an unanswered request is denied when it runs out. Workers pull
+a timeout (`timeout_s` in lab.yaml, or their own override from Slack, #77), an unanswered
+request is denied when it runs out, and can't be decided any more. Workers pull
 decisions from the broker; nothing else can hand them one.
 
 Decisions:
@@ -31,6 +32,7 @@ PENDING, DECIDED = "pending", "decided"
 ACTIONS = ("once", "hour", "task", "deny")
 TASK_GRANT_MAX = dt.timedelta(hours=24)      # a "this task" grant never outlives a day
 DEFAULT_TIMEOUT_S = None        # no timeout: a request waits for its human (lab.yaml: timeout_s)
+TIMEOUT_BOUNDS_S = (60, 7 * 86400)      # a member's own timeout: 1 minute to 7 days, or none
 
 
 class BrokerError(ValueError):
@@ -229,6 +231,49 @@ class Broker:
     def _save(self, req):
         self._write(self._req_path(req.id), req.view())
 
+    # members' own approval timeouts (#77): lab.yaml is the default, an override wins until
+    # it's reset or its `until` passes. A timeout only ever denies, so it may change at runtime.
+    def _timeouts_path(self):
+        return os.path.join(self.root, "timeouts.json")
+
+    def _overrides(self):
+        try:
+            with open(self._timeouts_path()) as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+    def timeout_for(self, human):
+        """(seconds or None, where it comes from) for a new request to `human`."""
+        o = self._overrides().get(human)
+        if o and (not o.get("until") or now() < dt.datetime.fromisoformat(o["until"])):
+            return o.get("timeout_s"), f"set by {o.get('by')}" + (
+                f" until {o['until']}" if o.get("until") else "")
+        return (self.humans.get(human) or {}).get("timeout_s") or DEFAULT_TIMEOUT_S, "lab.yaml"
+
+    def set_timeout(self, human, timeout_s, by, until=None):
+        """Override `human`'s timeout (None: no timeout); `reset` with timeout_s="default"."""
+        if human not in self.humans:
+            raise BrokerError(f"unknown human {human!r}")
+        if timeout_s not in (None, "default") and not (
+                isinstance(timeout_s, int) and not isinstance(timeout_s, bool)
+                and TIMEOUT_BOUNDS_S[0] <= timeout_s <= TIMEOUT_BOUNDS_S[1]):
+            raise BrokerError("a timeout is 1 minute to 7 days, or none")
+        if until is not None:
+            u = dt.datetime.fromisoformat(until)
+            u = u if u.tzinfo else u.replace(tzinfo=dt.timezone.utc)     # naive: UTC
+            if u <= now():
+                raise BrokerError("`until` is already past")
+            until = _iso(u)
+        with self._lock:
+            o = self._overrides()
+            if timeout_s == "default":
+                o.pop(human, None)
+            else:
+                o[human] = {"timeout_s": timeout_s, "until": until, "by": by, "at": _iso(now())}
+            self._write(self._timeouts_path(), o)
+        return self.timeout_for(human)
+
     def pending(self, human=None):
         out = []
         for name in sorted(os.listdir(self.req_dir)):
@@ -296,7 +341,7 @@ class Broker:
                 human, manager, confirmed = reg["requester"], reg["manager"], True
         if human not in self.humans:
             raise BrokerError(f"unknown human {human!r}")
-        timeout = self.humans[human].get("timeout_s") or DEFAULT_TIMEOUT_S   # None: no timeout
+        timeout = self.timeout_for(human)[0]       # None: no timeout
         t = now()
         req = Request(
             id=f"r-{t.strftime('%Y%m%d%H%M%S%f')}{secrets.token_hex(3)}", agent=agent,
@@ -318,6 +363,11 @@ class Broker:
             raise BrokerError(f"unknown action {action!r}")
         with self._lock:
             req = self.get(rid)
+            if req.state == PENDING and req.expires and now() >= dt.datetime.fromisoformat(
+                    req.expires):
+                self._time_out(req)         # past its deadline: a timeout, never a yes
+                self._notify(req)           # (listeners only schedule their updates)
+                raise BrokerError("timed out before this answer: it can't be decided now")
             if req.state != PENDING:
                 raise BrokerError("already decided")
             expected = self.humans.get(req.human, {}).get("slack_user")
@@ -347,14 +397,16 @@ class Broker:
         with self._lock:
             for req in self.pending():
                 if req.expires and now() >= dt.datetime.fromisoformat(req.expires):
-                    req.state = DECIDED
-                    req.decision = {"action": "timeout", "by": None, "at": _iso(now()),
-                                    "note": None}
-                    self._save(req)
+                    self._time_out(req)
                     out.append(req)
         for req in out:
             self._notify(req)
         return out
+
+    def _time_out(self, req):
+        req.state = DECIDED
+        req.decision = {"action": "timeout", "by": None, "at": _iso(now()), "note": None}
+        self._save(req)
 
     def withdraw(self, rid, agent):
         """The agent that filed a request stops waiting for it (its task was cancelled):

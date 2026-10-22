@@ -105,6 +105,8 @@ class Secretary:
             power=lambda host, action: self.power(host, action, f"asked by {who} {self.via}",
                                                   asked_by=human),
             power_history=lambda host=None, hours=48: self.power_history(host, hours),
+            approval_timeout=lambda member=None, minutes=None, until=None:
+                self.approval_timeout(member or human, minutes, until, asked_by=human),
             read_config=lambda: self.read_config(asked_by=human),
             propose_change=lambda summary, lab_yaml, framework_commit=None:
                 self.propose_change(summary, lab_yaml, framework_commit, asked_by=human),
@@ -574,6 +576,37 @@ class Secretary:
         await self.announce(f":electric_plug: {host} powering {verb} ({why}).")
         return f"{host}: powering {verb}; it takes a minute or two"
 
+    async def approval_timeout(self, member, minutes=None, until=None, asked_by=None,
+                               call=None):
+        """A member's approval timeout (#77): shown, or set (`minutes`: a number, "none" or
+        "default"; `until`: when the override ends). A member changes their own, an admin
+        anyone's. It only ever denies, so it's changed here, not through lab.yaml."""
+        if member not in self.lab.humans:
+            return f"no member {member!r} in lab.yaml"
+        body = None
+        if minutes is not None:
+            if asked_by is not None and asked_by != member and not self.is_admin(asked_by):
+                return (f"refused: only {member} themselves or an admin ({self.admins()}) may "
+                        "change their approval timeout.")
+            m = str(minutes).strip().lower()
+            if m not in ("none", "default") and not m.isdigit():
+                return "minutes must be a number, 'none' or 'default'"
+            body = {"human": member, "by": asked_by or "the secretary", "until": until,
+                    "timeout_s": None if m == "none" else m if m == "default" else int(m) * 60}
+        try:
+            r = await (call or _broker_timeouts)(body)
+        except Exception as e:
+            return f"couldn't: {e}"
+        if "error" in r:
+            return f"couldn't: {r['error']}"
+        if body and self.events is not None:
+            self.events.add("approval_timeout", f"approval timeout for {member} set to "
+                            f"{minutes} by {body['by']}", member=member, by=body["by"])
+        t = (r.get(member) or {})
+        s = t.get("timeout_s")
+        return (f"{member}'s approval timeout: " + (f"{s // 60} minutes" if s else "none")
+                + f" ({t.get('source')}). It applies to new requests; pending ones keep theirs.")
+
     def power_history(self, host=None, hours=48):
         """Recent power actions (who or what, when, why), oldest first: idle stops, members'
         requests in Slack or from the console, admins' force-offs."""
@@ -709,6 +742,19 @@ class Secretary:
                 json.dump(done, f)
         except OSError:
             log.exception("remembering today's notices failed")
+
+
+async def _broker_timeouts(body=None):
+    """GET (body None) or POST the broker's members' timeouts, with the secretary's token."""
+    import httpx2
+    cfg = yaml.safe_load(_read_secret(f"{CONFIG}/broker.yaml") or "") or {}
+    if not (cfg.get("url") and cfg.get("token")):
+        raise RuntimeError("no broker configured for the secretary")
+    async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {cfg['token']}"},
+                                  timeout=10) as c:
+        url = f"{cfg['url'].rstrip('/')}/v1/timeouts"
+        r = await (c.post(url, json=body) if body else c.get(url))
+        return r.json()
 
 
 async def serve(lab_path, host, port):
