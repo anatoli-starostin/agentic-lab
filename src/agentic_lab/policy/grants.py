@@ -76,7 +76,10 @@ def write_refused(value):
     the system reads it (repeated slashes, `.`, trailing slashes don't matter): never `/`
     or a whole home; in the agent's home (`~/…`) nothing whose first part starts with a dot
     (services' config and state, shell and tool settings, keys); never another home
-    (`~user`, `/home/…`: the agent's own folders are written as `~/…`)."""
+    (`~user`, `/home/…`: the agent's own folders are written as `~/…`); never the
+    system's own views of processes and devices (`/proc`, `/dev`, `/sys`, `/run`: their
+    paths lead elsewhere, e.g. a process's root or open files). Where the path leads on the
+    host is checked again when the sandbox is set up (`resolved_refused`)."""
     if ".." in value.split("/"):
         return "with '..'"
     path = os.path.normpath(re.sub(r"/{2,}", "/", value))
@@ -91,7 +94,22 @@ def write_refused(value):
         return None
     if parts and parts[0] == "home":
         return "into a home by its absolute path (use ~/… for the agent's own)"
+    if parts and parts[0] in PSEUDO:
+        return "into the system's views of processes and devices"
     return None
+
+
+PSEUDO = ("proc", "dev", "sys", "run")
+
+
+def resolved_refused(value, home=None):
+    """write_refused for where the path really leads on this host (links followed): e.g. a
+    granted folder that is a link into the home's settings."""
+    home = os.path.realpath(home or os.path.expanduser("~"))
+    real = os.path.realpath(os.path.expanduser(value) if value.startswith("~/") else value)
+    if real == home or real.startswith(home + "/"):
+        real = "~" + real[len(home):]
+    return write_refused(real)
 
 
 def grantable_tool(value):
