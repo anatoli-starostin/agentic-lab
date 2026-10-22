@@ -12,15 +12,18 @@ An agent has one identity (`github: flash-bot`), or several chosen by repository
       spikyclaudebot: [anatoli-starostin/spiky]    # these repositories (owner/* too)
 
 The agent's service writes, where the agent can read but not write (ROOT):
-  <identity>/token and <identity>/gh/hosts.yml   each identity's current token
+  <identity>/token                               each identity's current token
   <identity>/gitconfig                           its commit name and email
   default, repos.tsv                             which identity for which repository
   gitconfig                                      the agent's git config (GIT_CONFIG_GLOBAL):
                                                  the default identity, per-repo includes,
                                                  and the credential helper below
 So git picks the identity by the repository (lab-git-credential for the token, an
-includeIf for the commit author); gh uses the default identity, or another one's token
-when the agent passes it (GH_TOKEN=$(cat ROOT/<identity>/token)).
+includeIf for the commit author). gh is a shim first on the agent's PATH (deploy/worker/
+gh-shim): it reads the token at call time (an App's changes hourly), the identity mapped
+to `-R owner/repo` or the default one, unless the agent set GH_TOKEN itself. gh's own
+config (it writes there on many commands) is in the agent's working folder
+(<workdir>/.config/gh), never next to the token (#52).
 
 What keeps this safe is GitHub itself: tokens limited to the repositories each identity is
 for, and branch protection on `main` (pull requests, reviews by human code owners, no
@@ -35,6 +38,7 @@ ROOT = "~/.local/share/agentic-lab/github"   # readable by the agent, not writab
 # folder, which its agent's sandbox can't read
 SERVICE_ROOT = "~/.local/state/agentic-lab/github"
 HELPER = "/opt/agentic-lab/src/deploy/worker/lab-git-credential"
+SHIM = "/opt/agentic-lab/src/deploy/worker/gh-shim"      # its `gh`, first on the PATH
 DOMAINS = ["github.com", "api.github.com", "codeload.github.com", "uploads.github.com",
            "objects.githubusercontent.com", "raw.githubusercontent.com"]
 
@@ -49,13 +53,15 @@ def _write(path, text, mode=0o600):
 
 
 def write_token(token, login, identity_dir):
-    """An identity's token, where the credential helper and gh read it."""
+    """An identity's token, where the credential helper and the gh shim read it."""
     _write(os.path.join(identity_dir, "token"), token + "\n")
-    _write(os.path.join(identity_dir, "gh", "hosts.yml"),
-           f"github.com:\n    oauth_token: {token}\n    git_protocol: https\n    user: {login}\n")
+    try:                                # gh's old copy of it (before #52)
+        os.remove(os.path.join(identity_dir, "gh", "hosts.yml"))
+    except OSError:
+        pass
 
 
-def prepare(lab, agent_id, root=ROOT, secrets=SECRETS, helper=HELPER):
+def prepare(lab, agent_id, root=ROOT, secrets=SECRETS, helper=HELPER, shim=SHIM):
     """Write the agent's git setup (and bot accounts' tokens). Returns its environment:
     empty for an agent without GitHub."""
     default, mapped = lab.github_identities(agent_id)
@@ -82,9 +88,18 @@ def prepare(lab, agent_id, root=ROOT, secrets=SECRETS, helper=HELPER):
            f"[include]\n\tpath = {os.path.join(root, default, 'gitconfig')}\n"
            f'[credential "https://github.com"]\n\thelper = {helper}\n\tuseHttpPath = true\n'
            + includes)
+    # gh writes its config (migrations, state): a folder of its own the sandbox lets it
+    # write, with no secrets in it
+    gh_config = os.path.join(os.path.expanduser(
+        (lab.agents.get(agent_id) or {}).get("workdir") or "~/work"), ".config", "gh")
+    try:
+        os.makedirs(gh_config, mode=0o700, exist_ok=True)
+    except OSError:                     # gh makes it itself; never lose git's setup over it
+        pass
     return {"GIT_CONFIG_GLOBAL": os.path.join(root, "gitconfig"),
-            "GH_CONFIG_DIR": os.path.join(root, default, "gh"),
-            "LAB_GITHUB_DIR": root}
+            "GH_CONFIG_DIR": gh_config,
+            "LAB_GITHUB_DIR": root,
+            "PATH": shim + ":" + os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")}
 
 
 def env_for(lab, agent_id, root=ROOT, secrets=SECRETS):
@@ -128,9 +143,9 @@ def instructions(lab, agent_id, root=ROOT):
         root = os.path.expanduser(root)
         rows = "; ".join(f"{p}: {who(n)}" for p, n in mapped)
         text += (f" For some repositories you act as another identity, picked by the "
-                 f"repository: {rows}. git does this by itself (use https remotes); for gh on "
-                 f"those repositories, pass that identity's token: GH_TOKEN=$(cat "
-                 f"{root}/<identity>/token) gh ... -R owner/repo.")
+                 f"repository: {rows}. git does this by itself (use https remotes); so does "
+                 f"gh when you name the repository: gh ... -R owner/repo (without -R it acts "
+                 f"as {lab.github_login(default)}). {root}/repos.tsv lists these mappings.")
     return text + (" Push feature branches and open pull requests; issues and comments are "
                    "fine. Never push to main, never approve or merge a pull request: humans "
                    "review and merge. Never print or share a token.\n")

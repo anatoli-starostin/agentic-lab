@@ -111,16 +111,18 @@ def test_token_kept_where_git_and_gh_read_it(tmp_path):
     asyncio.run(GA.keep_token(1, "acme-flash[bot]", stop, key_path=str(keyfile),
                               token_dir=str(tdir), mint_fn=fake_mint))
     assert (tdir / "token").read_text() == "ghs_fresh\n"
-    assert "oauth_token: ghs_fresh" in (tdir / "gh" / "hosts.yml").read_text()
+    assert not (tdir / "gh" / "hosts.yml").exists()             # gh reads the token via its shim
     # the agent's git, with the app's token kept in its identity's folder
     lab = lab_with_both(tmp_path)
     root = tmp_path / "share"
     (root / "acme-flash").mkdir(parents=True)
     GA.write_token("ghs_fresh", "acme-flash[bot]", str(root / "acme-flash"))
     helper = Path(__file__).parent.parent / "deploy" / "worker" / "lab-git-credential"
+    lab.agents[first(lab, "manager")]["workdir"] = str(tmp_path / "work")
     env = GH.prepare(lab, first(lab, "manager"), root=str(root), secrets=str(tmp_path / "s"),
                      helper=str(helper))
-    assert env["GH_CONFIG_DIR"] == str(root / "acme-flash" / "gh") and "GH_TOKEN" not in env
+    assert env["GH_CONFIG_DIR"] == str(tmp_path / "work" / ".config" / "gh")
+    assert "GH_TOKEN" not in env                                  # read at call time (shim)
     r = subprocess.run(["git", "credential", "fill"],
                        input="protocol=https\nhost=github.com\npath=acme/x.git\n\n",
                        capture_output=True, text=True, timeout=20, cwd=tmp_path,

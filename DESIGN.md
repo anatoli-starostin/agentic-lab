@@ -214,16 +214,21 @@ github:
 ```
 git picks the identity by the repository by itself (a credential helper for the token,
 git's conditional config for the commit author; the service writes the agent's git config,
-`GIT_CONFIG_GLOBAL`); for `gh` on a mapped repository the agent passes that identity's token.
+`GIT_CONFIG_GLOBAL`). `gh` is a small shim first on the agent's `PATH`
+(`deploy/worker/gh-shim`): it reads the current token at call time (the identity mapped to
+`-R owner/repo`, else the default; a `GH_TOKEN` the agent sets wins) and runs the real
+`gh`. gh's own config, which it writes on many commands, is in the agent's working folder
+(`<workdir>/.config/gh`, `GH_CONFIG_DIR`); the tokens stay where the agent can read but not
+write them.
 Several agents may share an identity. Identities live in `github.accounts`; two kinds, side
 by side:
 - **A GitHub App** (`app_id`; `installation_id` too if the app is installed in several
   places): appears as `<slug>[bot]`, no account or email to create, so
   every agent can easily have its own. Tokens last an hour: the agent's service holds the
   app's private key (unreadable by the agent), mints a token, keeps a fresh one where git
-  and `gh` read it (`github_app.py`), and mints the next before it expires.
-- **A full bot account** (a GitHub user with its own email): a fine-grained token in the
-  agent's environment (`GH_TOKEN`), its expiry tracked.
+  and the `gh` shim read it (`github_app.py`), and mints the next before it expires.
+- **A full bot account** (a GitHub user with its own email): a fine-grained token, read the
+  same way, its expiry tracked.
 
 Either way git and `gh` are set up, commits carry the identity's name and email, and
 `github.com` is reachable from the sandbox. The agent can read its current token: the

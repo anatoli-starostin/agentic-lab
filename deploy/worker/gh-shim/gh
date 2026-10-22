@@ -1,0 +1,42 @@
+#!/bin/bash
+# gh for an agent: first on its PATH (the agent's service puts this folder there). It reads
+# the GitHub token at call time, so a GitHub App's hourly token is always the current one,
+# and runs the real gh. The token stays where the agent can read but not write it
+# ($LAB_GITHUB_DIR/<identity>/token); gh's own config goes to GH_CONFIG_DIR, in the
+# agent's working folder (gh writes there on many commands).
+#
+# Which identity: GH_TOKEN if the agent already set it; else the one lab.yaml maps to the
+# repository given with -R/--repo (repos.tsv, as git's credential helper does); else the
+# agent's default identity.
+real=${LAB_REAL_GH:-/usr/bin/gh}
+if [ ! -x "$real" ]; then
+    echo "gh isn't installed on this host (apt-get install gh)" >&2
+    exit 127
+fi
+root=${LAB_GITHUB_DIR:-$HOME/.local/share/agentic-lab/github}
+if [ -z "${GH_TOKEN:-}" ] && [ -f "$root/default" ]; then
+    name=$(head -n 1 "$root/default")
+    repo=""
+    prev=""
+    for a in "$@"; do
+        case $prev in -R|--repo) repo=$a ;; esac
+        case $a in --repo=*) repo=${a#--repo=} ;; -R?*) repo=${a#-R} ;; esac
+        prev=$a
+    done
+    repo=${repo#https://github.com/}
+    repo=${repo#github.com/}
+    repo=${repo%.git}
+    if [ -n "$repo" ] && [ -f "$root/repos.tsv" ]; then
+        shopt -s nocasematch    # GitHub owner and repository names are case-insensitive
+        while IFS=$'\t' read -r pattern identity; do
+            # shellcheck disable=SC2053  # the pattern is a glob on purpose (owner/*)
+            if [[ $repo == $pattern ]]; then name=$identity; break; fi
+        done < "$root/repos.tsv"
+        shopt -u nocasematch
+    fi
+    if [ -n "$name" ] && [ -f "$root/$name/token" ]; then
+        GH_TOKEN=$(head -n 1 "$root/$name/token")
+        export GH_TOKEN
+    fi
+fi
+exec "$real" "$@"

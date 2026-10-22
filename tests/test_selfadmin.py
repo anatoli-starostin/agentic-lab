@@ -197,6 +197,7 @@ def test_secretary_service_uses_its_identity(tmp_path, monkeypatch):
     d["github"] = {"accounts": {"flash-bot": {"email": "flash@acme.org"}}}
     sec = next(a for a, x in d["agents"].items() if x["role"] == "secretary")
     d["agents"][sec]["github"] = "flash-bot"
+    d["agents"][sec]["workdir"] = str(tmp_path / "work")
     p = tmp_path / "lab.yaml"
     p.write_text(yaml.safe_dump(d))
     lab = registry.load(p)
