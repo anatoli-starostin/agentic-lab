@@ -83,12 +83,23 @@ def test_valid_grants(m):
     G.from_mapping(m)
 
 
+@pytest.mark.parametrize("w", ["~/.local/share/uv", "~/.config/other", "/home/u/datasets",
+                               "/data/shared"])
+def test_write_grants_beside_the_labs_own_folders(w):
+    G.from_mapping({"write": w})
+
+
 @pytest.mark.parametrize("m,msg", [
     ({"domain": "*"}, "not a domain"),
     ({"domain": "https://arxiv.org"}, "not a domain"),
     ({"write": "relative/dir"}, "absolute or ~/"),
     ({"write": "/"}, "too broad"),
     ({"write": "~/"}, "too broad"),
+    ({"write": "~/.config/agentic-lab"}, "lab's own"),
+    ({"write": "~/.local"}, "lab's own"),
+    ({"write": "~/.local/state/agentic-lab/x"}, "lab's own"),
+    ({"write": "/home/lab-worker-a/.local/share"}, "lab's own"),
+    ({"write": "~/.nebius"}, "lab's own"),
     ({"tool": "mcp__*"}, "anchored"),
     ({"tool": "*"}, "anchored"),
     ({"domain": "a.org", "tool": "WebFetch"}, "exactly one"),

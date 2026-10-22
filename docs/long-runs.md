@@ -38,7 +38,7 @@ downloaded or built (models, wheels, compiled extensions):
 |---|---|---|
 | Lifetime | ends with the command and the session | until it ends or is stopped |
 | Approval | inside the sandbox: none | every run, by a human |
-| Network | the sandbox's allowlist (tailnet, granted domains) | not limited by the lab |
+| Network | the sandbox's allowlist (tailnet, granted domains) | not limited by the lab; it resolves names itself (the resolver's file is shown even though `/run` is hidden) |
 | `/tmp` | the session's | its own, emptied when it ends |
 | Timed write grants into the home | applied | applied by the job's own layer; the unit's layer underneath knows only standing ones, so such a grant doesn't reach a run |
 | `sudo`, setuid helpers | refused | refused (`NoNewPrivileges`) |
@@ -66,7 +66,8 @@ each process one TERM, but your own launcher may pass it on again (`torchrun`,
 `accelerate`, `mpirun`, a shell script that traps and forwards), so a worker process can
 see it twice. Make the handler idempotent: note the request, and let the training loop
 save and exit once. A stopped run records when its job really ended; its exit code isn't
-recorded (`null`).
+recorded (`null`). A job that ignores its TERM is recorded as ended at about 50 seconds and
+killed at 60.
 
 ```python
 import signal, sys
