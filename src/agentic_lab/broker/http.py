@@ -148,7 +148,8 @@ def app(broker: Broker, tokens: dict[str, str]):
                     grants[name[:-5]] = active
         pending = [{k: r.view()[k] for k in ("id", "agent", "task_id", "human", "detail",
                                               "expires", "manager")} for r in broker.pending()]
-        return JSONResponse({"pending": pending, "grants": grants})
+        return JSONResponse({"pending": pending, "grants": grants,       # timeouts: #77
+                             "timeouts": {h: broker.timeout_detail(h) for h in broker.humans}})
 
     async def timeouts(request: HttpRequest):
         """Members' approval timeouts (#77), the secretary only: it checks who may change
@@ -162,8 +163,7 @@ def app(broker: Broker, tokens: dict[str, str]):
             if request.method == "POST":
                 d = await body(request)
                 broker.set_timeout(d["human"], d.get("timeout_s"), str(d["by"]), d.get("until"))
-            return JSONResponse({h: dict(zip(("timeout_s", "source"), broker.timeout_for(h)))
-                                 for h in broker.humans})
+            return JSONResponse({h: broker.timeout_detail(h) for h in broker.humans})
         except (BrokerError, KeyError, ValueError, TypeError) as e:
             return JSONResponse({"error": str(e)}, status_code=400)
 

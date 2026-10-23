@@ -93,7 +93,8 @@ def test_only_the_secretary_reads_or_changes_them(tmp_path, free_port):
                                                       "by": "x"}).status_code == 403
         sec = {"Authorization": "Bearer " + "s" * 40}
         r = httpx2.post(url, headers=sec, json={"human": "bob", "timeout_s": 600, "by": "bob"})
-        assert r.json()["bob"] == {"timeout_s": 600, "source": "set by bob"}
+        assert r.json()["bob"] == {"timeout_s": 600, "source": "set by bob", "by": "bob",
+                                   "until": None}
         assert httpx2.post(url, headers=sec, json={"human": "bob", "timeout_s": 5,
                                                    "by": "bob"}).status_code == 400
     finally:
@@ -116,7 +117,7 @@ def test_a_member_changes_their_own_an_admin_anyones():
 
     async def call(body):
         sent.append(body)
-        return {"bob": {"timeout_s": 900, "source": "set by bob"}}
+        return {"bob": {"timeout_s": 900, "source": "set by bob", "by": "bob", "until": None}}
 
     async def tz_of(member):
         return None
@@ -143,7 +144,8 @@ def test_until_is_the_members_own_time_shown_in_both():
 
     async def call(body):
         sent.append(body)
-        return {"bob": {"timeout_s": 600, "source": f"set by bob until {body['until']}"}}
+        return {"bob": {"timeout_s": 600, "by": "bob", "until": body["until"],
+                        "source": f"set by bob until {body['until']}"}}
 
     async def berlin(member):
         return ZoneInfo("Europe/Berlin")
@@ -189,3 +191,40 @@ def test_an_unreadable_overrides_file_is_said_and_falls_back(tmp_path, caplog):
     (tmp_path / "timeouts.json").write_text("{not json")
     assert b.timeout_for("alice") == (120, "lab.yaml")
     assert "unreadable" in caplog.text
+
+
+# ── the web page: the same words as in Slack (secretary/web.timeout_text) ────────────────
+
+def test_the_web_page_shows_each_members_timeout_as_slack_says_it():
+    from agentic_lab.secretary.web import render, timeout_text
+    lab_default = {"timeout_s": 120, "source": "lab.yaml", "by": None, "until": None}
+    no_timeout = {"timeout_s": None, "source": "lab.yaml", "by": None, "until": None}
+    own = {"timeout_s": 900, "source": "set by bob", "by": "bob", "until": None}
+    own_none = {"timeout_s": None, "source": "set by carol", "by": "carol", "until": None}
+    ending = {"timeout_s": 600, "by": "dave", "until": "2026-10-23T16:00:00+00:00",
+              "source": "set by dave until 2026-10-23T16:00:00+00:00", "tz": "Europe/Berlin"}
+    unknown = {**ending, "by": "erin", "tz": None}
+    assert timeout_text(lab_default) == "2 minutes (lab.yaml)"            # no override implied
+    assert timeout_text(no_timeout) == "none (lab.yaml)"
+    assert timeout_text(own) == "15 minutes (set by bob)"
+    assert timeout_text(own_none) == "none (set by carol)"
+    assert timeout_text(ending, "Europe/Berlin") == \
+        "10 minutes (set by dave, until 2026-10-23 18:00 CEST (16:00 UTC))"
+    assert timeout_text(unknown) == ("10 minutes (set by erin, until 2026-10-23 16:00 UTC; "
+                                     "their Slack time zone isn't known)")
+    assert timeout_text(ending, "Not/AZone").endswith("time zone isn't known)")
+    page = render({"lab": "lab", "at": "2026-10-23T09:00:00+00:00", "agents": {},
+                   "accounts": {}, "approvals": {
+        "pending": [], "grants": {}, "timeouts": {"alice": lab_default, "dave": ending,
+                                                  "erin": unknown}}})
+    assert "Approval timeouts" in page and "2 minutes (lab.yaml)" in page
+    assert "18:00 CEST (16:00 UTC)" in page and "time zone isn&#x27;t known" in page
+
+
+def test_only_lab_members_see_them():
+    from agentic_lab.secretary import visibility as V
+    state = {"agents": {}, "approvals": {"pending": [], "grants": {}, "timeouts": {
+        "bob": {"timeout_s": 900, "source": "set by bob", "by": "bob", "until": None}}}}
+    import copy
+    assert "timeouts" not in V._for_nobody(copy.deepcopy(state))["approvals"]
+    assert V._for_member(copy.deepcopy(state), "alice")["approvals"]["timeouts"]

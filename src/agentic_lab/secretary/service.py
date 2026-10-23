@@ -37,7 +37,7 @@ from . import catchup as CU
 from . import power as P
 from . import visibility as V
 from .status import check_seat, collect, manager_status
-from .web import app, own_entries
+from .web import app, own_entries, timeout_text
 import datetime as dt
 from types import SimpleNamespace
 
@@ -583,7 +583,7 @@ class Secretary:
         anyone's. It only ever denies, so it's changed here, not through lab.yaml."""
         if member not in self.lab.humans:
             return f"no member {member!r} in lab.yaml"
-        body, echo = None, ""
+        body = None
         if until and minutes is None:
             return "`until` goes with `minutes`"
         if minutes is not None:
@@ -596,19 +596,15 @@ class Secretary:
             body = {"human": member, "by": asked_by or "the secretary", "until": None,
                     "timeout_s": None if m == "none" else m if m == "default" else int(m) * 60}
             if until:
-                # the member's own time, from their Slack profile; echoed in both, so a
-                # mistake shows at once
+                # the member's own time, from their Slack profile; the answer shows it in
+                # both, so a mistake shows at once
                 try:
                     u = dt.datetime.fromisoformat(until)
                 except ValueError:
                     return "`until` must be a time like 2026-10-23T18:00"
                 tz = await (tz_of or self.member_tz)(member)
                 local = u if u.tzinfo else u.replace(tzinfo=tz or dt.timezone.utc)
-                utc = local.astimezone(dt.timezone.utc)
-                body["until"] = utc.isoformat(timespec="seconds")
-                echo = (f", until {local:%Y-%m-%d %H:%M} {local.tzname()} ({utc:%H:%M} UTC)"
-                        + ("" if tz or u.tzinfo else "; their Slack time zone isn't known, "
-                           "so that's UTC"))
+                body["until"] = local.astimezone(dt.timezone.utc).isoformat(timespec="seconds")
         try:
             r = await (call or _broker_timeouts)(body)
         except Exception as e:
@@ -618,12 +614,21 @@ class Secretary:
         if body and self.events is not None:
             self.events.add("approval_timeout", f"approval timeout for {member} set to "
                             f"{minutes} by {body['by']}", member=member, by=body["by"])
-        t = (r.get(member) or {})
-        s = t.get("timeout_s")
-        source = t.get("source") or ""
-        source = source.split(" until ")[0] if echo else source
-        return (f"{member}'s approval timeout: " + (f"{s // 60} minutes" if s else "none")
-                + f" ({source}{echo}). It applies to new requests; pending ones keep theirs.")
+        t = r.get(member) or {}
+        tz = await (tz_of or self.member_tz)(member) if t.get("until") else None
+        return (f"{member}'s approval timeout: {timeout_text(t, tz)}. It applies to new "
+                "requests; pending ones keep theirs.")
+
+    async def timeout_zones(self, state):
+        """The members' Slack time zones beside their approval timeouts that end at a set
+        time, for the web page (each looked up once)."""
+        cache = self.__dict__.setdefault("_zones", {})
+        for h, t in ((state or {}).get("approvals") or {}).get("timeouts", {}).items():
+            if t.get("until"):
+                if h not in cache:
+                    z = await self.member_tz(h)
+                    cache[h] = getattr(z, "key", None)
+                t["tz"] = cache[h]
 
     async def member_tz(self, member):
         """A member's time zone from their Slack profile (users.info), or None."""
@@ -948,6 +953,7 @@ async def serve(lab_path, host, port):
             try:
                 latest["state"] = await collect(lab, workers, broker, units, managers,
                                                 own=(sec_id, usage))
+                await sec.timeout_zones(latest["state"])
                 P.note_gpu(latest["state"])     # a GPU is idle only after several 0% readings
                 if rounds["n"] % 4 == 0:
                     await check_power()
@@ -1032,6 +1038,7 @@ async def serve(lab_path, host, port):
                                             own=(sec_id, usage))
             if hosts is not None:
                 latest["state"]["hosts"] = hosts
+            await sec.timeout_zones(latest["state"])
         except Exception:
             log.exception("collecting after a usage check failed")
 

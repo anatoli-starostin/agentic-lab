@@ -424,7 +424,7 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
 \begin{itemize}
   \item \textbf{The web UI} (\code{http://<secretary host>:8774/}, tailnet only, refreshes
     every 20 s): Claude usage per account, workers and their tasks, approvals and grants,
-    machines, agents, and which configuration and framework commits are deployed.
+    members' approval timeouts, machines, agents, and which configuration and framework commits are deployed.
   \item \textbf{Agents' logs} (\code{/logs/<agent>}): admins see all; a member sees their
     dedicated agents' whole logs and their own entries of shared agents and the secretary.
     The request's tailnet address must not be a lab host; \code{tailscale whois} must name

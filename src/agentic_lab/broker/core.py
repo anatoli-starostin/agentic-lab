@@ -250,11 +250,19 @@ class Broker:
 
     def timeout_for(self, human):
         """(seconds or None, where it comes from) for a new request to `human`."""
+        d = self.timeout_detail(human)
+        return d["timeout_s"], d["source"]
+
+    def timeout_detail(self, human):
+        """`human`'s effective timeout: {timeout_s, source, by, until} (by and until: None
+        unless it's their own override)."""
         o = self._overrides().get(human)
         if o and (not o.get("until") or now() < dt.datetime.fromisoformat(o["until"])):
-            return o.get("timeout_s"), f"set by {o.get('by')}" + (
-                f" until {o['until']}" if o.get("until") else "")
-        return (self.humans.get(human) or {}).get("timeout_s") or DEFAULT_TIMEOUT_S, "lab.yaml"
+            return {"timeout_s": o.get("timeout_s"), "by": o.get("by"), "until": o.get("until"),
+                    "source": f"set by {o.get('by')}" + (
+                        f" until {o['until']}" if o.get("until") else "")}
+        return {"timeout_s": (self.humans.get(human) or {}).get("timeout_s") or DEFAULT_TIMEOUT_S,
+                "source": "lab.yaml", "by": None, "until": None}
 
     def set_timeout(self, human, timeout_s, by, until=None):
         """Override `human`'s timeout (None: no timeout); `reset` with timeout_s="default"."""

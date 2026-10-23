@@ -508,7 +508,9 @@ permissions are answered in Slack (§7).
   reads the seat's utilization headers from one tiny request every 10 minutes, only while the
   seat's 5-hour window is open; **Check now** probes at once.
 - **Workers**: busy or idle, GPU (utilization, memory, processes), disk, recent tasks.
-- **Approvals and grants**: pending requests and who decides; active grants and expiry.
+- **Approvals and grants**: pending requests and who decides; active grants and expiry;
+  each member's approval timeout, worded as the secretary says it in Slack (the value,
+  lab.yaml's or their own, and an override's end in their time zone and UTC).
 - **Machines**: power state, policy, idle since.
 - **Agents**: role, seat, host, service state.
 - **Deployed**: the config and framework commits every host runs (flagged if unreviewed).
