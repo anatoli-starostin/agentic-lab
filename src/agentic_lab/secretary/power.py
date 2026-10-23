@@ -174,6 +174,37 @@ def owner(lab, host):
     return None
 
 
+def host_of(lab, name):
+    """(host, the agent's name) for an agent given by its id or display name (any case), so
+    "power on DeepStar" never depends on a remembered layout (#99). Raises PowerError,
+    naming the agents, if there's no such agent."""
+    want = (name or "").strip().lower()
+    for aid, a in lab.agents.items():
+        if want in (aid.lower(), lab.display_name(aid).lower()) and a.get("host"):
+            return a["host"], lab.display_name(aid)
+    names = ", ".join(sorted(lab.display_name(a) for a in lab.agents))
+    raise PowerError(f"no agent {name!r} in lab.yaml (agents: {names})")
+
+
+def layout(lab):
+    """The lab's machines and what runs on them, from the deployed lab.yaml: put in front of
+    every secretary turn, because a resumed conversation may remember an older layout (#99)."""
+    lines = ["[lab, as deployed now: this overrides anything remembered from earlier in "
+             "this conversation]"]
+    for host, h in lab.hosts.items():
+        h = h or {}
+        where = h.get("provider") or h.get("kind") or "?"
+        mine = owner(lab, host)
+        sec = any(a.get("role") == "secretary" and a.get("host") == host
+                  for a in lab.agents.values())
+        whose = (f"{(lab.humans.get(mine) or {}).get('name') or mine}'s" if mine else
+                 "the secretary's" if sec else "shared")
+        agents = [f"{lab.display_name(aid)} ({a.get('role')})"
+                  for aid, a in lab.agents.items() if a.get("host") == host]
+        lines.append(f"- {host} ({where}, {whose}): " + (", ".join(agents) or "no agents"))
+    return "\n".join(lines)
+
+
 def why_not_dedicated(lab, host):
     """Why `host` has no owner() (for a refusal): every cause that holds."""
     here = {aid: x for aid, x in lab.agents.items() if x.get("host") == host}
