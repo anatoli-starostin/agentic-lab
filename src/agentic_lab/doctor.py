@@ -141,6 +141,29 @@ def metadata_checks(units, templates, user):
     return out
 
 
+def aws_checks(lab, pw, ec2=None):
+    """The secretary's AWS key (VM power, #68): present, its own, and it works:
+    DescribeInstances for each AWS host it powers."""
+    from .secretary import power as P
+    hosts = {h: x for h, x in lab.hosts.items()
+             if (x or {}).get("provider") == "aws" and (x or {}).get("instance")}
+    if not hosts:
+        return []
+    out = secret_checks(pw, ["aws-key.json"])
+    if out[0].status != OK:
+        return out
+    key = os.path.join(pw.pw_dir, CONFIG, "aws-key.json")
+    for h, x in hosts.items():
+        try:
+            (ec2 or P._ec2)(x.get("region"), key=key).describe_instances(
+                InstanceIds=[x["instance"]])
+            out.append(Result(OK, f"AWS key works for {h}"))
+        except Exception as e:
+            out.append(Result(FAIL, f"AWS key can't describe {h}: {str(e)[:160]}",
+                              "check the key, its policy and the host's instance/region"))
+    return out
+
+
 def run_checks(aid, user):
     """A worker's long runs: its unit template and sudo rule (worker/runs.py)."""
     from .worker.runs import RUN_CTL
@@ -271,6 +294,7 @@ def run(lab_path, host=None):
         res, pw = user_checks(lab.unix_user(aid))
         if pw is not None:
             res += secret_checks(pw, SECRETS.get(role, []))
+            res += aws_checks(lab, pw) if role == "secretary" else []
         unit = UNITS.get(role, "").format(aid)
         if unit:
             res += unit_checks(unit)

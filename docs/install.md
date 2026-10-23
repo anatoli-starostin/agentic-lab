@@ -221,11 +221,10 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      --provider aws`, and `--secretary-provider aws` when the secretary's own host is an
      EC2 VM). `ubuntu` is the login user of the standard Ubuntu AMIs.
    - **Power.** The secretary starts and stops AWS hosts with `instance:` like Nebius ones
-     (members from Slack, idle stop after `idle_stop_min`; never its own host). It uses the
-     default AWS credential chain: on an EC2 secretary, give its instance an **instance
-     role** (no stored keys) with only this policy, and tag the lab's power-managed
-     instances so the role can't touch anything else (in particular not the secretary's
-     own host):
+     (members from Slack, idle stop after `idle_stop_min`; never its own host). It uses
+     **its own access key**, never an instance role, wherever it runs. Tag the lab's
+     power-managed instances, create an IAM user (console: IAM → Users → Create user, no
+     console access) with only this policy, and create an access key for it:
      ```json
      {"Version": "2012-10-17", "Statement": [
        {"Effect": "Allow", "Action": ["ec2:StartInstances", "ec2:StopInstances"],
@@ -233,11 +232,16 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
         "Condition": {"StringEquals": {"aws:ResourceTag/<tag-key>": "<tag-value>"}}},
        {"Effect": "Allow", "Action": "ec2:DescribeInstances", "Resource": "*"}]}
      ```
-     `region:` is required on a powered AWS host (the secretary's service user has no AWS
-     config). `lab apply` installs the AWS SDK (boto3, the `aws` extra) on the secretary's
-     host when `lab.yaml` has AWS hosts. If the host restricts the instance metadata service to some users (where
-     the role's credentials come from), allow the secretary's user. A secretary not on EC2
-     has no stored-key option yet (#68 follow-up).
+     Give the key to the secretary with `sudo -u lab-secretary lab secret request
+     service:secretary aws-key` (a one-time link: access key id and secret), then `lab
+     apply`: it's installed for the secretary's service only, hidden from its agent like
+     the Nebius key. Record its rotation date in `lab.yaml` so the secretary warns before
+     it's due: `credentials: [{name: aws-key, host: <secretary host>, expires:
+     <YYYY-MM-DD>, scope: "secretary's AWS key (VM power)"}]`. `region:` is required on a
+     powered AWS host. `lab apply` installs the AWS SDK (boto3, the `aws` extra) on the
+     secretary's host when `lab.yaml` has AWS hosts; `lab doctor` there checks the key
+     with `DescribeInstances` for each AWS host. The cloud's metadata service stays closed
+     to every lab user.
    - **Stopping changes the public IPv4** (an auto-assigned one), which is fine: the lab
      reaches hosts by tailnet name. A stopped instance costs only its disk.
    - **A public IPv4 and a security group with zero inbound rules.** The host only needs
