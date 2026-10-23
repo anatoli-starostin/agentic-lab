@@ -190,3 +190,40 @@ def test_the_manager_reports_its_activity():
     act = asyncio.run(busy())
     assert act == {"started_at": "2026-10-23T12:00:00+00:00", "last_turn_at": None,
                    "turns_in_progress": 1, "followed_tasks_open": 2}
+
+
+def test_a_managers_only_host_whose_manager_is_down_is_announced():
+    lb, m, host = mgr_lab()
+    w = P.IdleWatch()
+    assert w.candidates(lb, {"agents": {m: {"up": False}}}, now=T0,
+                        power={host: "RUNNING"}) == []
+    assert w.down_since[host] == T0                       # so it's said once it lasts
+    assert host in w.down_too_long(now=T0 + dt.timedelta(minutes=P.DOWN_GRACE_MIN))
+    w.candidates(lb, {"agents": {m: {"up": False}}}, now=T0, power={host: "STOPPED"})
+    assert host not in w.down_since                       # stopped: of course it's down
+
+
+def test_idle_counts_from_the_end_of_the_last_turn():
+    import types
+    from agentic_lab.manager import service as MS
+    mgr = MS.Manager.__new__(MS.Manager)
+    mgr._locks, mgr._told_busy, mgr.last_turn_at = {}, set(), None
+    mgr.state = types.SimpleNamespace(save=lambda: None)
+    mgr._ctx = lambda conv, requester, private: types.SimpleNamespace(guest=False)
+    times = iter(["2026-10-23T12:00:00+00:00", "2026-10-23T12:04:30+00:00"])
+    seen = []
+
+    class Brain:
+        async def turn(self, ctx, prompt):
+            seen.append(mgr.last_turn_at)                 # set when the turn started
+            return "ok"
+    mgr.brain = Brain()
+    orig = MS._now
+    MS._now = lambda: next(times)
+    try:
+        conv = types.SimpleNamespace(key="c", last_requester=None, meanwhile=[])
+        assert asyncio.run(mgr._turn(conv, "alice", True, "hi")) == "ok"
+    finally:
+        MS._now = orig
+    assert seen == ["2026-10-23T12:00:00+00:00"]
+    assert mgr.last_turn_at == "2026-10-23T12:04:30+00:00"   # and again when it ended

@@ -928,7 +928,7 @@ async def serve(lab_path, host, port):
                     and down_noted.get(host) != today):
                 down_noted[host] = today
                 await sec.announce(
-                    f":warning: {host} is running, but its worker has been down or unreachable "
+                    f":warning: {host} is running, but its agents have been down or unreachable "
                     f"since {idle.down_since[host]:%Y-%m-%d %H:%M} UTC: it can't be "
                     "idle-stopped like this. Check it (lab doctor), or power it off.")
         idle.save()

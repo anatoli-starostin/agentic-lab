@@ -80,7 +80,8 @@ class Manager:
 
     def activity(self):
         """What the secretary judges this manager's idleness by (#70): when it started, its
-        last turn, turns going now, and tasks it still follows on workers."""
+        last turn (set when a turn starts and again when it ends), turns going now, and
+        tasks it still follows on workers."""
         return {"started_at": self.started_at, "last_turn_at": self.last_turn_at,
                 "turns_in_progress": sum(lock.locked() for lock in self._locks.values()),
                 "followed_tasks_open": len(self.state.open_tasks())}
@@ -141,6 +142,8 @@ class Manager:
             except Exception as e:
                 log.exception("turn failed in %s", conv.key)
                 return f"Sorry, something went wrong on my side ({type(e).__name__})."
+            finally:                    # idle counts from a turn's end (turns run to 5 min)
+                self.last_turn_at = _now()
             if ctx.guest and not private and reply and reply.strip() != SILENT:
                 conv.meanwhile = (conv.meanwhile + [f"you (to {ctx.guest_name}, a guest): "
                                                     f"{reply[:500]}"])[-MEANWHILE_MAX:]
