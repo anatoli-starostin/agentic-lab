@@ -38,7 +38,7 @@ ProtectKernelTunables=yes
 ProtectKernelModules=yes
 ProtectKernelLogs=yes
 ProtectControlGroups=yes
-# other processes (the secretary's included) aren't visible in its /proc
+# other users' processes aren't visible in its /proc (the secretary's are: same user, #63)
 ProtectProc=invisible
 ProtectClock=yes
 RestrictNamespaces=yes
