@@ -106,6 +106,8 @@ class Secretary:
             power=lambda host, action: self.power(host, action, f"asked by {who} {self.via}",
                                                   asked_by=human),
             host_of=lambda agent: P.host_of(self.lab, agent),
+            member_secret=lambda action, name=None, member=None: self.member_secret(
+                action, name, member or human, asked_by=human, conv=conv),
             power_history=lambda host=None, hours=48: self.power_history(host, hours),
             approval_timeout=lambda member=None, minutes=None, until=None:
                 self.approval_timeout(member or human, minutes, until, asked_by=human),
@@ -602,6 +604,73 @@ class Secretary:
         await self.announce(f":electric_plug: {host} powering {verb} ({why}).")
         return f"{host}: powering {verb}; it takes a minute or two"
 
+    async def member_secret(self, action, name, member, asked_by=None, conv=None):
+        """A member's own keys for outside services (member_env.py): `list` (names and
+        when received, never values), `set` (a one-time link in a DM to whoever asked, for
+        the value), `delete`. A member manages their own; an admin anyone's. Delivered to
+        the member's dedicated agents by the catch-up (a deploy of their hosts)."""
+        from .. import member_env as ME
+        if member not in self.lab.humans:
+            return f"no member {member!r} in lab.yaml"
+        if asked_by is not None and asked_by != member and not self.is_admin(asked_by):
+            return (f"refused: only {member} themselves or an admin ({self.admins()}) may "
+                    "manage their keys.")
+        agents = ME.agents_of(self.lab, member)
+        to = ", ".join(self.lab.display_name(a) for a in agents) or "no dedicated agents"
+        if action == "list":
+            have = self.intake.member_env_info(member)
+            if not have:
+                return f"{member} has no keys stored. They'd go to: {to}."
+            return (f"{member}'s keys (values are never shown): "
+                    + ", ".join(f"{n} (received {w or '?'})" for n, w in have)
+                    + f". They go to: {to}.")
+        if action not in ("set", "delete"):
+            return "action must be list, set or delete"
+        try:
+            name = ME.check_name(name)
+        except ME.MemberEnvError as e:
+            return f"refused: {e}"
+        delivery = (f"It reaches {to} with the next catch-up, in a few minutes (that "
+                    "restarts those agents once they have nothing running); a stopped "
+                    "machine gets it when it next starts.")
+        own = [self.lab.display_name(a) for a in agents
+               if self.lab.agents[a].get("host") == P.secretary_host_of(self.lab)]
+        if own:                 # the catch-up never redeploys the secretary's own host
+            delivery += (f" {', '.join(own)} run(s) on my own machine, which the catch-up "
+                         "doesn't redeploy: an admin deploys it (offer_deploy).")
+        if action == "delete":
+            if not self.intake.delete_member_env(member, name):
+                return f"{member} has no key {name}."
+            if self.events is not None:
+                self.events.add("member_env", f"{member}'s key {name} removed by {asked_by}",
+                                member=member, by=asked_by)
+            return f"removed {member}'s {name}. " + delivery.replace("It reaches", "Its removal reaches")
+        if not agents:
+            return (f"{member} has no dedicated agents, so a key would reach no one "
+                    "(shared agents never get members' keys).")
+        if self.slack is None or conv is None:
+            return ("this needs Slack; from the console: lab secret request "
+                    f"{member} env:{name}")
+        where = await self._dm(asked_by or member, conv)
+        if where is None:
+            return "I can't DM you (no slack_user for you in lab.yaml)"
+        dm, moved = where
+        try:
+            link, note = await self._link(member, f"env:{name}")
+        except IntakeDown as e:
+            return str(e)
+        await self.slack.post(dm.channel, dm.thread_ts,
+                              f"*{name}* for {member}'s agents ({to}): paste the value here "
+                              f"(never in Slack): {link}\n{note}\nUse a key of its own for "
+                              "the lab (one you can revoke), not a personal one.")
+        if self.events is not None:
+            self.events.add("member_env", f"{member}'s key {name}: link sent to {asked_by}",
+                            member=member, by=asked_by)
+        return (self._sent(f"sent the one-time link for {name}", moved)
+                + ". Once it's submitted: " + delivery
+                + " A key gives no network access by itself: if a sandboxed command needs "
+                "to reach the service, that's a grant (an approval, or lab.yaml).")
+
     async def approval_timeout(self, member, minutes=None, until=None, asked_by=None,
                                call=None, tz_of=None):
         """A member's approval timeout (#77): shown, or set (`minutes`: a number, "none" or
@@ -963,10 +1032,16 @@ async def serve(lab_path, host, port):
             await CU.step(catch, lab, latest["state"] or {}, sec_host,
                           lambda: SA.start_apply(catch_up=True), SA.apply_result, sec.announce,
                           repo=os.path.expanduser(SA.CLONE),
-                          refresh=lambda c: sec.config_copy().ensure_commit(c))
+                          refresh=lambda c: sec.config_copy().ensure_commit(c),
+                          keys=member_keys())
         except Exception:
             log.exception("catching up hosts failed")
         await intake_watch()
+
+    def member_keys():
+        """{host: the revision of the member keys it should run} (member_env.py)."""
+        from .. import member_env as ME
+        return {h: ME.revision(lab, h, sec.intake.member_env) for h in lab.hosts}
 
     intake_failed = {"said": False}
 

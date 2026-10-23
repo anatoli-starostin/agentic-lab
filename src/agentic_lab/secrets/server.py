@@ -13,7 +13,7 @@ from starlette.requests import Request
 from starlette.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
 from starlette.routing import Route
 
-from .intake import FIELDS, MULTILINE, Intake, IntakeError
+from .intake import MULTILINE, Intake, IntakeError, fields as secret_fields
 
 MAX_BODY = 16 * 1024
 _HEADERS = {"Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
@@ -39,7 +39,7 @@ def _form(code, name, owner, error=""):
             f'required style="width:100%;font:12px ui-monospace,monospace"></textarea>'
             if k in MULTILINE else
             f'<input id="{k}" name="{k}" type="password" autocomplete="off" required>')
-        for k, label, _ in FIELDS[name])
+        for k, label, _ in secret_fields(name))
     err = f'<p class="err">{html.escape(error)}</p>' if error else ""
     return _page(f"<h2>Agentic Lab: {html.escape(name)}</h2>"
                  f"<p>For {html.escape(who)}. Paste the values below; they go straight to the "
@@ -87,7 +87,7 @@ def app(intake: Intake, client_path):
         if int(request.headers.get("content-length") or 0) > MAX_BODY:
             return _page("<h2>Too large.</h2>", status=413)
         form = await request.form()
-        fields = {k: str(form.get(k) or "") for k, _, _ in FIELDS[req.name]}
+        fields = {k: str(form.get(k) or "") for k, _, _ in secret_fields(req.name)}
         value = next(iter(fields.values())) if len(fields) == 1 else fields   # one field: its text
         try:
             intake.receive(code, req.name, value,

@@ -174,6 +174,12 @@ def owner(lab, host):
     return None
 
 
+def secretary_host_of(lab):
+    """The host the secretary runs on (None if lab.yaml has no secretary)."""
+    return next((a.get("host") for a in lab.agents.values() if a.get("role") == "secretary"),
+                None)
+
+
 def host_of(lab, name):
     """(host, the agent's name) for an agent given by its id or display name (any case), so
     "power on DeepStar" never depends on a remembered layout (#99). Raises PowerError,

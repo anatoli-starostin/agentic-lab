@@ -230,7 +230,8 @@ async def serve(lab_path, agent_id, host=None, port=None):
     else:
         log.warning("no broker configured: writes outside the sandbox will be denied")
         broker, approver = None, NoChannelApprover()
-    env = {}
+    from .. import member_env as ME
+    env = ME.read(STATE)        # its member's own keys (member_env.py): the lab's below win
     seat = _read_secret(f"{CONFIG}/claude-oauth-token")
     if seat:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
@@ -338,7 +339,8 @@ async def ask(lab_path, agent_id, human, text, wait_s=900):
     if broker_cfg.get("url") and broker_cfg.get("token"):
         broker = BrokerClient(broker_cfg["url"], broker_cfg["token"])
         approver = BrokerApprover(broker_cfg["url"], broker_cfg["token"])
-    env = {}
+    from .. import member_env as ME
+    env = ME.read(STATE)        # its member's own keys (member_env.py): the lab's below win
     seat = _read_secret(f"{CONFIG}/claude-oauth-token")
     if seat:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat

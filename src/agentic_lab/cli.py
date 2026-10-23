@@ -117,7 +117,9 @@ def cmd_worker_run_exec(args):
     workdir = os.path.expanduser(a.get("workdir", "~/work"))
     tmpdir = lab.agent_tmpdir(args.agent)
     # the agent's git setup, bound into the run read-only: git and gh must find it
-    env = {**GH.environment(lab, args.agent), **({"TMPDIR": tmpdir} if tmpdir else {})}
+    from . import member_env as ME      # its member's own keys (member_env.py), under the lab's
+    env = {**ME.read(STATE), **GH.environment(lab, args.agent),
+           **({"TMPDIR": tmpdir} if tmpdir else {})}
     return run_exec(RunStore(os.path.expanduser(f"{STATE}/runs"), workdir, args.agent),
                     args.run, env=env)
 
@@ -349,14 +351,18 @@ def deploy(lab_path, info, source, admin, hosts=None, allow_missing=False, self_
             elif (cur.get("config_commit"), cur.get("framework_commit")) == (
                     record.get("config_commit"), record.get("framework_commit")) \
                     and not cur.get("unreviewed"):
-                said, why = "current", "up to date"
+                if cur.get("member_env") == p.get("member_env"):
+                    said, why = "current", "up to date"
+                # else: the same commits, other member keys: deployed (member_env.py)
             elif cur.get("unreviewed") or not only_behind(cur.get("config_commit")):
                 said, why = "ahead", "runs a newer or unreviewed commit: left alone"
             if said:
                 print(f"  -> {why}\nCATCH-UP {p['host']} {said}\n", flush=True)
                 continue
             p["catch_up"] = True                # it checks for active work itself
-        p["lab_path"], p["source"], p["applied"] = os.path.abspath(lab_path), source, record
+        p["lab_path"], p["source"] = os.path.abspath(lab_path), source
+        p["applied"] = {**record, **({"member_env": p["member_env"]} if p.get("member_env")
+                                     else {})}     # which member keys it got (member_env.py)
         if p["host"] == sec_host and self_admin:
             sec = secretary_host(lab)[1]
             p["self_admin"] = {**self_admin, "config_owner": lab.unix_user(sec),
@@ -721,7 +727,14 @@ def main(argv=None):
     sr = ssub.add_parser("request", help="ask a human for a secret (one-time code + message)")
     sr.add_argument("human", help="the owner: a human id, or service:<name> (e.g. service:broker)")
     from .secrets.intake import NAMES as SECRET_NAMES
-    sr.add_argument("name", choices=list(SECRET_NAMES))
+    def secret_name(v):                 # one of the lab's, or a member's key env:<NAME>
+        from .secrets.intake import known
+        if not known(v):
+            raise argparse.ArgumentTypeError(
+                f"{v!r}: one of {', '.join(SECRET_NAMES)}, or env:<NAME> (a member's key)")
+        return v
+    sr.add_argument("name", type=secret_name, metavar="NAME",
+                    help=f"{', '.join(SECRET_NAMES)}, or env:<NAME> (a member's own key)")
     sr.add_argument("--form", action="store_true",
                     help="print a one-time web-form link instead of the client command")
     sr.add_argument("--url", required=True, help="the intake's address as members reach it, "

@@ -12,6 +12,7 @@ Secrets:
     generated here, kept root-only in PRIVATE, and never shown to anyone.
 `lab plan` lists the steps per host and any secret still missing, and changes nothing.
 """
+import json
 import os
 import pwd
 import secrets as pysecrets
@@ -112,6 +113,12 @@ def intake_secret(owner, name, root=INTAKE):
         return None
 
 
+def intake_member_env(human, root=INTAKE):
+    """A member's own keys, as the intake stored them (member_env.py)."""
+    from .member_env import load_dir
+    return load_dir(root, human)
+
+
 # ── what each host needs ─────────────────────────────────────────────────────
 
 def secretary_host(lab):
@@ -126,7 +133,7 @@ def host_name(lab, host):
     return h.get("tailnet_name") or f"{host}.{lab.data.get('tailnet')}"
 
 
-def host_plan(lab, host, tokens, intake=intake_secret):
+def host_plan(lab, host, tokens, intake=intake_secret, member_env=intake_member_env):
     """Everything host `host` needs: files to install (path -> (owner, mode, content)),
     users, units, and the secrets that are missing (blocking)."""
     sec_host, secretary = secretary_host(lab)
@@ -153,6 +160,10 @@ def host_plan(lab, host, tokens, intake=intake_secret):
         users.append(user)
         secret(user, "claude-oauth-token", intake(a["human"], "claude-token"),
                f"{a['human']}'s Claude token (lab secret request {a['human']} claude-token)")
+        if role in ("worker", "manager"):   # its member's own keys (member_env.py): always
+            from . import member_env as ME  # written, so a removed key is removed here too
+            files[f"/home/{user}/.local/state/agentic-lab/{ME.FILE}"] = (
+                user, "600", json.dumps(ME.for_agent(lab, aid, member_env), sort_keys=True) + "\n")
         if role == "worker":
             allowed = [m for m, ma in managers.items()
                        if a.get("access", "dedicated") == "shared" or ma.get("human") == a.get("human")]
@@ -246,7 +257,9 @@ def host_plan(lab, host, tokens, intake=intake_secret):
     readable = {lab.unix_user(aid): os.path.normpath(
                     (a.get("workdir") or "~/work").replace("~", f"/home/{lab.unix_user(aid)}", 1))
                 for aid, a in here.items() if a.get("role") in ("worker", "manager")}
+    from .member_env import revision
     return {"host": host, "name": name, "files": files, "users": users, "units": units,
+            "member_env": revision(lab, host, member_env),
             "run_units": run_units, "run_workdirs": run_workdirs, "run_writes": run_writes,
             "readers": list((lab.hosts.get(host) or {}).get("readers") or []),
             "readable": readable,

@@ -133,7 +133,8 @@ def applied_versions(path=APPLIED):
             ap = yaml.safe_load(f) or {}
     except (OSError, ValueError):
         return None
-    return {k: ap.get(k) for k in ("config_commit", "framework_commit", "unreviewed")
+    return {k: ap.get(k) for k in ("config_commit", "framework_commit", "unreviewed",
+                                   "member_env")
             if ap.get(k) is not None} or None
 
 

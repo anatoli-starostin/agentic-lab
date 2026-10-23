@@ -127,6 +127,15 @@ What it took:
   is the metadata address (some GCP images without systemd-resolved) would lose DNS in
   every lab unit: `lab doctor` fails there. AWS and Nebius hosts resolve elsewhere.
 
+- **A member's own keys are readable by their agents** (`member_env.py`): by design,
+  since the agent's commands and runs must use them (`WANDB_API_KEY`...). Bounded by: only
+  that member's dedicated agents get them (never a shared agent, whose tasks are other
+  members'); a key gives no network access, so sandboxed commands still reach only allowed
+  sites; long runs have no network limit, but each run is approved by the member. A
+  prompt-injected agent could still misuse a key on the service it's for, so members
+  should give the lab a key of its own, scoped and revocable, not a personal one. Values
+  only ever come through the intake; the secretary shows names, never values.
+
 - **AWS power uses a stored access key** (#68), an IAM user's, limited to start/stop on
   the lab's tagged instances plus `DescribeInstances` (docs/install.md), never the host's
   instance role: the secretary passes it to boto3 explicitly, with no default credential
