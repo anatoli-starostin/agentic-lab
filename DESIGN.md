@@ -124,7 +124,7 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   manager on it, if the host has `idle_stop_with_managers: false`) is powered off only with `force_off`, after the secretary has said what's busy and the member asking has confirmed. Idle hosts with workers are stopped after their `idle_stop_min` minutes (required on every cloud host, the only switch; `0` means never).
   Managers on a host don't keep it on: it's judged by its workers alone (e.g. a member's
   manager beside its only worker on an on-demand GPU VM). Stopping it only takes the manager
-  offline in Slack until someone asks the secretary to power the host on. A manager's own
+  offline in Slack until its member or an admin asks the secretary to power the host on. A manager's own
   work (a turn, following a task on another host) isn't measured, so a host where that
   matters sets `idle_stop_with_managers: false`: any manager there then counts as busy.
   A host that runs **only managers** is judged by their activity (#70): it's idle when no
@@ -716,7 +716,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-17 | ~~**Agents' logs are for admins only** (`admin: true` + Tailscale identity).~~ Superseded 2026-10-20. |
 | 2026-10-20 | **Members see their own agents' logs**: dedicated ones whole, their own entries of shared agents and the secretary (Tailscale identity). Admins see all. |
 | 2026-10-17 | **Usage percentages from a probe** of the seat's rate-limit headers, only while a window is open; "Check now" in the web UI. |
-| 2026-10-17 | **Admin-only actions, checked in code**: powering off a busy machine (after confirming), asking for someone else's token. **Busy** includes any process on a GPU or any GPU utilization (idle only after 0% in several readings in a row). |
+| 2026-10-17 | **Admin-only actions, checked in code**: ~~powering off a busy machine (after confirming)~~ (superseded 2026-10-23: who may power is in §4.1 Power, #91), asking for someone else's token. **Busy** includes any process on a GPU or any GPU utilization (idle only after 0% in several readings in a row). |
 | 2026-10-17 | **Private config repository**: `lab.yaml` + `framework.lock` (the framework pinned by commit). **Only `main` is deployed**; every change is a reviewed PR. |
 | 2026-10-17 | **Administering from Slack**: the secretary proposes PRs and deploys `main` on an admin's click, with one sudo command (`lab apply-main`). The console is for the install and emergencies. |
 | 2026-10-18 | **GitHub for agents**: one bot account per agent (may be shared); safety from GitHub (private repos, fine-grained tokens, branch protection: bots never approve or merge). Its token was in the agent's environment; since 2026-10-22 it's a file read by git's credential helper and the `gh` shim. |

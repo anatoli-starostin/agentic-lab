@@ -12,7 +12,8 @@ Idle stop: a host with `idle_stop_min` above 0 that runs workers is stopped once
 its workers have had nothing running, queued or waiting, and its GPUs nothing on them
 (nvidia-smi, via the workers' health checks), for `idle_stop_min` minutes (required on
 cloud hosts; 0: never). The same "busy"
-decides who may power a host off (only admins, when busy).
+means a member's request to power a host off needs `force_off`, after confirming; who may
+power a host at all is owner(): its member or an admin, or an admin only (#91).
 
 Managers on a host with workers don't keep it busy: it's judged by its workers alone, and
 stopping it only takes its managers offline in Slack until it's powered on again
@@ -272,7 +273,7 @@ def counts_busy(lab, host, aid):
     """Does a non-worker agent on `host` make it busy by being there? A manager doesn't
     when a worker there judges the host (unless idle_stop_with_managers: false); on a host
     with no worker it does: nothing measures it, and stopping it would take a member's
-    manager offline, so only an admin may."""
+    manager offline, so it goes off only with force_off."""
     a = lab.agents[aid]
     has_worker = any(x.get("host") == host and x.get("role") == "worker"
                      for x in lab.agents.values())

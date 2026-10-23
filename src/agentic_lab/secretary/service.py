@@ -954,7 +954,8 @@ async def serve(lab_path, host, port):
                 await sec.announce(
                     f":warning: {host} is running, but its agents have been down or unreachable "
                     f"since {idle.down_since[host]:%Y-%m-%d %H:%M} UTC: it can't be "
-                    "idle-stopped like this. Check it (lab doctor), or power it off.")
+                    "idle-stopped like this. Check it (lab doctor), or its member or an admin "
+                    "powers it off.")
         idle.save()
         try:                    # hosts back from a stop that missed a deploy (#61)
             await CU.step(catch, lab, latest["state"] or {}, sec_host,

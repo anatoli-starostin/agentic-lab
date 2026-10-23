@@ -30,7 +30,7 @@ def host_status(host, v, lab, agents, sec_host):
     if state in POWER:
         word, level = POWER[state]
         return {"word": word, "level": level,
-                "hint": "ask the secretary to power it on" if state == "STOPPED" else ""}
+                "hint": "ask the secretary to power it on (its member or an admin)" if state == "STOPPED" else ""}
     if state or v.get("error"):
         return {"word": "power unknown", "level": "warn", "hint": v.get("error") or ""}
     here = [a for a in agents.values() if a.get("host") == host]
@@ -51,7 +51,7 @@ def agent_status(aid, a, host, prev, now, state, lab):
         return out
     if (host.get("status") or {}).get("word") in OFF:
         return {"word": "host stopped", "level": "muted",
-                "hint": "ask the secretary to power it on"}
+                "hint": "ask the secretary to power it on (its member or an admin)"}
     since = (prev.get("status") or {}).get("since") \
         if (prev.get("status") or {}).get("word") == "down" else None
     return {"word": "down", "level": "bad", "hint": "", "reason": a.get("error") or "",
