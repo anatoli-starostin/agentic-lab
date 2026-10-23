@@ -34,6 +34,7 @@ from .. import selfadmin as SA
 from ..worker.usage import UsageLog, probe_loop, probe_now
 from . import home as H
 from . import catchup as CU
+from . import overview as OV
 from . import power as P
 from . import visibility as V
 from .status import check_seat, collect, manager_status
@@ -549,17 +550,41 @@ class Secretary:
         return " or ".join((h or {}).get("name") or hid for hid, h in self.lab.humans.items()
                            if (h or {}).get("admin")) or "the lab's admin"
 
+    def _power_refused(self, host, action, asked_by):
+        """Who may power a machine on or off (#91): one dedicated to a member (P.owner),
+        that member or an admin, busy or not; any other, an admin only."""
+        if self.is_admin(asked_by):
+            return None
+        verb = "on" if action == "on" else "off"
+        mine = P.owner(self.lab, host)
+        if mine is None:
+            return (f"refused: {host} isn't dedicated to one member "
+                    f"({P.why_not_dedicated(self.lab, host)}), so only an admin "
+                    f"({self.admins()}) may power it {verb}.")
+        if asked_by == mine:
+            return None
+        name = (self.lab.humans.get(mine) or {}).get("name") or mine
+        if verb == "on":
+            return (f"refused: {host} is dedicated to {name}: only {name} or an admin "
+                    f"({self.admins()}) may power it on.")
+        stop = (self.lab.hosts.get(host) or {}).get("idle_stop_min")
+        return (f"refused: {host} is dedicated to {name}: only {name} or an admin "
+                f"({self.admins()}) may power it off. "
+                + (f"I stop it myself once it has been idle for {stop} min."
+                   if stop else "It has no idle stop (idle_stop_min: 0)."))
+
     async def power(self, host, action, why="asked in Slack", asked_by=None):
         """`asked_by`: the member asking (None: the secretary itself, e.g. an idle stop).
-        Powering off a busy machine is for admins only, and only with `force_off`."""
-        if action in ("off", "force_off") and asked_by is not None:
-            busy = P.busy(self.lab, host, self.latest["state"])
-            if busy and not self.is_admin(asked_by):
-                return (f"refused: {host} is busy ({busy}). Only an admin "
-                        f"({self.admins()}) may power off a busy machine.")
-            if busy and action != "force_off":
-                return (f"{host} is busy ({busy}): powering it off loses that work. Ask the "
-                        "admin to confirm, then use force_off.")
+        Who may: _power_refused. A busy machine is powered off only with `force_off`, once
+        the member asking has confirmed losing what it names."""
+        if action in ("on", "off", "force_off") and asked_by is not None:
+            refused = self._power_refused(host, action, asked_by)
+            if refused:
+                return refused
+            busy = action == "off" and P.busy(self.lab, host, self.latest["state"])
+            if busy:
+                return (f"{host} is busy ({busy}): powering it off interrupts that and loses "
+                        "its work. Tell them so, and once they confirm, use force_off.")
         try:
             if action == "status":
                 return f"{host}: {await P.status(self.lab, host)}"
@@ -792,6 +817,14 @@ async def _broker_timeouts(body=None):
         return r.json()
 
 
+async def _activity(lab, manager, token):
+    """A manager's activity right now (its status endpoint; #70)."""
+    act = (await manager_status(lab, manager, token)).get("activity")
+    if act is None:
+        raise RuntimeError("it doesn't report its activity")
+    return act
+
+
 async def serve(lab_path, host, port):
     lab = load_lab(lab_path)
     mon = yaml.safe_load(_read_secret(f"{CONFIG}/monitor.yaml") or "") or {}
@@ -877,7 +910,7 @@ async def serve(lab_path, host, port):
     catch = CU.CatchUp(os.path.expanduser(f"{STATE}/catch-up.json"))  # missed deploys (#61)
     sec_host = lab.agents[sec_id].get("host")
     hosts_power = {}
-    down_noted = {}                 # host -> the day its worker being down was announced
+    down_noted = {}                 # host -> the day its agents being down was announced
     rounds = {"n": 0}
 
     async def check_power():
@@ -897,7 +930,8 @@ async def serve(lab_path, host, port):
             if hosts_power.get(host, {}).get("state") != "RUNNING":
                 continue
             # still idle right now? (a task may have arrived since the snapshot, #60)
-            why = await P.recheck(lab, host, workers, latest["state"])
+            why = await P.recheck(lab, host, workers, latest["state"], manager_activity=(
+                lambda m: _activity(lab, m, managers.get(m))))
             if why:
                 log.info("idle stop of %s called off: %s", host, why)
                 idle.idle_since.pop(host, None)
@@ -918,9 +952,10 @@ async def serve(lab_path, host, port):
                     and down_noted.get(host) != today):
                 down_noted[host] = today
                 await sec.announce(
-                    f":warning: {host} is running, but its worker has been down or unreachable "
+                    f":warning: {host} is running, but its agents have been down or unreachable "
                     f"since {idle.down_since[host]:%Y-%m-%d %H:%M} UTC: it can't be "
-                    "idle-stopped like this. Check it (lab doctor), or power it off.")
+                    "idle-stopped like this. Check it (lab doctor), or its member or an admin "
+                    "powers it off.")
         idle.save()
         try:                    # hosts back from a stop that missed a deploy (#61)
             await CU.step(catch, lab, latest["state"] or {}, sec_host,
@@ -951,6 +986,7 @@ async def serve(lab_path, host, port):
     async def collector():
         while not stop.is_set():
             try:
+                prev = latest["state"]
                 latest["state"] = await collect(lab, workers, broker, units, managers,
                                                 own=(sec_id, usage))
                 await sec.timeout_zones(latest["state"])
@@ -969,6 +1005,7 @@ async def serve(lab_path, host, port):
                                        if idle.idle_since.get(h) else None),
                         "stale": stale.get(h)}
                     for h in lab.hosts}
+                OV.annotate(latest["state"], lab, sec_host, prev)    # one status for all views
                 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(snapshot_path))
                 with os.fdopen(fd, "w") as f:
                     json.dump(latest["state"], f)
@@ -1033,11 +1070,13 @@ async def serve(lab_path, host, port):
         except Exception as e:
             checks[human] = {"at": at, "error": f"check failed: {str(e)[:300]}"}
         try:
+            prev = latest["state"]
             hosts = (latest["state"] or {}).get("hosts")
             latest["state"] = await collect(lab, workers, broker, units, managers,
                                             own=(sec_id, usage))
             if hosts is not None:
                 latest["state"]["hosts"] = hosts
+            OV.annotate(latest["state"], lab, sec_host, prev)
             await sec.timeout_zones(latest["state"])
         except Exception:
             log.exception("collecting after a usage check failed")

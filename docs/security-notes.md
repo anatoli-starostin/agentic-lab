@@ -151,8 +151,8 @@ What it took:
   outputs, files read, task details never posted), and the guest's exchange doesn't enter
   the owner's session except as a short visible "meanwhile" note.
 - **Anyone with a login on a lab machine can keep it on** (`~/.lab-keep-awake`), which
-  costs money while it runs. Visible to everyone in the web UI; an admin can still power it
-  off (`force_off`).
+  costs money while it runs. Visible to everyone in the web UI; an admin (or, on a machine
+  dedicated to them, its member) can still power it off (`force_off`).
 - **`sudo` on a lab host is admin power**: it reads every agent's files and logs there.
   Give members SSH without `sudo`.
 - **The secret intake is open only minutes at a time** (#63): it runs while a one-time

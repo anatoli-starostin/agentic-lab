@@ -20,6 +20,8 @@ class Conversation:
     last_requester: str | None = None   # the human of the latest message
     # guest turns since the owner's last turn here, for its next one ("meanwhile...")
     meanwhile: list = field(default_factory=list)
+    # DMs only: the latest message a turn has seen here; later ones are caught up on
+    last_seen_ts: str | None = None
 
 
 @dataclass

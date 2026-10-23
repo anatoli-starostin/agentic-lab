@@ -113,18 +113,31 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   the broker's overview, local systemd units, machine power states (Nebius through its
   CLI; AWS EC2 through boto3 with the secretary's own access key, never an instance
   role).
-- **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
+- **Power** (#91), on and off alike: a machine **dedicated** to a member (every agent on
+  it a worker or manager with `access: dedicated`, all that member's, however many) by that
+  member or an admin, **busy or not**; any other machine (a shared agent, agents of more
+  than one member, the secretary, or no agents) by an admin only. The secretary's own
+  actions (the idle stop) aren't a member's and aren't checked. A **busy** machine
   (a worker task running, queued, awaiting approval or waiting on its long runs; a long
   run going, even CPU-only; any process on a GPU, anyone's; a GPU
   above 0% in any of its last 5 readings, about 75 s; someone's `~/.lab-keep-awake`; a
-  manager on it, if the host has `idle_stop_with_managers: false`) may be powered off only by an admin, after confirming. Idle hosts with workers are stopped after their `idle_stop_min` minutes (required on every cloud host, the only switch; `0` means never).
+  manager on it, if the host has `idle_stop_with_managers: false`) is powered off only with `force_off`, after the secretary has said what's busy and the member asking has confirmed. Idle hosts with workers are stopped after their `idle_stop_min` minutes (required on every cloud host, the only switch; `0` means never).
   Managers on a host don't keep it on: it's judged by its workers alone (e.g. a member's
   manager beside its only worker on an on-demand GPU VM). Stopping it only takes the manager
-  offline in Slack until someone asks the secretary to power the host on. A manager's own
+  offline in Slack until its member or an admin asks the secretary to power the host on. A manager's own
   work (a turn, following a task on another host) isn't measured, so a host where that
   matters sets `idle_stop_with_managers: false`: any manager there then counts as busy.
-  A host with managers and **no worker** counts as busy: nothing measures it, so only an
-  admin may power it off (it's never idle-stopped either).
+  A host that runs **only managers** is judged by their activity (#70): it's idle when no
+  manager there is answering, none has had a turn (or started) within `idle_stop_min`,
+  none follows an unfinished task, and none has an approval pending; then it's stopped
+  like a worker host (its `idle_stop_min` above 0 opts it in). A manager that can't be
+  reached, or doesn't report its activity, keeps the host busy (it goes off only with `force_off`).
+- **Status in both views** (#74): the secretary computes one status per host (running,
+  stopped, starting/stopping, always on for its own host; for a host without power
+  control, running or unreachable from its agents) and per agent (up; "host stopped" when
+  its host is powered off; "down" with the reason and since when otherwise) into the
+  snapshot, and the Home tab and the web UI both show it. Every host in lab.yaml is
+  listed, and the Home tab lists managers, the person's own first.
 - **Keep-awake**: someone working on a machine directly (not through agents, e.g. a
   CPU-only job) creates `~/.lab-keep-awake` in their home (first line, optional: why); while
   it's there the machine is busy, and the web UI shows who keeps it awake. A root timer
@@ -184,6 +197,12 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   only threads where it's mentioned or already involved, reading the thread so far on first
   mention (its first 5 messages, which often set the topic, and the last 50 before the
   mention). Only lab members are answered.
+- **DM catch-up** (#70): on a DM's first new message since the manager started, it first
+  reads the member's messages there that it missed while it wasn't running: those after
+  the last message a turn saw, at most 72 hours back, the last 20, each cut to 1000
+  characters (attachments aren't downloaded). They come before the new message, marked as
+  missed, and are answered in the one reply. A DM it has never seen a message in has
+  nothing to catch up on; channel threads aren't caught up on.
 - Attached to a human **for tokens**; **access** `dedicated` (its member gets everything;
   other members are **guests**) or `shared` (every member gets everything, with a
   separate memory per member, enforced in code).
@@ -512,7 +531,8 @@ permissions are answered in Slack (§7).
   each member's approval timeout, worded as the secretary says it in Slack (the value,
   lab.yaml's or their own, and an override's end in their time zone and UTC).
 - **Machines**: power state, policy, idle since.
-- **Agents**: role, seat, host, service state.
+- **Agents**: role, seat, host, status (the one status of §4.1; a managers-only host's
+  managers also busy or idle, and why).
 - **Deployed**: the config and framework commits every host runs (flagged if unreviewed).
 - **Agents' logs** (`/logs/<agent>`): admins see every agent's; a member sees the whole log
   of their **dedicated** agents (guest turns in their manager's threads included), and only
@@ -697,7 +717,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-17 | ~~**Agents' logs are for admins only** (`admin: true` + Tailscale identity).~~ Superseded 2026-10-20. |
 | 2026-10-20 | **Members see their own agents' logs**: dedicated ones whole, their own entries of shared agents and the secretary (Tailscale identity). Admins see all. |
 | 2026-10-17 | **Usage percentages from a probe** of the seat's rate-limit headers, only while a window is open; "Check now" in the web UI. |
-| 2026-10-17 | **Admin-only actions, checked in code**: powering off a busy machine (after confirming), asking for someone else's token. **Busy** includes any process on a GPU or any GPU utilization (idle only after 0% in several readings in a row). |
+| 2026-10-17 | **Admin-only actions, checked in code**: ~~powering off a busy machine (after confirming)~~ (superseded 2026-10-23: who may power is in §4.1 Power, #91), asking for someone else's token. **Busy** includes any process on a GPU or any GPU utilization (idle only after 0% in several readings in a row). |
 | 2026-10-17 | **Private config repository**: `lab.yaml` + `framework.lock` (the framework pinned by commit). **Only `main` is deployed**; every change is a reviewed PR. |
 | 2026-10-17 | **Administering from Slack**: the secretary proposes PRs and deploys `main` on an admin's click, with one sudo command (`lab apply-main`). The console is for the install and emergencies. |
 | 2026-10-18 | **GitHub for agents**: one bot account per agent (may be shared); safety from GitHub (private repos, fine-grained tokens, branch protection: bots never approve or merge). Its token was in the agent's environment; since 2026-10-22 it's a file read by git's credential helper and the `gh` shim. |

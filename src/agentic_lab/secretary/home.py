@@ -57,13 +57,25 @@ def _usage(state, human_id):
     return [_section("\n\n".join(lines))]
 
 
+ICON = {"ok": "🟢", "warn": "🟡", "bad": "🔴", "muted": "⚪"}
+
+
+def _status_line(name, st):
+    """An agent's or host's one status (secretary/overview.py), as the web UI says it."""
+    st = st or {"word": "—", "level": "muted"}
+    extra = [x for x in (st.get("hint"), st.get("reason"),
+                         f"since {ago(st['since'])}" if st.get("since") else "") if x]
+    return f"{ICON.get(st.get('level'), '⚪')} *{name}*  {st.get('word')}" + (
+        "  ·  " + "  ·  ".join(extra) if extra else "")
+
+
 def _workers(state, human_id):
     blocks = []
     for aid, a in (state.get("agents") or {}).items():
         if a.get("role") != "worker":
             continue
         if not a.get("up"):
-            blocks.append(_section(f"🔴 *{a['name']}*  down"))
+            blocks.append(_section(_status_line(a["name"], a.get("status"))))
             continue
         q = a.get("queue") or {}
         busy = q.get("running", 0) + q.get("awaiting_approval", 0) + q.get("waiting", 0)
@@ -99,11 +111,20 @@ def _approvals(state, human_id):
                      + "\n".join(rows))]
 
 
+def _managers(state, human_id):
+    """Managers, the person's own first (#74): whether each is up, and where."""
+    ms = sorted(((aid, a) for aid, a in (state.get("agents") or {}).items()
+                 if a.get("role") == "manager"),
+                key=lambda x: (x[1].get("human") != human_id, x[1].get("name") or x[0]))
+    return [_section(_status_line(a.get("name") or aid, a.get("status"))
+                     + (f"  ·  on {a['host']}" if a.get("host") else "")) for aid, a in ms]
+
+
 def _machines(state):
     hosts = state.get("hosts") or {}
-    rows = [f"{'🟢' if (v.get('state') == 'RUNNING') else '⚪'} {h}  {(v.get('state') or '—').lower()}"
+    rows = [_status_line(h, v.get("status")).replace("*", "", 2)
             + ("  ·  ⚠ stale (missed a deploy)" if v.get("stale") else "")
-            for h, v in hosts.items() if v.get("state")]
+            for h, v in hosts.items()]
     return [_section("*Machines*\n" + "\n".join(rows))] if rows else []
 
 
@@ -117,6 +138,8 @@ def view(state, human_id, dashboard_url, admin=False):
         {"type": "section", "text": {"type": "mrkdwn", "text": "*Your Claude usage*"}},
         *_usage(state, human_id),
         {"type": "divider"},
+        *([{"type": "section", "text": {"type": "mrkdwn", "text": "*Managers*"}}]
+          + _managers(state, human_id) if _managers(state, human_id) else []),
         {"type": "section", "text": {"type": "mrkdwn", "text": "*Workers*"}},
         *_workers(state, human_id),
         *_approvals(state, human_id),

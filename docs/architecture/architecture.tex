@@ -78,7 +78,8 @@ mechanisms that bind them together, and the conventions the framework relies on.
     and lends their Claude seat to the agents attached to them.
   \item[Admin] A member with \code{admin: true} and a \code{tailscale\_login}. Only admins
     can read agents' logs in the web UI, change the lab (through the secretary or the
-    console), deploy, power off a busy machine, or ask for someone else's token.
+    console), deploy, power a machine that isn't dedicated to them on or off, or ask for
+    someone else's token.
 \end{description}
 
 \subsection{Agents}
@@ -359,6 +360,9 @@ sandbox violations that explain it.
     so far on first mention: its first 5 messages (they often set the topic) and the
     last 50 before the mention. In such a thread it sees every message and
     may stay silent. Attachments (up to 50 MB) are downloaded into its working folder.
+  \item \textbf{DM catch-up}: on a DM's first new message since the manager started, it
+    first reads the member's messages there that it missed while it wasn't running (after
+    the last one it saw; at most 72 hours back, the last 20) and answers them in one reply.
   \item Every message is checked against \code{lab.yaml}: only lab members are answered. On
     a dedicated manager, other members are \emph{guests} (\S6.3).
   \item \textbf{Tools}: list workers, submit and follow tasks, pending approvals and notes
@@ -430,8 +434,10 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
     The request's tailnet address must not be a lab host; \code{tailscale whois} must name
     a person (not a tagged device) whose login is a member's in \code{lab.yaml}. Tailscale authenticates
     every packet with the device's key, so the address can't be forged.
-  \item \textbf{A Slack Home tab}: a personal digest (your usage, your tasks, approvals
-    waiting for you, machines) with a link to the web UI.
+  \item \textbf{A Slack Home tab}: a personal digest (your usage, managers and workers,
+    your tasks, approvals waiting for you, every machine) with a link to the web UI. Both
+    show the same status for each host and agent, computed once in the snapshot: an agent
+    on a powered-off host reads ``host stopped'', not ``down''.
 \end{itemize}
 
 \subsection{Claude usage}
@@ -457,7 +463,8 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
     approval or waiting on its long runs, or a long run going (even CPU-only); or any process on a GPU (anyone's, not only the lab's); or a GPU above 0\%
     in any of its last 5 readings (about 75 s: a GPU counts as idle only after 0\% in
     several readings in a row); or someone keeps it awake with a \code{\textasciitilde/.lab-keep-awake}
-    file (below); or a manager runs there.
+    file (below); or a manager there counts (see Idle stop: on a host with workers only
+    with \code{idle\_stop\_with\_managers: false}; on a managers-only host, by its activity).
   \item \textbf{Working on a machine directly}: the lab recommends talking to agents, but
     anyone may still log in and work on a lab machine themselves, e.g. a CPU-only job the
     GPU checks can't see. To make sure the machine isn't stopped under them, they create
@@ -468,11 +475,14 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
   \item \textbf{Idle stop}: a host with workers is stopped after its
     \code{idle\_stop\_min} minutes (if above 0) of not being busy. It's judged by its workers alone: a
     manager there goes offline in Slack until the host is powered on. A manager's own work
-    isn't measured, so \code{idle\_stop\_with\_managers: false} makes managers keep the
-    host busy A host with managers and no worker counts as busy (only an admin
-    powers it off).
-  \item \textbf{Who may power}: any member may power a machine on, or off when idle;
-    powering off a busy machine is for admins only, after confirming (\code{force\_off}).
+    isn't measured there, so \code{idle\_stop\_with\_managers: false} makes managers keep
+    the host busy. A host with only managers is judged by their activity: no turn going or
+    within \code{idle\_stop\_min}, no task they follow, no approval of theirs pending; a
+    manager that can't be reached keeps it busy.
+  \item \textbf{Who may power}, on and off alike: a machine dedicated to a member (all its
+    agents theirs and dedicated), that member or an admin, busy or not; any other machine
+    (a shared agent, agents of more than one member, the secretary, or no agents), an admin
+    only. A busy machine goes off only after confirming (\code{force\_off}).
 \end{itemize}
 
 \subsection{Notices}

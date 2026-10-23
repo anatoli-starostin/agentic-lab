@@ -12,12 +12,14 @@ Idle stop: a host with `idle_stop_min` above 0 that runs workers is stopped once
 its workers have had nothing running, queued or waiting, and its GPUs nothing on them
 (nvidia-smi, via the workers' health checks), for `idle_stop_min` minutes (required on
 cloud hosts; 0: never). The same "busy"
-decides who may power a host off (only admins, when busy).
+means a member's request to power a host off needs `force_off`, after confirming; who may
+power a host at all is owner(): its member or an admin, or an admin only (#91).
 
-Managers on a host don't keep it busy: it's judged by its workers alone, and stopping it
-only takes its managers offline in Slack until it's powered on again. A manager's own work
-(a turn, following a task elsewhere) isn't measured, so a host can say
-`idle_stop_with_managers: false` to count any manager on it as busy.
+Managers on a host with workers don't keep it busy: it's judged by its workers alone, and
+stopping it only takes its managers offline in Slack until it's powered on again
+(`idle_stop_with_managers: false` counts any manager on it as busy instead). A host that
+runs only managers is judged by their activity (#70, manager_busy): no turn going and none
+for `idle_stop_min`, no task they still follow, no approval of theirs pending.
 """
 import asyncio
 import datetime as dt
@@ -31,7 +33,8 @@ PROFILE = "lab"
 BUSY = ("running", "queued", "awaiting_approval", "waiting")
 GPU_IDLE_READINGS = 5           # a GPU is idle only at 0% in this many readings in a row
 STALE_AFTER_MIN = 10       # idle timers older than this (the secretary was down) start over
-DOWN_GRACE_MIN = 60             # a running host whose worker is down this long is announced
+DOWN_GRACE_MIN = 60             # a running host whose agents (workers, or a managers-only
+                                # host's managers) are down this long is announced
 _gpu_recent = {}                # worker -> its GPUs' highest utilization, last readings
 
 
@@ -158,6 +161,38 @@ async def stop(lab, host):
     await _cli("compute", "instance", "stop", "--id", h["instance"])
 
 
+def owner(lab, host):
+    """The member a host is dedicated to (#91), or None (shared): every agent on it is a
+    worker or manager with `access: dedicated` (the default), all of the same member (their
+    `human`). A shared agent, agents of several members, the secretary or no agents: None."""
+    here = [x for x in lab.agents.values() if x.get("host") == host]
+    members = {x.get("human") for x in here}
+    if (here and len(members) == 1 and all(
+            x.get("role") in ("worker", "manager") and x.get("access", "dedicated") == "dedicated"
+            for x in here)):
+        return members.pop()
+    return None
+
+
+def why_not_dedicated(lab, host):
+    """Why `host` has no owner() (for a refusal): every cause that holds."""
+    here = {aid: x for aid, x in lab.agents.items() if x.get("host") == host}
+    if not here:
+        return "no agents run there"
+    why = []
+    if any(x.get("role") == "secretary" for x in here.values()):
+        why.append("the secretary runs there")
+    shared = [lab.display_name(aid) for aid, x in here.items()
+              if x.get("role") in ("worker", "manager") and x.get("access") == "shared"]
+    if shared:
+        why.append(", ".join(shared) + (" is" if len(shared) == 1 else " are") + " shared")
+    members = sorted({(lab.humans.get(x.get("human")) or {}).get("name") or x.get("human")
+                      for x in here.values()})
+    if len(members) > 1:
+        why.append("it runs agents of more than one member (" + ", ".join(members) + ")")
+    return "; ".join(why)
+
+
 def note_gpu(snapshot):
     """Remember each worker's GPU utilization over the last readings (one per collection),
     and write its highest into the snapshot (`gpu_recent_max`): a GPU counts as idle only
@@ -206,11 +241,40 @@ def worker_busy(name, seen):
     return None
 
 
+def manager_busy(name, seen, pending=0):
+    """Why a manager keeps its host busy (None if it doesn't), from its activity (its status
+    endpoint, Manager.activity) and its pending approvals. Not reachable: busy, since
+    nothing can tell. #69's live conversations (keepalive) would be one more check here."""
+    if not seen.get("up"):
+        return f"{name} can't be measured (not reachable)"
+    act = seen.get("activity")
+    if act is None:
+        return f"{name} can't be measured (it doesn't report its activity: an older framework?)"
+    if act.get("turns_in_progress"):
+        return f"{name} is answering"
+    if act.get("followed_tasks_open"):
+        return f"{name} follows {act['followed_tasks_open']} unfinished task(s)"
+    if pending:
+        return f"{name} has {pending} approval(s) pending"
+    return None
+
+
+def managers_only(lab, host):
+    """The host's agents, if they're all managers (#70); else []."""
+    here = [a for a, x in lab.agents.items() if x.get("host") == host]
+    return here if here and all(lab.agents[a].get("role") == "manager" for a in here) else []
+
+
+def _pending(snapshot, aid):
+    return sum(r.get("agent") == aid
+               for r in ((snapshot or {}).get("approvals") or {}).get("pending") or [])
+
+
 def counts_busy(lab, host, aid):
-    """Does a non-worker agent on `host` make it busy by being there? A manager doesn't
-    when a worker there judges the host (unless idle_stop_with_managers: false); on a host
-    with no worker it does: nothing measures it, and stopping it would take a member's
-    manager offline, so only an admin may."""
+    """Does a non-worker agent on `host` count when judging it? A manager doesn't when a
+    worker there judges the host (unless idle_stop_with_managers: false); on a host with no
+    worker it does: a managers-only host is judged by its managers' activity
+    (manager_busy), any other by their being there."""
     a = lab.agents[aid]
     has_worker = any(x.get("host") == host and x.get("role") == "worker"
                      for x in lab.agents.values())
@@ -220,13 +284,22 @@ def counts_busy(lab, host, aid):
 
 def busy(lab, host, snapshot):
     """Why powering `host` off would interrupt work (None if it wouldn't): a worker busy
-    (see worker_busy), or a manager there if the host has idle_stop_with_managers: false."""
+    (worker_busy); on a managers-only host, a manager busy (manager_busy); or another
+    agent that counts by being there (counts_busy: a manager where
+    idle_stop_with_managers: false, the secretary). A member's power-off of a busy host
+    needs force_off; who may power it at all is owner()."""
     for aid, a in lab.agents.items():
         if a.get("host") != host:
             continue
         if a.get("role") != "worker":
             if not counts_busy(lab, host, aid):
                 continue                # judged by the host's workers alone
+            if a.get("role") == "manager" and managers_only(lab, host):
+                why = manager_busy(lab.display_name(aid), (snapshot or {}).get(
+                    "agents", {}).get(aid, {}), _pending(snapshot, aid))
+                if why:
+                    return why
+                continue
             if a.get("role") == "manager":
                 why = ("the host has idle_stop_with_managers: false" if any(
                     x.get("host") == host and x.get("role") == "worker"
@@ -244,8 +317,9 @@ def busy(lab, host, snapshot):
 
 
 class IdleWatch:
-    """Remembers since when each on-demand host has been idle (and since when a host's
-    worker has been down), across the secretary's restarts when given a `path` (#60)."""
+    """Remembers since when each on-demand host has been idle (and since when a running
+    host's agents have been down), across the secretary's restarts when given a `path`
+    (#60)."""
 
     def __init__(self, path=None):
         self.path = path
@@ -275,14 +349,17 @@ class IdleWatch:
         os.replace(tmp, self.path)
 
     def down_too_long(self, now=None, grace=dt.timedelta(minutes=DOWN_GRACE_MIN)):
-        """Hosts whose worker has been down (or unknown) for longer than the grace."""
+        """Hosts whose agents (its workers, or a managers-only host's managers) have been down
+    (or unknown) for longer than the grace, while the host runs."""
         now = now or dt.datetime.now(dt.timezone.utc)
         return [h for h, t in self.down_since.items() if now - t >= grace]
 
     def candidates(self, lab, snapshot, now=None, power=None):
-        """Hosts to stop now: idle_stop_min above 0, with workers (and managers, unless
-        idle_stop_with_managers: false), all workers idle for idle_stop_min. `power`:
-        host -> its power state, if known (a stopped host's workers aren't "down")."""
+        """Hosts to stop now: idle_stop_min above 0, and idle for idle_stop_min: a host with
+        workers when all of them are (worker_busy; a manager there counts as busy only with
+        idle_stop_with_managers: false), a managers-only host when all its managers are
+        (manager_busy), counted from their latest turn or start. `power`: host -> its power
+        state, if known (a stopped host's agents aren't "down")."""
         now = now or dt.datetime.now(dt.timezone.utc)
         out = []
         for host, h in lab.hosts.items():
@@ -290,7 +367,8 @@ class IdleWatch:
             if not h.get("idle_stop_min"):
                 continue
             here = [a for a, x in lab.agents.items() if x.get("host") == host]
-            agents = [a for a in here if lab.agents[a].get("role") == "worker"]
+            agents = managers_only(lab, host) or [
+                a for a in here if lab.agents[a].get("role") == "worker"]
             if not agents or any(counts_busy(lab, host, a) for a in here if a not in agents):
                 continue
             seen = [snapshot["agents"].get(a, {}) for a in agents]
@@ -302,19 +380,33 @@ class IdleWatch:
                     self.down_since.pop(host, None)     # stopped: of course they're down
                 continue
             self.down_since.pop(host, None)
-            if any(worker_busy(a, s) for a, s in zip(agents, seen)):
+            if any(manager_busy(a, s, _pending(snapshot, a)) if lab.agents[a].get("role")
+                   == "manager" else worker_busy(a, s) for a, s in zip(agents, seen)):
                 self.idle_since.pop(host, None)
                 continue
             since = self.idle_since.setdefault(host, now)
+            # a turn (or a start) since the last look counts: idle only from the latest one
+            last = [dt.datetime.fromisoformat(t) for s in seen
+                    for t in ((s.get("activity") or {}).get("last_turn_at"),
+                              (s.get("activity") or {}).get("started_at")) if t]
+            if last and max(last) > since:
+                since = self.idle_since[host] = max(last)
             if now - since >= dt.timedelta(minutes=h["idle_stop_min"]):
                 out.append(host)
         return out
 
 
-async def recheck(lab, host, workers, snapshot):
-    """Right before an idle stop: is the host still idle? Its workers' health read again
+async def recheck(lab, host, workers, snapshot, manager_activity=None):
+    """Right before an idle stop: is the host still idle? Its workers' health (and on a
+    managers-only host, its managers' activity: `manager_activity(aid)`, async) read again
     now (the snapshot may be minutes old, #60). Returns why it's busy, or None."""
     agents = dict((snapshot or {}).get("agents") or {})
+    for aid in managers_only(lab, host):
+        try:
+            act = await manager_activity(aid)
+        except Exception as e:
+            return f"couldn't re-check {lab.display_name(aid)} ({e})"
+        agents[aid] = {**agents.get(aid, {}), "up": True, "activity": act}
     for aid, a in lab.agents.items():
         if a.get("host") != host or a.get("role") != "worker":
             continue
@@ -328,4 +420,4 @@ async def recheck(lab, host, workers, snapshot):
                        "gpu_processes": h.get("gpu_processes"),
                        "gpu_recent_max": prev.get("gpu_recent_max"),
                        "gpu_readings": prev.get("gpu_readings")}
-    return busy(lab, host, {"agents": agents})
+    return busy(lab, host, {"agents": agents, "approvals": (snapshot or {}).get("approvals")})
