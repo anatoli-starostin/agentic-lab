@@ -42,7 +42,7 @@ so its runs and commands share it the same way.
 |---|---|---|
 | Lifetime | ends with the command and the session | until it ends or is stopped |
 | Approval | inside the sandbox: none | every run, by a human |
-| Network | the sandbox's allowlist (tailnet, granted domains) | not limited by the lab; it resolves names itself (the resolver's file is shown even though `/run` is hidden) |
+| Network | the sandbox's allowlist (tailnet, granted domains) | not limited by the lab, except the cloud's metadata service, closed to every lab user; it resolves names itself (the resolver's file is shown even though `/run` is hidden) |
 | `/tmp` | the session's | its own, emptied when it ends |
 | Timed write grants into the home | applied | applied by the job's own layer; the unit's layer underneath knows only standing ones, so such a grant doesn't reach a run |
 | `sudo`, setuid helpers | refused | refused (`NoNewPrivileges`) |

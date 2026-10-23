@@ -21,6 +21,8 @@ NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=tmpfs
 PrivateTmp=yes
+# the cloud's metadata service (instance roles, service-account tokens): never the lab's
+IPAddressDeny=169.254.169.254/32 fd00:ec2::254/128
 PrivateDevices=yes
 CapabilityBoundingSet=
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX

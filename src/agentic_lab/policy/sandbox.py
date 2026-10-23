@@ -39,6 +39,11 @@ STATE = "~/.local/state/agentic-lab"
 # credentials, never its agent's (#40).
 NEBIUS = "~/.nebius"
 GPU_VISIBLE = ["/run/nvidia-persistenced"]
+# The cloud's metadata service (AWS, Nebius, GCP: 169.254.169.254; AWS over IPv6 too) hands
+# out the host's instance-role or service-account credentials to anyone who asks. Every lab
+# unit denies it (IPAddressDeny, inherited by everything the unit starts); deploy/*/*.service
+# and the run unit carry exactly this.
+METADATA = "169.254.169.254/32 fd00:ec2::254/128"
 
 
 def filesystem(workdir, writes=(), gpu=False):

@@ -36,6 +36,7 @@ import subprocess
 import tempfile
 
 from .. import safefs
+from ..policy.sandbox import METADATA
 
 SYSTEMCTL = "/usr/bin/systemctl"
 RUN_CTL = "/usr/local/libexec/agentic-lab/lab-run-ctl"
@@ -94,6 +95,8 @@ InaccessiblePaths=-{home}/.config/agentic-lab -{home}/.nebius
 ReadOnlyPaths={home}
 ReadWritePaths=-{workdir}{extra} -{home}/.local/state/agentic-lab/runs/%i
 PrivatePIDs=yes
+# the cloud's metadata service: never the lab's (policy/sandbox.METADATA)
+IPAddressDeny={METADATA}
 KillMode=control-group
 TimeoutStopSec=60
 """
