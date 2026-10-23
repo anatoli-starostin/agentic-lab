@@ -206,5 +206,7 @@ def test_providers(tmp_path):
     assert any("hosts.gpu-b" in i and "idle_stop_min has no effect" in i for i in issues)
     assert not any(i.startswith("ERROR") for i in issues if "gpu-" in i)
     ok, why = powerable(lab, "gpu-a")
-    assert not ok and "on AWS" in why and "no power control" in why
+    assert not ok and "needs its AWS instance id" in why        # powered, once it has one (#68)
+    ok, why = powerable(lab, "gpu-b")
+    assert not ok and "no power control" in why
     assert "isn't a cloud VM" in powerable(lab, "nuc-01")[1]

@@ -216,14 +216,30 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      without network until it was stopped and started.
 
     **Hosts on AWS (EC2)**, for ordinary non-GPU hosts (the secretary, managers):
-   - In `lab.yaml`: `{kind: cloud, provider: aws, idle_stop_min: 0, ssh_user: ubuntu,
-     tailnet_name: ...}` (`lab init --provider aws`, and `--secretary-provider aws` when
-     the secretary's own host is an EC2 VM). `ubuntu` is the login user of the standard
-     Ubuntu AMIs.
-   - **No power control (yet).** The secretary can't start or stop AWS hosts, so there's
-     no idle stop for them (`idle_stop_min: 0`; `lab check` warns otherwise) and members
-     can't power them from Slack: start or stop them in the AWS console. Power support may
-     come later.
+   - In `lab.yaml`: `{kind: cloud, provider: aws, instance: <instance-id>, region:
+     <region>, idle_stop_min: 0, ssh_user: ubuntu, tailnet_name: ...}` (`lab init
+     --provider aws`, and `--secretary-provider aws` when the secretary's own host is an
+     EC2 VM). `ubuntu` is the login user of the standard Ubuntu AMIs.
+   - **Power.** The secretary starts and stops AWS hosts with `instance:` like Nebius ones
+     (members from Slack, idle stop after `idle_stop_min`; never its own host). It uses the
+     default AWS credential chain: on an EC2 secretary, give its instance an **instance
+     role** (no stored keys) with only this policy, and tag the lab's power-managed
+     instances so the role can't touch anything else (in particular not the secretary's
+     own host):
+     ```json
+     {"Version": "2012-10-17", "Statement": [
+       {"Effect": "Allow", "Action": ["ec2:StartInstances", "ec2:StopInstances"],
+        "Resource": "arn:aws:ec2:<region>:*:instance/*",
+        "Condition": {"StringEquals": {"aws:ResourceTag/<tag-key>": "<tag-value>"}}},
+       {"Effect": "Allow", "Action": "ec2:DescribeInstances", "Resource": "*"}]}
+     ```
+     `region:` is required on a powered AWS host (the secretary's service user has no AWS
+     config). `lab apply` installs the AWS SDK (boto3, the `aws` extra) on the secretary's
+     host when `lab.yaml` has AWS hosts. If the host restricts the instance metadata service to some users (where
+     the role's credentials come from), allow the secretary's user. A secretary not on EC2
+     has no stored-key option yet (#68 follow-up).
+   - **Stopping changes the public IPv4** (an auto-assigned one), which is fine: the lab
+     reaches hosts by tailnet name. A stopped instance costs only its disk.
    - **A public IPv4 and a security group with zero inbound rules.** The host only needs
      outbound traffic (Tailscale, apt and pip, GitHub, the Anthropic API), and every real
      access goes through the tailnet, so nothing is exposed. A public IPv4 costs about

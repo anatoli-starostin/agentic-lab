@@ -117,7 +117,7 @@ mechanisms that bind them together, and the conventions the framework relies on.
   \item \textbf{GPU hosts}: cloud VMs (Nebius in this version), stopped once idle for
     \code{idle\_stop\_min} minutes (required on cloud hosts; 0: never).
   \item \textbf{AWS EC2} for ordinary hosts (the secretary, managers): \code{provider: aws},
-    without power control for now (\code{idle\_stop\_min: 0}); a public IPv4 with a
+    powered like Nebius VMs (below); a public IPv4 with a
     security group allowing no inbound (a VM without one needs a costly NAT gateway), and
     an EBS root volume (instance store is wiped on every stop).
   \item All hosts are on one \textbf{Tailscale tailnet}; services talk to each other only
@@ -449,9 +449,10 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
 
 \subsection{Machines}
 \begin{itemize}
-  \item \textbf{Power}: the secretary starts and stops Nebius VMs listed in \code{lab.yaml}
-    (\code{kind: cloud}, \code{provider: nebius}, \code{instance}), with a service account
-    that may only view, start and stop VMs. Never its own host.
+  \item \textbf{Power}: the secretary starts and stops the cloud VMs listed in
+    \code{lab.yaml} (\code{kind: cloud}, \code{provider}, \code{instance}): on Nebius with
+    a service account that may only view, start and stop VMs; on AWS with its instance
+    role, limited to the lab's tagged instances. Never its own host.
   \item \textbf{Busy} means: a worker there has a task running, queued, awaiting
     approval or waiting on its long runs, or a long run going (even CPU-only); or any process on a GPU (anyone's, not only the lab's); or a GPU above 0\%
     in any of its last 5 readings (about 75 s: a GPU counts as idle only after 0\% in
