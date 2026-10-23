@@ -29,9 +29,14 @@ class ConfigError(RuntimeError):
     pass
 
 
+GIT_ENV = {}        # git's extra environment as that user (apply-main's GitHub setup, #97)
+
+
 def git(repo, *args, timeout=60):
     user = os.environ.get("LAB_GIT_USER") or os.environ.get("SUDO_USER")
     as_admin = ["sudo", "-u", user, "-H"] if os.geteuid() == 0 and user else []
+    if as_admin and GIT_ENV:            # sudo resets the environment: pass it as arguments
+        as_admin += ["env", *(f"{k}={v}" for k, v in GIT_ENV.items())]
     r = subprocess.run([*as_admin, "git", "-C", repo, *args], capture_output=True, text=True,
                        timeout=timeout)
     if r.returncode:

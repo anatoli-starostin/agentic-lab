@@ -191,6 +191,12 @@ async def keep_bot_repos(name, stop, token_dir, lister=list_repos, every=REPOS_E
             pass
 
 
+def git_env(root):
+    """git's GitHub setup at `root`: its config (with the credential helper) and where the
+    helper finds the identity's token (it defaults to the agent's root, not the service's)."""
+    return {"GIT_CONFIG_GLOBAL": os.path.join(root, "gitconfig"), "LAB_GITHUB_DIR": root}
+
+
 def environment(lab, agent_id, root=ROOT, shim=SHIM):
     """Where git, gh and the credential helper find the agent's git setup at `root`, as
     environment variables (nothing is written): what `prepare` returns, and what a long
@@ -201,9 +207,8 @@ def environment(lab, agent_id, root=ROOT, shim=SHIM):
         return {}
     root = os.path.expanduser(root)
     workdir = os.path.expanduser((lab.agents.get(agent_id) or {}).get("workdir") or "~/work")
-    return {"GIT_CONFIG_GLOBAL": os.path.join(root, "gitconfig"),
+    return {**git_env(root),
             "GH_CONFIG_DIR": os.path.join(workdir, ".config", "gh"),
-            "LAB_GITHUB_DIR": root,
             "PATH": shim + ":" + os.environ.get("PATH", "/usr/local/bin:/usr/bin:/bin")}
 
 
