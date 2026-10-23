@@ -681,7 +681,7 @@ def main(argv=None):
     i.add_argument("--display", action="append", metavar="AGENT=NAME",
                    help="the name humans see for an agent (repeatable), e.g. mgr-ana=Flash")
     i.add_argument("--provider", choices=("nebius", "aws"), default="nebius",
-                   help="the cloud of the manager's and workers' VMs (aws: no power control yet)")
+                   help="the cloud of the manager's and workers' VMs")
     i.add_argument("--secretary-provider", choices=("nebius", "aws"),
                    help="this machine is a cloud VM there (default: an on-prem host)")
     i.add_argument("--force", action="store_true", help="overwrite an existing file")

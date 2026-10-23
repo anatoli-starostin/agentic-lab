@@ -117,6 +117,23 @@ What it took:
 
 ## Accepted trade-offs
 
+- **The cloud's metadata service is closed to every lab user** (`169.254.169.254`, and
+  AWS's IPv6 address): the host's instance role or service account is never the lab's.
+  Every lab unit, and every long run, has `IPAddressDeny` for it (`policy/sandbox.METADATA`),
+  which systemd applies to everything the unit starts. It's per unit, not per user: it
+  can't tell a service from its own children, which is fine because none of them needs it.
+  It relies on cgroup v2 with BPF; `lab doctor` probes it as an agent's user, so a kernel
+  that doesn't enforce it shows up as a failure, not a silent pass. A host whose DNS server
+  is the metadata address (some GCP images without systemd-resolved) would lose DNS in
+  every lab unit: `lab doctor` fails there. AWS and Nebius hosts resolve elsewhere.
+
+- **AWS power uses a stored access key** (#68), an IAM user's, limited to start/stop on
+  the lab's tagged instances plus `DescribeInstances` (docs/install.md), never the host's
+  instance role: the secretary passes it to boto3 explicitly, with no default credential
+  chain, and it lives with the secretary's other secrets, hidden from its agent. A
+  long-lived key to rotate (a `credentials` date in lab.yaml); leaked, it can only power
+  the lab's own tagged hosts.
+
 - **Local reads are free**, except `/run` and the agent's service's own secrets and state
   (`~/.config/agentic-lab`, `~/.local/state/agentic-lab`): the agent's Read tool is denied
   there and its sandbox hides them; the Claude token is stripped from sandboxed commands.

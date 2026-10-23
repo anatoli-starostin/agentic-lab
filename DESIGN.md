@@ -54,7 +54,7 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   secretary, each manager) plus one **Lab Approvals** app for the broker.
 - A **Claude seat** (Team or Max) for each member whose agents will run.
 - A **cloud account** (Nebius first) for GPU workers, and any VMs for managers. Ordinary
-  hosts may also be AWS EC2 VMs (`provider: aws`), without power control for now.
+  hosts may also be AWS EC2 VMs (`provider: aws`), powered like Nebius ones (#68).
 - An **always-on host** for the secretary (small, no GPU).
 - A **GitHub** account or organisation for the lab's **private config repository**, and
   optionally bot accounts for agents (§4.4).
@@ -110,8 +110,9 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   as that bot account or GitHub App, over HTTPS, and it opens the pull requests itself.
   Without one, a deploy key (write access) and the admin opens the PR from its link. §4.4.
 - **State**: workers over MCP (a read-only monitoring token), managers' status endpoints,
-  the broker's overview, local systemd units, machine power states (Nebius; AWS hosts have
-  no power control yet).
+  the broker's overview, local systemd units, machine power states (Nebius through its
+  CLI; AWS EC2 through boto3 with the secretary's own access key, never an instance
+  role).
 - **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
   (a worker task running, queued, awaiting approval or waiting on its long runs; a long
   run going, even CPU-only; any process on a GPU, anyone's; a GPU
@@ -172,8 +173,8 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   first, and says so in the task's result; a new task is told when disk is low.
 - **Watching and debugging** (the same for every agent): the agent's own **event log**
   (messages, tool calls, results, approvals, task events; for managers and the secretary,
-  each turn's timing: Claude Code's start-up, the first reply, the total), shown to admins
-  in the web UI;
+  each turn's timing, however it ended (ok, cut off, error, cancelled): Claude Code's start-up, its
+  first output, the first text the member sees, the total), shown to admins in the web UI;
   `sudo lab debug <agent>` stops its service and opens **the same session** in the classic
   Claude Code console, as the agent's user, with its sandbox; the service restarts on exit.
 
@@ -371,7 +372,12 @@ agent's service ◄── decision ─── broker (its own token, over the tai
 - **No timeout by default**: a request waits until its human answers. A member may set one
   (`timeout_s`); then an unanswered request is closed as denied when it runs out: silence
   counts as "no", never as "yes" (`on_timeout` can only be `deny`), and the agent is told
-  it was a timeout, not a refusal. If the agent stops waiting (its task is cancelled, a
+  it was a timeout, not a refusal. A request past its deadline can't be decided any more,
+  even by a click that arrives before the broker's sweep. Members change their own timeout
+  from Slack ("auto-deny my approvals after 15 minutes until 18:00", "no timeout", "back to
+  default"; admins anyone's) through the secretary's `approval_timeout` tool: the broker
+  keeps the override in its state, `lab.yaml` stays the default, and it applies to new
+  requests only (#77). If the agent stops waiting (its task is cancelled, a
   manager's turn is cut off), the request is **withdrawn**, so nobody is asked any more.
 - Grants are created only by the broker, after a verified human answer.
 
@@ -468,9 +474,10 @@ agents:
     #                                    #   on the same host (lab check rejects clashes)
 hosts:
   sec-01: {kind: onprem}
-  mgr-01: {kind: cloud, provider: aws, idle_stop_min: 0, ssh_user: ubuntu}
-                                   # AWS: no power control (yet); public IPv4 with zero
-                                   #   inbound, EBS root (docs/install.md)
+  mgr-01: {kind: cloud, provider: aws, instance: i-..., region: <region>,
+           idle_stop_min: 0, ssh_user: ubuntu}
+                                   # AWS: powered with the secretary's access key;
+                                   #   public IPv4, zero inbound, EBS root (docs/install.md)
   gpu-a:  {kind: cloud, provider: nebius, instance: computeinstance-...,
            idle_stop_min: 30, tailnet_name: gpu-a.example.ts.net}
                                    # + idle_stop_with_managers: false, if a manager
@@ -501,7 +508,9 @@ permissions are answered in Slack (§7).
   reads the seat's utilization headers from one tiny request every 10 minutes, only while the
   seat's 5-hour window is open; **Check now** probes at once.
 - **Workers**: busy or idle, GPU (utilization, memory, processes), disk, recent tasks.
-- **Approvals and grants**: pending requests and who decides; active grants and expiry.
+- **Approvals and grants**: pending requests and who decides; active grants and expiry;
+  each member's approval timeout, worded as the secretary says it in Slack (the value,
+  lab.yaml's or their own, and an override's end in their time zone and UTC).
 - **Machines**: power state, policy, idle since.
 - **Agents**: role, seat, host, service state.
 - **Deployed**: the config and framework commits every host runs (flagged if unreviewed).

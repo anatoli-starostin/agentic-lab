@@ -250,6 +250,42 @@ def _workers(state):
     return "<section>" + ("".join(out) or "<h2>Workers</h2><p class=muted>none</p>") + "</section>"
 
 
+def timeout_text(t, tz=None):
+    """A member's approval timeout in words, the same in Slack and on this page: the value,
+    where it comes from, and an override's end in the member's own time zone (`tz`, a
+    tzinfo or a zone name) and UTC. `t`: the broker's {timeout_s, by, until}."""
+    import datetime as dt
+    from zoneinfo import ZoneInfo
+    s = (t or {}).get("timeout_s")
+    value = f"{s // 60} minutes" if s else "none"
+    if not (t or {}).get("by"):
+        return f"{value} (lab.yaml)"
+    until = ""
+    if t.get("until"):
+        utc = dt.datetime.fromisoformat(t["until"]).astimezone(dt.timezone.utc)
+        try:
+            zone = ZoneInfo(tz) if isinstance(tz, str) else tz
+        except (ValueError, KeyError, OSError):
+            zone = None
+        if zone is None:
+            until = f", until {utc:%Y-%m-%d %H:%M} UTC; their Slack time zone isn't known"
+        else:
+            local = utc.astimezone(zone)
+            until = f", until {local:%Y-%m-%d %H:%M} {local.tzname()} ({utc:%H:%M} UTC)"
+    return f"{value} (set by {t['by']}{until})"
+
+
+def _timeouts(state):
+    """Members' approval timeouts (#77): how long their requests wait before a timeout."""
+    ts = (state.get("approvals") or {}).get("timeouts")
+    if not ts:
+        return ""
+    rows = "".join(f"<tr><td>{e(h)}</td><td>{e(timeout_text(t, t.get('tz')))}</td></tr>"
+                   for h, t in sorted(ts.items()))
+    return ("<h2 style='margin-top:14px'>Approval timeouts</h2><table><tr><th>Member</th>"
+            "<th>Waits, then a timeout (denied)</th></tr>" + rows + "</table>")
+
+
 def _approvals(state):
     ap = state.get("approvals") or {}
     if ap.get("error"):
@@ -267,7 +303,8 @@ def _approvals(state):
                                      "</td></tr>") +
             "</table><h2 style='margin-top:14px'>Active grants</h2><table><tr><th>Agent</th>"
             "<th>Grant</th><th>Given by</th><th></th></tr>" +
-            (grants or "<tr><td class=muted colspan=4>none</td></tr>") + "</table></section>")
+            (grants or "<tr><td class=muted colspan=4>none</td></tr>") + "</table>" +
+            _timeouts(state) + "</section>")
 
 
 def _hosts(state):

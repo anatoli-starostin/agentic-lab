@@ -41,6 +41,9 @@ class ApplyError(RuntimeError):
     pass
 
 
+# the secretary's AWS key (VM power, #68): with its other secrets, hidden from its agent
+AWS_KEY = ".config/agentic-lab/aws-key.json"
+
 def _is_source(d):
     return os.path.exists(os.path.join(d, "pyproject.toml")) and os.path.isdir(
         os.path.join(d, "deploy")) and os.path.isdir(os.path.join(d, "src", "agentic_lab"))
@@ -215,6 +218,11 @@ def host_plan(lab, host, tokens, intake=intake_secret):
             nebius_cli = sec_user
         if any((h or {}).get("provider") == "nebius" for h in lab.hosts.values()):
             nebius_cli = sec_user      # VM power: the CLI the secretary (and nebius connect) use
+        if any((h or {}).get("provider") == "aws" for h in lab.hosts.values()):
+            aws_sdk = True             # VM power on AWS: boto3 in the lab's venv (#68)
+        ak = intake(f"service:{secretary}", "aws-key")
+        if ak is not None:             # optional: without it, no VM power on AWS (#68)
+            files[f"/home/{sec_user}/{AWS_KEY}"] = (sec_user, "600", ak)
         users += ["lab-broker"]
         agents = [aid for aid, a in lab.agents.items()
                   if a.get("role") in ("worker", "manager", "secretary")]
@@ -244,7 +252,8 @@ def host_plan(lab, host, tokens, intake=intake_secret):
             "readable": readable,
             "envs": envs, "missing": missing, "later": later,
             "secretary_host": host == sec_host,
-            "nebius_cli": locals().get("nebius_cli"), "held": held,
+            "nebius_cli": locals().get("nebius_cli"), "aws_sdk": locals().get("aws_sdk"),
+            "held": held,
             "ssh_user": (lab.hosts.get(host) or {}).get("ssh_user")}
 
 
@@ -310,6 +319,9 @@ def script(plan):
     lines.append('say "users"')
     for u in dict.fromkeys(plan["users"]):
         lines.append(f"/opt/agentic-lab/src/deploy/worker/create-agent-user.sh {u} >/dev/null")
+    if plan.get("aws_sdk"):
+        lines.append('say "AWS SDK (VM power)"')
+        lines.append("uv pip install -q -p /opt/agentic-lab/venv '/opt/agentic-lab/src[aws]'")
     if plan.get("nebius_cli"):
         u = plan["nebius_cli"]
         lines.append('say "Nebius CLI (VM power)"')

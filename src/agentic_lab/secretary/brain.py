@@ -24,7 +24,8 @@ warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
 TOOL_NAMES = ("lab_state", "worker_tasks", "task_result", "ask_member_for_claude_token",
               "announce", "power", "power_history", "read_lab_config", "propose_lab_change", "offer_deploy",
               "check_slack_app", "request_slack_app", "request_github_token",
-              "redraw_app_icon", "request_github_app", "check_github_app")
+              "redraw_app_icon", "request_github_app", "check_github_app",
+              "approval_timeout")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
 
 
@@ -75,7 +76,7 @@ agents. You keep the lab running and answer questions about it, in Slack.
       request_github_token, the token's expiry date into lab.yaml, and a redeploy.
   - a new GPU machine must exist first: created in the cloud console, on the tailnet, with
     SSH for the admin (passwordless sudo). Ask the admin for its tailnet name and, for
-    power, its Nebius instance id.
+    power, its instance id (Nebius, or AWS with its region).
 - Don't change lab.yaml without the admin asking for that change.
 - Numbers about usage are readings with a time and a source: say how old they are.
 - You never approve anything; approvals come to members as DMs from the approvals app.
@@ -137,6 +138,20 @@ def build_tools(ctx):
         if args["action"] not in ("status", "on", "off", "force_off"):
             return text("action must be status, on, off or force_off")
         return text(await ctx.power(args["host"], args["action"]))
+
+    @tool("approval_timeout", "A member's approval timeout: how long their approval requests "
+          "wait before they're denied as timed out. Without `minutes`, shows it. `minutes`: a "
+          "number (1 to 10080), 'none' (wait for the member), or 'default' (back to lab.yaml). "
+          "`until`: when the change ends (optional), e.g. 2026-10-23T18:00, in the member's "
+          "own time (their Slack time zone; the answer shows it in UTC too). `member`: a lab "
+          "id (default: "
+          "whoever is asking; only admins may change someone else's).",
+          {"type": "object", "properties": {"member": {"type": "string"},
+                                            "minutes": {"type": "string"},
+                                            "until": {"type": "string"}}})
+    async def approval_timeout(args):
+        return text(await ctx.approval_timeout(args.get("member"), args.get("minutes"),
+                                               args.get("until")))
 
     @tool("power_history", "Recent power actions on the lab's machines, yours included: when, "
           "on or off, and why (idle stop, a member's request in Slack or from the console, an "
@@ -217,7 +232,7 @@ def build_tools(ctx):
                                                propose, offer_deploy, check_slack_app,
                                                request_slack_app, request_github_token,
                                                redraw_app_icon, request_github_app,
-                                               check_github_app])
+                                               check_github_app, approval_timeout])
 
 
 class SecretaryBrain:
@@ -246,8 +261,8 @@ class SecretaryBrain:
                            "append": system_prompt(self.name, self.lab_name)},
             model=self.model, env=self.env, resume=conv.session_id)
         reply, last = None, None
-        clock = TurnClock()     # a Claude Code start-up per message (#69): measured
-        async with ClaudeSDKClient(options) as client:
+        # a Claude Code start-up per message (#69): measured, however the turn ends
+        async with TurnClock(log) as clock, ClaudeSDKClient(options) as client:
             await client.query(prompt)
             async for msg in client.receive_response():
                 if isinstance(msg, SystemMessage) and msg.subtype == "init":
@@ -255,7 +270,7 @@ class SecretaryBrain:
                     conv.session_id = msg.data.get("session_id") or conv.session_id
                     ctx.save()
                 elif isinstance(msg, AssistantMessage):
-                    clock.replied()
+                    clock.output(any(isinstance(b, TextBlock) for b in msg.content))
                     for b in msg.content:
                         if isinstance(b, TextBlock):
                             last = b.text
@@ -267,8 +282,6 @@ class SecretaryBrain:
                     reply = msg.result
                     if self.usage:
                         self.usage.run(f"conv:{conv.key}", msg.model_usage)
-        text, timing = clock.done()
-        log("timing", text, **timing)
         log("reply", reply or last or "")
         return reply or last or ""
 

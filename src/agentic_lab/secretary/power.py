@@ -1,8 +1,12 @@
 """VM power: the secretary starts and stops the lab's cloud hosts (DESIGN.md §4.1).
 
-Nebius, through its CLI, authenticated as a service account (only the secretary holds the
-key). A host can be powered if lab.yaml gives it `kind: cloud`, `provider: nebius` and its
-`instance` id. Other providers' hosts (AWS) work as lab hosts, without power control. The secretary's own host is never powered off by it.
+A host can be powered if lab.yaml gives it `kind: cloud`, a provider below and its
+`instance` id. The secretary's own host is never powered off by it.
+- Nebius, through its CLI, authenticated as a service account (only the secretary holds the
+  key).
+- AWS EC2 (#68), through boto3 with the secretary's own access key (an IAM user limited to
+  the lab's tagged instances, given through the intake), never the default credential
+  chain: an EC2 host's instance role is never picked up. In the host's `region:`.
 
 Idle stop: a host with `idle_stop_min` above 0 that runs workers is stopped once all
 its workers have had nothing running, queued or waiting, and its GPUs nothing on them
@@ -52,6 +56,12 @@ async def _cli(*args, timeout=120):
     return out.decode()
 
 
+# AWS instance states in the lab's words (the Nebius CLI's, which the rest of the lab uses)
+AWS_STATES = {"pending": "STARTING", "running": "RUNNING", "stopping": "STOPPING",
+              "stopped": "STOPPED", "shutting-down": "STOPPING", "terminated": "DELETED"}
+NAMES = {"nebius": "Nebius", "aws": "AWS"}
+
+
 def powerable(lab, host):
     """(ok, reason): may the secretary power this host?"""
     h = lab.hosts.get(host)
@@ -59,12 +69,12 @@ def powerable(lab, host):
         return False, f"no host {host!r} in lab.yaml"
     if h.get("kind") != "cloud":
         return False, f"{host} isn't a cloud VM: the lab can't power it"
-    if h.get("provider") != "nebius":
-        name = {"aws": "AWS"}.get(h.get("provider"), h.get("provider") or "an unknown provider")
-        return False, (f"{host} is on {name}: the lab has no power control for it (yet); "
-                       "start or stop it in the provider's console")
+    if h.get("provider") not in NAMES:
+        return False, (f"{host} is on {h.get('provider') or 'an unknown provider'}: the lab "
+                       "has no power control for it; start or stop it in the provider's console")
     if not h.get("instance"):
-        return False, f"{host} needs its Nebius instance id in lab.yaml (instance:) to be powered"
+        return False, (f"{host} needs its {NAMES[h['provider']]} instance id in lab.yaml "
+                       "(instance:) to be powered")
     sec_host = next((a.get("host") for a in lab.agents.values() if a.get("role") == "secretary"),
                     None)
     if host == sec_host:
@@ -72,27 +82,80 @@ def powerable(lab, host):
     return True, ""
 
 
-async def status(lab, host):
+AWS_KEY = "~/.config/agentic-lab/aws-key.json"     # {access_key_id, secret_access_key}
+
+
+def _ec2(region, key=AWS_KEY):
+    """An EC2 client with the secretary's key, explicitly: no default credential chain, so
+    an instance role or environment credentials are never used (tests replace it)."""
+    try:
+        with open(os.path.expanduser(key)) as f:
+            k = json.load(f)
+        creds = {"aws_access_key_id": k["access_key_id"],
+                 "aws_secret_access_key": k["secret_access_key"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        raise PowerError("the secretary has no AWS key (an admin: lab secret request "
+                         "service:secretary aws-key, then lab apply)") from None
+    try:
+        import boto3
+        from botocore.config import Config
+    except ImportError:
+        raise PowerError("boto3 isn't installed for the secretary (lab apply installs it "
+                         "when lab.yaml has AWS hosts)") from None
+    # endpoints from the environment or a config file can't redirect the signed calls
+    cfg = Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 3},
+                 ignore_configured_endpoint_urls=True)
+    try:
+        return boto3.client("ec2", region_name=region, config=cfg, **creds)
+    except Exception as e:      # no region anywhere, a bad profile...
+        raise PowerError(f"AWS: {e} (set region: on the host in lab.yaml)") from None
+
+
+async def _aws(h, call):
+    """One EC2 call for host `h`, off the event loop; AWS errors become PowerErrors."""
+    def run():
+        try:
+            return getattr(_ec2(h.get("region")), call)(InstanceIds=[h["instance"]])
+        except PowerError:
+            raise
+        except Exception as e:  # no credentials, access denied, unknown instance...
+            raise PowerError(f"AWS {call}: {str(e)[:300]}") from None
+    return await asyncio.to_thread(run)
+
+
+def _host(lab, host):
     ok, why = powerable(lab, host)
     if not ok:
         raise PowerError(why)
-    d = json.loads(await _cli("compute", "instance", "get", "--id", lab.hosts[host]["instance"],
+    return lab.hosts[host]
+
+
+async def status(lab, host):
+    h = _host(lab, host)
+    if h["provider"] == "aws":
+        r = await _aws(h, "describe_instances")
+        state = [i["State"]["Name"] for res in r.get("Reservations", [])
+                 for i in res.get("Instances", [])]
+        return AWS_STATES.get(state[0], state[0].upper()) if state else "UNKNOWN"
+    d = json.loads(await _cli("compute", "instance", "get", "--id", h["instance"],
                               "--format", "json"))
     return (d.get("status") or {}).get("state", "UNKNOWN")
 
 
 async def start(lab, host):
-    ok, why = powerable(lab, host)
-    if not ok:
-        raise PowerError(why)
-    await _cli("compute", "instance", "start", "--id", lab.hosts[host]["instance"])
+    h = _host(lab, host)
+    if h["provider"] == "aws":
+        await _aws(h, "start_instances")
+        return
+    await _cli("compute", "instance", "start", "--id", h["instance"])
 
 
 async def stop(lab, host):
-    ok, why = powerable(lab, host)
-    if not ok:
-        raise PowerError(why)
-    await _cli("compute", "instance", "stop", "--id", lab.hosts[host]["instance"])
+    h = _host(lab, host)
+    if h["provider"] == "aws":
+        await _aws(h, "stop_instances")
+        return
+    await _cli("compute", "instance", "stop", "--id", h["instance"])
 
 
 def note_gpu(snapshot):
