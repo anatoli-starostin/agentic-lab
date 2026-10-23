@@ -910,7 +910,7 @@ async def serve(lab_path, host, port):
     catch = CU.CatchUp(os.path.expanduser(f"{STATE}/catch-up.json"))  # missed deploys (#61)
     sec_host = lab.agents[sec_id].get("host")
     hosts_power = {}
-    down_noted = {}                 # host -> the day its worker being down was announced
+    down_noted = {}                 # host -> the day its agents being down was announced
     rounds = {"n": 0}
 
     async def check_power():

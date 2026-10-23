@@ -531,7 +531,8 @@ permissions are answered in Slack (§7).
   each member's approval timeout, worded as the secretary says it in Slack (the value,
   lab.yaml's or their own, and an override's end in their time zone and UTC).
 - **Machines**: power state, policy, idle since.
-- **Agents**: role, seat, host, service state.
+- **Agents**: role, seat, host, status (the one status of §4.1; a managers-only host's
+  managers also busy or idle, and why).
 - **Deployed**: the config and framework commits every host runs (flagged if unreviewed).
 - **Agents' logs** (`/logs/<agent>`): admins see every agent's; a member sees the whole log
   of their **dedicated** agents (guest turns in their manager's threads included), and only

@@ -33,7 +33,8 @@ PROFILE = "lab"
 BUSY = ("running", "queued", "awaiting_approval", "waiting")
 GPU_IDLE_READINGS = 5           # a GPU is idle only at 0% in this many readings in a row
 STALE_AFTER_MIN = 10       # idle timers older than this (the secretary was down) start over
-DOWN_GRACE_MIN = 60             # a running host whose worker is down this long is announced
+DOWN_GRACE_MIN = 60             # a running host whose agents (workers, or a managers-only
+                                # host's managers) are down this long is announced
 _gpu_recent = {}                # worker -> its GPUs' highest utilization, last readings
 
 

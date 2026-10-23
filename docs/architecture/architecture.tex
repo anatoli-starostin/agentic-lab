@@ -463,7 +463,8 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
     approval or waiting on its long runs, or a long run going (even CPU-only); or any process on a GPU (anyone's, not only the lab's); or a GPU above 0\%
     in any of its last 5 readings (about 75 s: a GPU counts as idle only after 0\% in
     several readings in a row); or someone keeps it awake with a \code{\textasciitilde/.lab-keep-awake}
-    file (below); or a manager runs there.
+    file (below); or a manager there counts (see Idle stop: on a host with workers only
+    with \code{idle\_stop\_with\_managers: false}; on a managers-only host, by its activity).
   \item \textbf{Working on a machine directly}: the lab recommends talking to agents, but
     anyone may still log in and work on a lab machine themselves, e.g. a CPU-only job the
     GPU checks can't see. To make sure the machine isn't stopped under them, they create
