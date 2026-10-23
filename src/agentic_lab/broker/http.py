@@ -150,8 +150,26 @@ def app(broker: Broker, tokens: dict[str, str]):
                                               "expires", "manager")} for r in broker.pending()]
         return JSONResponse({"pending": pending, "grants": grants})
 
+    async def timeouts(request: HttpRequest):
+        """Members' approval timeouts (#77), the secretary only: it checks who may change
+        whose (a member their own, an admin anyone's)."""
+        agent = caller(request)
+        if not agent:
+            return denied()
+        if role(agent) != "secretary":
+            return denied(403, "the secretary only")
+        try:
+            if request.method == "POST":
+                d = await body(request)
+                broker.set_timeout(d["human"], d.get("timeout_s"), str(d["by"]), d.get("until"))
+            return JSONResponse({h: dict(zip(("timeout_s", "source"), broker.timeout_for(h)))
+                                 for h in broker.humans})
+        except (BrokerError, KeyError, ValueError, TypeError) as e:
+            return JSONResponse({"error": str(e)}, status_code=400)
+
     return Starlette(routes=[
         Route("/v1/overview", overview, methods=["GET"]),
+        Route("/v1/timeouts", timeouts, methods=["GET", "POST"]),
         Route("/v1/requests", submit, methods=["POST"]),
         Route("/v1/requests/{rid}", get, methods=["GET"]),
         Route("/v1/requests/{rid}/context", context, methods=["POST"]),

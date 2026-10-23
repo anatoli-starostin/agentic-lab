@@ -24,7 +24,8 @@ warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
 TOOL_NAMES = ("lab_state", "worker_tasks", "task_result", "ask_member_for_claude_token",
               "announce", "power", "power_history", "read_lab_config", "propose_lab_change", "offer_deploy",
               "check_slack_app", "request_slack_app", "request_github_token",
-              "redraw_app_icon", "request_github_app", "check_github_app")
+              "redraw_app_icon", "request_github_app", "check_github_app",
+              "approval_timeout")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
 
 
@@ -138,6 +139,20 @@ def build_tools(ctx):
             return text("action must be status, on, off or force_off")
         return text(await ctx.power(args["host"], args["action"]))
 
+    @tool("approval_timeout", "A member's approval timeout: how long their approval requests "
+          "wait before they're denied as timed out. Without `minutes`, shows it. `minutes`: a "
+          "number (1 to 10080), 'none' (wait for the member), or 'default' (back to lab.yaml). "
+          "`until`: when the change ends (optional), e.g. 2026-10-23T18:00, in the member's "
+          "own time (their Slack time zone; the answer shows it in UTC too). `member`: a lab "
+          "id (default: "
+          "whoever is asking; only admins may change someone else's).",
+          {"type": "object", "properties": {"member": {"type": "string"},
+                                            "minutes": {"type": "string"},
+                                            "until": {"type": "string"}}})
+    async def approval_timeout(args):
+        return text(await ctx.approval_timeout(args.get("member"), args.get("minutes"),
+                                               args.get("until")))
+
     @tool("power_history", "Recent power actions on the lab's machines, yours included: when, "
           "on or off, and why (idle stop, a member's request in Slack or from the console, an "
           "admin's force_off). Use it when asked why a machine is on or off, or who stopped "
@@ -217,7 +232,7 @@ def build_tools(ctx):
                                                propose, offer_deploy, check_slack_app,
                                                request_slack_app, request_github_token,
                                                redraw_app_icon, request_github_app,
-                                               check_github_app])
+                                               check_github_app, approval_timeout])
 
 
 class SecretaryBrain:

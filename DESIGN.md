@@ -371,7 +371,12 @@ agent's service ◄── decision ─── broker (its own token, over the tai
 - **No timeout by default**: a request waits until its human answers. A member may set one
   (`timeout_s`); then an unanswered request is closed as denied when it runs out: silence
   counts as "no", never as "yes" (`on_timeout` can only be `deny`), and the agent is told
-  it was a timeout, not a refusal. If the agent stops waiting (its task is cancelled, a
+  it was a timeout, not a refusal. A request past its deadline can't be decided any more,
+  even by a click that arrives before the broker's sweep. Members change their own timeout
+  from Slack ("auto-deny my approvals after 15 minutes until 18:00", "no timeout", "back to
+  default"; admins anyone's) through the secretary's `approval_timeout` tool: the broker
+  keeps the override in its state, `lab.yaml` stays the default, and it applies to new
+  requests only (#77). If the agent stops waiting (its task is cancelled, a
   manager's turn is cut off), the request is **withdrawn**, so nobody is asked any more.
 - Grants are created only by the broker, after a verified human answer.
 
