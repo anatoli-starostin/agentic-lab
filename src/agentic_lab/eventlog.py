@@ -9,6 +9,8 @@ agent itself can't read.
 import datetime as dt
 import glob
 import json
+import asyncio
+import logging
 import os
 import threading
 import time
@@ -29,8 +31,11 @@ def short(x, n=MAX_TEXT):
 class TurnClock:
     """Where a conversation turn's time goes (#69): Claude Code's start-up (until its init
     message), its first output (text or a tool call), the first text the member sees, the
-    whole turn, and how it ended (ok, cut_off, error). Used as `async with`, it logs a
-    `timing` event however the turn ends, and lets an exception through unchanged."""
+    whole turn, and how it ended (ok, cut_off, error, cancelled: a shutdown or a cancelled
+    task, kept out of the errors). Used as `async with`, it logs a `timing` event however the
+    turn ends, and lets an exception through unchanged; a failing log write never replaces
+    it. Listed first in the `async with`, it exits after the client, so the total includes
+    Claude Code's shutdown: on purpose, the reply is posted only after it."""
 
     def __init__(self, log=None, now=time.monotonic):
         self.log, self.now, self.t0 = log, now, now()
@@ -41,10 +46,14 @@ class TurnClock:
         return self
 
     async def __aexit__(self, exc_type, exc, tb):
-        outcome = "error" if exc_type else "cut_off" if self.cut else "ok"
+        outcome = ("cancelled" if exc_type and issubclass(exc_type, asyncio.CancelledError)
+                   else "error" if exc_type else "cut_off" if self.cut else "ok")
         if self.log:
-            text, meta = self.done(outcome)
-            self.log("timing", text, **meta)
+            try:
+                text, meta = self.done(outcome)
+                self.log("timing", text, **meta)
+            except Exception as e:      # e.g. a full disk: the turn's own result stands
+                logging.getLogger(__name__).warning("timing not logged: %s", e)
         return False
 
     def _at(self, seen):

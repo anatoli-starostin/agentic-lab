@@ -83,6 +83,34 @@ def test_the_timing_is_logged_however_the_turn_ends():
     assert [m["outcome"] for m in logged] == ["ok", "cut_off", "error"]
 
 
+def test_a_cancelled_turn_isnt_an_error():
+    import pytest
+    logged = []
+
+    async def turn():
+        async with TurnClock(lambda kind, text="", **m: logged.append(m)):
+            raise asyncio.CancelledError()
+    with pytest.raises(asyncio.CancelledError):
+        asyncio.run(turn())
+    assert [m["outcome"] for m in logged] == ["cancelled"]
+
+
+def test_a_failing_log_never_replaces_the_turns_own_result():
+    import pytest
+
+    def full_disk(kind, text="", **m):
+        raise OSError("No space left on device")
+
+    async def turn(fail):
+        async with TurnClock(full_disk):
+            if fail:
+                raise RuntimeError("claude died")
+        return "reply"
+    with pytest.raises(RuntimeError, match="claude died"):    # not the OSError
+        asyncio.run(turn(True))
+    assert asyncio.run(turn(False)) == "reply"                # the reply still goes out
+
+
 class _Failing(_Client):
     async def receive_response(self):
         raise RuntimeError("the claude process exited")
