@@ -333,7 +333,8 @@ def stale_text(s):
              "config differs" if n is None else "",
              "framework differs" if s.get("framework_differs") else ""]
     return ("stale: " + ", ".join(p for p in parts if p)
-            + (" · catch-up gave up: deploy by hand" if s.get("gave_up") else ""))
+            + (" · catch-up gave up: deploy by hand" if s.get("gave_up") else "")
+            + (f" · catch-up blocked: {s['blocked']}" if s.get("blocked") else ""))
 
 
 def _st(x):

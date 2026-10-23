@@ -43,6 +43,11 @@ class AdminError(RuntimeError):
     pass
 
 
+# where a repository is (its URL may carry a token; git quotes paths): left out of reasons
+# shown to members
+_URLS = re.compile(r"(?:https?|ssh|git|file)://\S+|\S+@[\w.-]+:\S+|'[^'\s]*[/@:][^'\s]*'")
+
+
 def ssh_command(key=KEY):
     return (f"ssh -i {os.path.expanduser(key)} -o IdentitiesOnly=yes "
             "-o StrictHostKeyChecking=accept-new")
@@ -99,6 +104,28 @@ class ConfigCopy:
             self.git("clone", "--quiet", url, self.root, cwd=False, timeout=120)
         elif self.git("remote", "get-url", "origin").strip() != url:
             self.git("remote", "set-url", "origin", url)
+
+    def ensure_commit(self, commit):
+        """The clone exists and knows `commit`, fetched from main if it doesn't (the
+        catch-up decides with it, #95). Raises AdminError with the reason, URLs left out."""
+        try:
+            self._ensure_clone()
+            if not os.path.isdir(os.path.join(self.root, ".git")):
+                raise AdminError("no copy of the config repo (deploy key not added?)")
+            if not self._knows(commit):
+                self.git("fetch", "--quiet", "origin", CR.BRANCH)
+                if not self._knows(commit):
+                    raise AdminError(f"{commit[:10]} isn't on {CR.BRANCH} of the config repo")
+        except (AdminError, OSError, subprocess.SubprocessError) as e:
+            why = " ".join((str(e) or type(e).__name__).split())     # one line
+            raise AdminError(_URLS.sub("<repo>", why)) from None
+
+    def _knows(self, commit):
+        try:
+            self.git("cat-file", "-e", f"{commit}^{{commit}}")
+            return True
+        except AdminError:
+            return False
 
     def _path(self, name):
         d = os.path.dirname(self.rel)
