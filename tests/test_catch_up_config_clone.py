@@ -123,6 +123,46 @@ def test_a_count_git_couldnt_give_is_asked_again(tmp_path):
     assert CU.stale_info(st, SEC, str(clone))["gpu-b"]["config_behind"] == 1
 
 
+def test_a_clone_lost_after_a_good_round_is_noticed(tmp_path):
+    """A commit that checked out fine is checked again every CHECK_GAP_MIN: a clone lost
+    since is cloned again (GitHub identity), or blocked and said (deploy key)."""
+    import shutil
+    later = NOW + dt.timedelta(minutes=CU.CHECK_GAP_MIN + 1)
+    o, a = origin(tmp_path)
+    b = commit(o, "b\n")
+    clone, cu, d = tmp_path / "gh-clone", CU.CatchUp(str(tmp_path / "gh.json")), Deploys()
+    step(cu, state(b, a), clone, d, copy(clone, o).ensure_commit)
+    shutil.rmtree(clone)
+    step(cu, state(b, a), clone, d, copy(clone, o).ensure_commit, now=later)
+    assert (clone / ".git").is_dir() and cu.blocked == {} and d.said == []
+    clone, cu, d = tmp_path / "key-clone", CU.CatchUp(str(tmp_path / "key.json")), Deploys()
+    git(tmp_path, "clone", "-q", str(o), str(clone))
+    step(cu, state(b, a), clone, d, SA.ConfigCopy(clone=str(clone)).ensure_commit)
+    assert cu.checked[b]["ok"] and d.said == []
+    shutil.rmtree(clone)
+    step(cu, state(b, a), clone, d, SA.ConfigCopy(clone=str(clone)).ensure_commit, now=later)
+    assert "no copy of the config repo" in cu.blocked[b] and len(d.said) == 1
+
+
+def test_a_second_break_of_the_same_commit_is_said_again(tmp_path):
+    import shutil
+    o, a = origin(tmp_path)
+    clone = tmp_path / "config-repo"
+    git(tmp_path, "clone", "-q", str(o), str(clone))
+    b = commit(o, "b\n")
+    cu, d, st = CU.CatchUp(str(tmp_path / "cu.json")), Deploys(), state(b, a)
+    refresh = SA.ConfigCopy(clone=str(clone)).ensure_commit
+    gap = dt.timedelta(minutes=CU.CHECK_GAP_MIN + 1)
+    git(clone, "remote", "set-url", "origin", "file:///nowhere/config.git")
+    step(cu, st, clone, d, refresh)                             # breaks: said
+    git(clone, "remote", "set-url", "origin", str(o))
+    step(cu, st, clone, d, refresh, now=NOW + gap)              # recovers
+    assert cu.blocked == {} and len(d.said) == 1
+    shutil.rmtree(clone)
+    step(cu, st, clone, d, refresh, now=NOW + 2 * gap)          # breaks again: said again
+    assert len(d.said) == 2 and all("missed a deploy" in s for s in d.said)
+
+
 def test_newer_or_unreviewed_hosts_are_still_left_alone(tmp_path):
     o, a = origin(tmp_path)
     b = commit(o, "b\n")

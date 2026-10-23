@@ -230,13 +230,14 @@ class CatchUp:
 
 async def _refresh(cu, lab, refresh, commit, hosts, announce, now):
     """Make the clone know `commit` before deciding (#95). Tried at most every
-    CHECK_GAP_MIN; a failure is logged, kept for the web UI, and told the admins once."""
+    CHECK_GAP_MIN, also once it worked (the clone may be lost since); a failure is logged,
+    kept for the web UI, and told the admins once per break."""
     for d in (cu.checked, cu.blocked, cu.blocked_said):
         for c in [c for c in d if c != commit]:     # only the lab's commit matters
             del d[c]
     c = cu.checked.get(commit) or {}
-    if c.get("ok") or (c.get("last") and now - dt.datetime.fromisoformat(c["last"])
-                       < dt.timedelta(minutes=CHECK_GAP_MIN)):
+    if c.get("last") and now - dt.datetime.fromisoformat(c["last"]) \
+            < dt.timedelta(minutes=CHECK_GAP_MIN):
         return
     cu.checked[commit] = {"ok": False, "last": now.isoformat(timespec="seconds")}
     try:
@@ -256,6 +257,7 @@ async def _refresh(cu, lab, refresh, commit, hosts, announce, now):
         return
     cu.checked[commit]["ok"] = True
     cu.blocked.pop(commit, None)
+    cu.blocked_said.pop(commit, None)       # a later break of it is told again
 
 
 async def step(cu, lab, state, sec_host, start, result, announce, repo=None, now=None,
