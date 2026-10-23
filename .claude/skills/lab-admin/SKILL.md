@@ -168,6 +168,9 @@ asking before each one. The whole lab, one host, or one agent.
   `lab apply`). A run has the same filesystem rules as the agent's sandboxed commands
   (writes only in the working folder, /tmp and write grants): docs/long-runs.md lists what
   that means and what doesn't work in runs.
+- **The secretary refuses to power off an idle machine "dedicated to" someone:** only that
+  member or an admin may (every agent on it is theirs and `access: dedicated`); otherwise
+  the secretary stops it itself after its `idle_stop_min` (#91).
 - **A machine wasn't stopped when idle** (or the secretary refuses to power it off): it's
   *busy*. The secretary says why: a worker task running, queued, awaiting approval or
   waiting on its long runs; a long run going; a

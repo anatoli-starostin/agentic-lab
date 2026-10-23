@@ -471,8 +471,10 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
     isn't measured, so \code{idle\_stop\_with\_managers: false} makes managers keep the
     host busy A host with managers and no worker counts as busy (only an admin
     powers it off).
-  \item \textbf{Who may power}: any member may power a machine on, or off when idle;
-    powering off a busy machine is for admins only, after confirming (\code{force\_off}).
+  \item \textbf{Who may power}: any member may power a machine on. An idle machine
+    dedicated to a member (all its agents theirs and dedicated) only that member or an admin
+    may power off; any other idle machine, any member. Powering off a busy machine is for
+    admins only, after confirming (\code{force\_off}).
 \end{itemize}
 
 \subsection{Notices}

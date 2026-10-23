@@ -309,7 +309,9 @@ def test_admin_only_actions(monkeypatch):
         return asyncio.run(coro)
     assert P.busy(lab, "gpu-a", sec.latest["state"]) == "worker-a has 1 running"
     assert P.busy(lab, "gpu-b", sec.latest["state"]) is None
-    assert run(sec.ctx("bob").power("gpu-b", "off")).startswith("gpu-b: powering off")
+    # gpu-b is idle but dedicated to alice (#91): not bob's to stop; alice's own is fine
+    assert "dedicated to Alice" in run(sec.ctx("bob").power("gpu-b", "off"))
+    assert run(sec.ctx("alice").power("gpu-b", "off")).startswith("gpu-b: powering off")
     assert "Only an admin (Alice)" in run(sec.ctx("bob").power("gpu-a", "off"))
     assert "refused" in run(sec.ctx("bob").power("gpu-a", "force_off"))
     assert "use force_off" in run(sec.ctx("alice").power("gpu-a", "off"))

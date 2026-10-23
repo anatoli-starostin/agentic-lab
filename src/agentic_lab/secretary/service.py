@@ -551,8 +551,17 @@ class Secretary:
 
     async def power(self, host, action, why="asked in Slack", asked_by=None):
         """`asked_by`: the member asking (None: the secretary itself, e.g. an idle stop).
-        Powering off a busy machine is for admins only, and only with `force_off`."""
+        Powering off a busy machine is for admins only, and only with `force_off`; an idle
+        machine dedicated to a member, for that member or an admin (#91)."""
         if action in ("off", "force_off") and asked_by is not None:
+            mine = P.owner(self.lab, host)
+            if mine and asked_by != mine and not self.is_admin(asked_by):
+                name = (self.lab.humans.get(mine) or {}).get("name") or mine
+                stop = (self.lab.hosts.get(host) or {}).get("idle_stop_min")
+                return (f"refused: {host} is dedicated to {name}: only {name} or an admin "
+                        f"({self.admins()}) may power it off. "
+                        + (f"I stop it myself once it has been idle for {stop} min."
+                           if stop else "It has no idle stop (idle_stop_min: 0)."))
             busy = P.busy(self.lab, host, self.latest["state"])
             if busy and not self.is_admin(asked_by):
                 return (f"refused: {host} is busy ({busy}). Only an admin "

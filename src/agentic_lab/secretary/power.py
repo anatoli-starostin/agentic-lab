@@ -158,6 +158,19 @@ async def stop(lab, host):
     await _cli("compute", "instance", "stop", "--id", h["instance"])
 
 
+def owner(lab, host):
+    """The member a host is dedicated to (#91), or None (shared): every agent on it is a
+    worker or manager with `access: dedicated` (the default), all of the same member (their
+    `human`). A shared agent, agents of several members, the secretary or no agents: None."""
+    here = [x for x in lab.agents.values() if x.get("host") == host]
+    members = {x.get("human") for x in here}
+    if (here and len(members) == 1 and all(
+            x.get("role") in ("worker", "manager") and x.get("access", "dedicated") == "dedicated"
+            for x in here)):
+        return members.pop()
+    return None
+
+
 def note_gpu(snapshot):
     """Remember each worker's GPU utilization over the last readings (one per collection),
     and write its highest into the snapshot (`gpu_recent_max`): a GPU counts as idle only

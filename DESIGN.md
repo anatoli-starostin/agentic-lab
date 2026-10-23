@@ -113,7 +113,10 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   the broker's overview, local systemd units, machine power states (Nebius through its
   CLI; AWS EC2 through boto3 with the secretary's own access key, never an instance
   role).
-- **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
+- **Power**: any member may power a machine on. Off when it's idle: a machine
+  **dedicated** to a member (every agent on it `access: dedicated` and that member's) by
+  that member or an admin; any other machine by any member (#91). The secretary's own idle
+  stop is unaffected. A **busy** machine
   (a worker task running, queued, awaiting approval or waiting on its long runs; a long
   run going, even CPU-only; any process on a GPU, anyone's; a GPU
   above 0% in any of its last 5 readings, about 75 s; someone's `~/.lab-keep-awake`; a
