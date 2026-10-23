@@ -458,6 +458,11 @@ def cmd_apply_main(args):
         print("lab apply-main: a deploy is already running", flush=True)
         return done(False)
     os.environ["LAB_GIT_USER"] = cfg["config_owner"]       # its clone, its deploy key
+    if cfg.get("github"):       # or its GitHub identity: the service's git setup (#97)
+        from . import github as GH
+        home = os.path.expanduser(f"~{cfg['config_owner']}")
+        CR.GIT_ENV.update(GH.git_env(os.path.join(home, GH.SERVICE_ROOT.removeprefix("~/"))),
+                          GIT_TERMINAL_PROMPT="0")
     config = os.path.join(os.path.expanduser(f"~{cfg['config_owner']}"),
                           ".local/state/agentic-lab/config-repo", cfg.get("lab_rel", "lab.yaml"))
     commit = None
