@@ -960,7 +960,8 @@ async def serve(lab_path, host, port):
         try:                    # hosts back from a stop that missed a deploy (#61)
             await CU.step(catch, lab, latest["state"] or {}, sec_host,
                           lambda: SA.start_apply(catch_up=True), SA.apply_result, sec.announce,
-                          repo=os.path.expanduser(SA.CLONE))
+                          repo=os.path.expanduser(SA.CLONE),
+                          refresh=lambda c: sec.config_copy().ensure_commit(c))
         except Exception:
             log.exception("catching up hosts failed")
         await intake_watch()
@@ -998,7 +999,8 @@ async def serve(lab_path, host, port):
                     for user in list(sec.home_viewers):
                         await sec.publish_home(user)
                 stale = CU.stale_info(latest["state"], sec_host,
-                                      os.path.expanduser(SA.CLONE), catch.gave_up)
+                                      os.path.expanduser(SA.CLONE), catch.gave_up,
+                                      catch.blocked)
                 latest["state"]["hosts"] = {
                     h: {**(hosts_power.get(h) or {}), "idle_stop_min": (lab.hosts[h] or {}).get("idle_stop_min"),
                         "idle_since": (idle.idle_since.get(h).isoformat(timespec="seconds")
