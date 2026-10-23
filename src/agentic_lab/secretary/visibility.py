@@ -83,6 +83,7 @@ def _for_nobody(s):
             "service": a.get("service"), "queue": a.get("queue"), "gpu": a.get("gpu"),
             "gpus": a.get("gpus"), "gpu_processes": [{} for _ in a.get("gpu_processes") or []],
             "disk_free_gb": a.get("disk_free_gb"),
+            "status": {k: (a.get("status") or {}).get(k) for k in ("word", "level")},
             "keep_awake": [{"user": "someone"} for _ in a.get("keep_awake") or []],
             "recent": [{"id": "", "state": t.get("state"), "requester": "", "manager": "",
                         "created": t.get("created"), "finished": t.get("finished")}
@@ -93,6 +94,8 @@ def _for_nobody(s):
                                        "expires": r.get("expires")}
                                       for r in ap.get("pending") or []],
                           "grants": {}} if not ap.get("error") else {"error": "unavailable"},
-            "hosts": {h: {k: v.get(k) for k in ("state", "at", "idle_stop_min", "idle_since")}
+            "hosts": {h: {**{k: v.get(k) for k in ("state", "at", "idle_stop_min", "idle_since")},
+                          "status": {k: (v.get("status") or {}).get(k)
+                                     for k in ("word", "level")}}
                       for h, v in (s.get("hosts") or {}).items()},
             "applied": s.get("applied")}

@@ -92,7 +92,7 @@ async def collect(lab, workers: Workers, broker=None, local_units=None, managers
         try:
             st = await manager_status(lab, m, token)
             agents[m].update(up=True, usage=st.get("usage"), github=st.get("github") or {},
-                             applied=st.get("applied"))
+                             applied=st.get("applied"), activity=st.get("activity"))
         except (httpx2.HTTPError, ValueError) as e:
             agents[m].update(up=False, error=str(e))
     for w in workers.known():

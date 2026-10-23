@@ -34,6 +34,7 @@ from .. import selfadmin as SA
 from ..worker.usage import UsageLog, probe_loop, probe_now
 from . import home as H
 from . import catchup as CU
+from . import overview as OV
 from . import power as P
 from . import visibility as V
 from .status import check_seat, collect, manager_status
@@ -792,6 +793,14 @@ async def _broker_timeouts(body=None):
         return r.json()
 
 
+async def _activity(lab, manager, token):
+    """A manager's activity right now (its status endpoint; #70)."""
+    act = (await manager_status(lab, manager, token)).get("activity")
+    if act is None:
+        raise RuntimeError("it doesn't report its activity")
+    return act
+
+
 async def serve(lab_path, host, port):
     lab = load_lab(lab_path)
     mon = yaml.safe_load(_read_secret(f"{CONFIG}/monitor.yaml") or "") or {}
@@ -897,7 +906,8 @@ async def serve(lab_path, host, port):
             if hosts_power.get(host, {}).get("state") != "RUNNING":
                 continue
             # still idle right now? (a task may have arrived since the snapshot, #60)
-            why = await P.recheck(lab, host, workers, latest["state"])
+            why = await P.recheck(lab, host, workers, latest["state"], manager_activity=(
+                lambda m: _activity(lab, m, managers.get(m))))
             if why:
                 log.info("idle stop of %s called off: %s", host, why)
                 idle.idle_since.pop(host, None)
@@ -951,6 +961,7 @@ async def serve(lab_path, host, port):
     async def collector():
         while not stop.is_set():
             try:
+                prev = latest["state"]
                 latest["state"] = await collect(lab, workers, broker, units, managers,
                                                 own=(sec_id, usage))
                 await sec.timeout_zones(latest["state"])
@@ -969,6 +980,7 @@ async def serve(lab_path, host, port):
                                        if idle.idle_since.get(h) else None),
                         "stale": stale.get(h)}
                     for h in lab.hosts}
+                OV.annotate(latest["state"], lab, sec_host, prev)    # one status for all views
                 fd, tmp = tempfile.mkstemp(dir=os.path.dirname(snapshot_path))
                 with os.fdopen(fd, "w") as f:
                     json.dump(latest["state"], f)
@@ -1033,11 +1045,13 @@ async def serve(lab_path, host, port):
         except Exception as e:
             checks[human] = {"at": at, "error": f"check failed: {str(e)[:300]}"}
         try:
+            prev = latest["state"]
             hosts = (latest["state"] or {}).get("hosts")
             latest["state"] = await collect(lab, workers, broker, units, managers,
                                             own=(sec_id, usage))
             if hosts is not None:
                 latest["state"]["hosts"] = hosts
+            OV.annotate(latest["state"], lab, sec_host, prev)
             await sec.timeout_zones(latest["state"])
         except Exception:
             log.exception("collecting after a usage check failed")

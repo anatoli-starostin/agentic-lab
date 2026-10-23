@@ -1,6 +1,7 @@
 """A manager's status endpoint, for the secretary (tailnet only).
 
-    GET  /v1/status?hours=24   {"usage": ..., "events": [...]}   (bearer: the secretary's token)
+    GET  /v1/status?hours=24   {"usage": ..., "events": [...], "activity": ...}
+                               (bearer: the secretary's token; activity: Manager.activity)
     POST /v1/usage/check       {"limits": ...}: read the seat's limits now (one tiny request)
 
 Workers answer the same over MCP; a manager has no MCP server, so it serves this instead.
@@ -16,7 +17,7 @@ from starlette.routing import Route
 from ..configrepo import applied_versions
 
 
-def app(token, usage, events, check=None, github=None):
+def app(token, usage, events, check=None, github=None, activity=None):
     def authorized(request):
         scheme, _, given = request.headers.get("authorization", "").partition(" ")
         return scheme.lower() == "bearer" and token and hmac.compare_digest(
@@ -32,7 +33,8 @@ def app(token, usage, events, check=None, github=None):
         return JSONResponse({"usage": usage.load(),
                              "events": events.read(since=dt.timedelta(hours=hours), limit=2000),
                              "github": github() if github is not None else {},
-                             "applied": applied_versions()})      # missed deploys (#61)
+                             "applied": applied_versions(),       # missed deploys (#61)
+                             "activity": activity() if activity is not None else None})
 
     async def check_usage(request: Request):
         if not authorized(request):
