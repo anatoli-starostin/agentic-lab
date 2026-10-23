@@ -158,7 +158,9 @@ class Brain:
                 return PermissionResultAllow()
             log("approval", "asked: " + tool_summary(tool_name, tool_input))
             d = await self.approver.ask(asker, tool_name, tool_input, list(violations))
-            log("approval", f"decided: {d.kind}")
+            # with its message, as the worker logs it: a timeout reads differently from a no
+            log("approval", f"decided: {d.kind}" + (f" ({d.message[:200]})" if d.message
+                                                     else ""))
             if d.kind == "allow":           # as approved; started confined (policy/confine)
                 return PermissionResultAllow(
                     updated_input=approved_input(tool_name, tool_input))

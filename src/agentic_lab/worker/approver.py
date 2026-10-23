@@ -23,8 +23,10 @@ def _explain(decision):
     """What the agent is told for a decision that isn't 'allow' or 'grant'."""
     action, note = decision.get("action"), decision.get("note")
     if action == "timeout":
-        return ("No one answered in time. That's a timeout, not a no: look for a way to do "
-                "this inside the sandbox first, and ask again only if there's no other way.")
+        return ("Nobody answered in time, so this wasn't run, but it wasn't refused either: the "
+                "action isn't forbidden and your goal still stands. Look for a way to reach it "
+                "inside the sandbox (your working folder, /tmp, allowed hosts); ask again only "
+                "if there's no other way.")
     msg = "A human denied this."
     if note:
         msg += f" They said: {note}"

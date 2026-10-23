@@ -178,6 +178,16 @@ def test_worker_approver_end_to_end(broker, free_port):
         th.join()
 
 
+def test_a_timeout_isnt_told_as_a_refusal():
+    from agentic_lab.worker.approver import _explain
+    timeout = _explain({"action": "timeout"})
+    deny = _explain({"action": "deny", "note": "not now"})
+    assert timeout != deny
+    assert "wasn't refused" in timeout and "isn't forbidden" in timeout
+    assert "inside the sandbox" in timeout and "denied" not in timeout
+    assert deny.startswith("A human denied this.") and "They said: not now" in deny
+
+
 # ── the Slack channel ────────────────────────────────────────────────────────
 
 class FakeWeb:
