@@ -78,8 +78,18 @@ def test_aws_errors_say_what_went_wrong(ec2):
         asyncio.run(P.stop(lab(), "gpu"))
 
 
-def test_no_boto3_is_a_clear_error(monkeypatch):
+def key_file(tmp_path, monkeypatch):
+    import json
+    d = tmp_path / ".config" / "agentic-lab"
+    d.mkdir(parents=True)
+    (d / "aws-key.json").write_text(json.dumps({"access_key_id": "AKIAEXAMPLEEXAMPLE00",
+                                                "secret_access_key": "x" * 40}))
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+
+def test_no_boto3_is_a_clear_error(monkeypatch, tmp_path):
     import builtins
+    key_file(tmp_path, monkeypatch)
     real = builtins.__import__
 
     def no_boto(name, *a, **k):
@@ -137,3 +147,92 @@ def test_lab_apply_installs_the_sdk_only_for_aws_labs():
     other = next(a["host"] for a in lb.agents.values() if a.get("role") == "worker")
     assert other != sec and "boto3" not in A.script(A.host_plan(          # the secretary's only
         lb, other, SimpleNamespace(get=lambda k: "t"), lambda owner, name: None))
+
+
+class FakeBoto3:
+    def __init__(self):
+        self.clients = []
+
+    def client(self, service, **kw):
+        self.clients.append((service, kw))
+        return FakeEC2(state="running")
+
+
+@pytest.fixture
+def boto(monkeypatch):
+    import sys
+    import types
+    fake = FakeBoto3()
+    monkeypatch.setitem(sys.modules, "boto3", fake)
+    config = types.ModuleType("botocore.config")
+    config.Config = lambda **kw: kw
+    monkeypatch.setitem(sys.modules, "botocore", types.ModuleType("botocore"))
+    monkeypatch.setitem(sys.modules, "botocore.config", config)
+    return fake
+
+
+def test_the_secretarys_own_key_and_nothing_else(boto, tmp_path, monkeypatch):
+    key_file(tmp_path, monkeypatch)
+    assert asyncio.run(P.status(lab(), "gpu")) == "RUNNING"
+    service, kw = boto.clients[0]
+    assert service == "ec2" and kw["region_name"] == "eu-west-1"
+    assert kw["aws_access_key_id"] == "AKIAEXAMPLEEXAMPLE00"
+    assert kw["aws_secret_access_key"] == "x" * 40
+
+
+def test_no_key_no_call_never_the_default_chain(boto, tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))                     # no key file
+    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "AKIAFROMTHEENVIRONMENT")
+    with pytest.raises(P.PowerError, match="no AWS key"):
+        asyncio.run(P.status(lab(), "gpu"))
+    assert boto.clients == []                                    # boto3 never asked
+
+
+def test_the_key_comes_through_the_intake():
+    import json
+
+    from agentic_lab.secrets import intake as I
+    v = json.loads(I.check_value("aws-key", {"access_key_id": "AKIAEXAMPLEEXAMPLE00",
+                                             "secret_access_key": "x" * 40}))
+    assert v == {"access_key_id": "AKIAEXAMPLEEXAMPLE00", "secret_access_key": "x" * 40}
+    with pytest.raises(I.IntakeError):
+        I.check_value("aws-key", {"access_key_id": "nope", "secret_access_key": "x" * 40})
+
+
+def test_lab_apply_installs_it_for_the_secretary_only():
+    from pathlib import Path
+
+    from agentic_lab import apply as A
+    from agentic_lab import registry
+    lb = registry.load(Path(__file__).parent.parent / "examples" / "minimal" / "lab.yaml")
+    sec = next(a for a, x in lb.agents.items() if x.get("role") == "secretary")
+    user = lb.unix_user(sec)
+    plan = A.host_plan(lb, lb.agents[sec]["host"], SimpleNamespace(get=lambda k: "t"),
+                       lambda owner, name: '{"access_key_id": "AKIA0"}'
+                       if (owner, name) == (f"service:{sec}", "aws-key") else None)
+    path = f"/home/{user}/.config/agentic-lab/aws-key.json"
+    assert plan["files"][path][:2] == (user, "600")
+
+
+def test_doctor_checks_the_key_against_each_aws_host(tmp_path):
+    import json
+    import os
+    import pwd
+
+    from agentic_lab import doctor as D
+    me = pwd.getpwuid(os.getuid())
+    pw = SimpleNamespace(pw_dir=str(tmp_path), pw_uid=me.pw_uid, pw_name=me.pw_name)
+    assert D.aws_checks(lab(), pw)[0].status == D.FAIL                  # no key yet
+    d = tmp_path / ".config" / "agentic-lab"
+    d.mkdir(parents=True)
+    (d / "aws-key.json").write_text(json.dumps({"access_key_id": "AKIA0",
+                                                "secret_access_key": "x"}))
+    os.chmod(d / "aws-key.json", 0o600)
+    asked = []
+
+    def ec2(region, key):
+        asked.append((region, key))
+        return FakeEC2()
+    res = D.aws_checks(lab(), pw, ec2=ec2)
+    assert [r.status for r in res] == [D.OK, D.OK, D.OK]     # the key, then each AWS host
+    assert asked == [(None, str(d / "aws-key.json")), ("eu-west-1", str(d / "aws-key.json"))]

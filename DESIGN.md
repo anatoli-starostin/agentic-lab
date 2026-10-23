@@ -111,8 +111,8 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   Without one, a deploy key (write access) and the admin opens the PR from its link. §4.4.
 - **State**: workers over MCP (a read-only monitoring token), managers' status endpoints,
   the broker's overview, local systemd units, machine power states (Nebius through its
-  CLI; AWS EC2 through boto3 with the default credential chain, the secretary's instance
-  role on EC2).
+  CLI; AWS EC2 through boto3 with the secretary's own access key, never an instance
+  role).
 - **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
   (a worker task running, queued, awaiting approval or waiting on its long runs; a long
   run going, even CPU-only; any process on a GPU, anyone's; a GPU
@@ -471,7 +471,7 @@ hosts:
   sec-01: {kind: onprem}
   mgr-01: {kind: cloud, provider: aws, instance: i-..., region: <region>,
            idle_stop_min: 0, ssh_user: ubuntu}
-                                   # AWS: powered with the secretary's instance role;
+                                   # AWS: powered with the secretary's access key;
                                    #   public IPv4, zero inbound, EBS root (docs/install.md)
   gpu-a:  {kind: cloud, provider: nebius, instance: computeinstance-...,
            idle_stop_min: 30, tailnet_name: gpu-a.example.ts.net}

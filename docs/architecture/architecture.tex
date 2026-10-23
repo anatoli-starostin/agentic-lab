@@ -449,8 +449,8 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
 \begin{itemize}
   \item \textbf{Power}: the secretary starts and stops the cloud VMs listed in
     \code{lab.yaml} (\code{kind: cloud}, \code{provider}, \code{instance}): on Nebius with
-    a service account that may only view, start and stop VMs; on AWS with its instance
-    role, limited to the lab's tagged instances. Never its own host.
+    a service account that may only view, start and stop VMs; on AWS with an access key
+    limited to the lab's tagged instances (never an instance role). Never its own host.
   \item \textbf{Busy} means: a worker there has a task running, queued, awaiting
     approval or waiting on its long runs, or a long run going (even CPU-only); or any process on a GPU (anyone's, not only the lab's); or a GPU above 0\%
     in any of its last 5 readings (about 75 s: a GPU counts as idle only after 0\% in

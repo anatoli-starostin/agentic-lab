@@ -28,7 +28,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-NAMES = ("claude-token", "slack-app", "nebius-sa", "github-token", "github-app")
+NAMES = ("claude-token", "slack-app", "nebius-sa", "github-token", "github-app", "aws-key")
 # what each secret is made of, for the web form: (field, label, required prefix)
 FIELDS = {
     "claude-token": [("value", "Claude token (sk-ant-…)", "sk-ant-")],
@@ -40,6 +40,9 @@ FIELDS = {
     # a GitHub App's private key (the .pem GitHub downloads), owner service:github-<slug>
     "github-app": [("private_key", "The app's private key (the .pem file's contents)",
                     "-----BEGIN")],
+    # an AWS IAM user's access key, for VM power on AWS (the secretary's only, #68)
+    "aws-key": [("access_key_id", "Access key id (AKIA…)", "AKIA"),
+                ("secret_access_key", "Secret access key", "")],
     "nebius-sa": [("service_account_id", "Service account id (serviceaccount-…)", "serviceaccount-"),
                   ("public_key_id", "Public key id (publickey-…)", "publickey-"),
                   ("private_key", "Private key (PEM)", "-----BEGIN")],
@@ -316,6 +319,8 @@ def check_value(name, value):
         raise IntakeError("that doesn't look like a Claude token")
     if name == "slack-app":
         return f"SLACK_BOT_TOKEN={out['bot']}\nSLACK_APP_TOKEN={out['app']}"
+    if name == "aws-key":
+        return json.dumps(out)
     if name == "nebius-sa":
         if "PRIVATE KEY-----" not in out["private_key"]:
             raise IntakeError("that doesn't look like a PEM private key")

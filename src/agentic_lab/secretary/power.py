@@ -4,8 +4,9 @@ A host can be powered if lab.yaml gives it `kind: cloud`, a provider below and i
 `instance` id. The secretary's own host is never powered off by it.
 - Nebius, through its CLI, authenticated as a service account (only the secretary holds the
   key).
-- AWS EC2 (#68), through boto3 with the default credential chain: on an EC2 instance, its
-  instance role (no stored keys), in the host's `region:` (lab check requires it).
+- AWS EC2 (#68), through boto3 with the secretary's own access key (an IAM user limited to
+  the lab's tagged instances, given through the intake), never the default credential
+  chain: an EC2 host's instance role is never picked up. In the host's `region:`.
 
 Idle stop: a host with `idle_stop_min` above 0 that runs workers is stopped once all
 its workers have had nothing running, queued or waiting, and its GPUs nothing on them
@@ -81,8 +82,20 @@ def powerable(lab, host):
     return True, ""
 
 
-def _ec2(region):
-    """An EC2 client from the default credential chain (tests replace it)."""
+AWS_KEY = "~/.config/agentic-lab/aws-key.json"     # {access_key_id, secret_access_key}
+
+
+def _ec2(region, key=AWS_KEY):
+    """An EC2 client with the secretary's key, explicitly: no default credential chain, so
+    an instance role or environment credentials are never used (tests replace it)."""
+    try:
+        with open(os.path.expanduser(key)) as f:
+            k = json.load(f)
+        creds = {"aws_access_key_id": k["access_key_id"],
+                 "aws_secret_access_key": k["secret_access_key"]}
+    except (OSError, ValueError, KeyError, TypeError):
+        raise PowerError("the secretary has no AWS key (an admin: lab secret request "
+                         "service:secretary aws-key, then lab apply)") from None
     try:
         import boto3
         from botocore.config import Config
@@ -91,7 +104,7 @@ def _ec2(region):
                          "when lab.yaml has AWS hosts)") from None
     cfg = Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 3})
     try:
-        return boto3.client("ec2", region_name=region, config=cfg)
+        return boto3.client("ec2", region_name=region, config=cfg, **creds)
     except Exception as e:      # no region anywhere, a bad profile...
         raise PowerError(f"AWS: {e} (set region: on the host in lab.yaml)") from None
 
