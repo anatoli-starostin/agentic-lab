@@ -172,7 +172,7 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   first, and says so in the task's result; a new task is told when disk is low.
 - **Watching and debugging** (the same for every agent): the agent's own **event log**
   (messages, tool calls, results, approvals, task events; for managers and the secretary,
-  each turn's timing, however it ended (ok, cut off, error): Claude Code's start-up, its
+  each turn's timing, however it ended (ok, cut off, error, cancelled): Claude Code's start-up, its
   first output, the first text the member sees, the total), shown to admins in the web UI;
   `sudo lab debug <agent>` stops its service and opens **the same session** in the classic
   Claude Code console, as the agent's user, with its sandbox; the service restarts on exit.
