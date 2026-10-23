@@ -65,6 +65,10 @@ BUSY = ("Still working on the previous message here; I'll read this right after 
         "(a few minutes at most).")
 
 
+
+def _now():
+    return dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+
 class Manager:
     def __init__(self, lab, agent_id, slack, brain, workers, broker, state, memory, workdir):
         self.lab, self.agent_id = lab, agent_id
@@ -72,6 +76,15 @@ class Manager:
         self.state, self.memory, self.workdir = state, memory, workdir
         self._locks = {}
         self._told_busy = set()         # conversations told "still working" this busy spell
+        self.started_at, self.last_turn_at = _now(), None
+
+    def activity(self):
+        """What the secretary judges this manager's idleness by (#70): when it started, its
+        last turn (set when a turn starts and again when it ends), turns going now, and
+        tasks it still follows on workers."""
+        return {"started_at": self.started_at, "last_turn_at": self.last_turn_at,
+                "turns_in_progress": sum(lock.locked() for lock in self._locks.values()),
+                "followed_tasks_open": len(self.state.open_tasks())}
 
     def may_use(self, human):
         """Every lab member may talk to any manager; for a dedicated manager, other members
@@ -110,6 +123,7 @@ class Manager:
     async def _turn(self, conv, requester, private, prompt):
         lock = self._locks.setdefault(conv.key, asyncio.Lock())
         async with lock:                # one turn at a time per conversation
+            self.last_turn_at = _now()
             self._told_busy.discard(conv.key)
             conv.last_requester = requester
             ctx = self._ctx(conv, requester, private)
@@ -128,6 +142,8 @@ class Manager:
             except Exception as e:
                 log.exception("turn failed in %s", conv.key)
                 return f"Sorry, something went wrong on my side ({type(e).__name__})."
+            finally:                    # idle counts from a turn's end (turns run to 5 min)
+                self.last_turn_at = _now()
             if ctx.guest and not private and reply and reply.strip() != SILENT:
                 conv.meanwhile = (conv.meanwhile + [f"you (to {ctx.guest_name}, a guest): "
                                                     f"{reply[:500]}"])[-MEANWHILE_MAX:]
@@ -247,7 +263,7 @@ async def serve(lab_path, agent_id, host=None, port=None):
         status_server = uvicorn.Server(uvicorn.Config(
             status_app(_read_secret(f"{CONFIG}/monitor-token"), usage, events,
                        check=(lambda: probe_now(usage, seat)) if seat else None,
-                       github=lambda: GH.problems(lab, agent_id)),
+                       github=lambda: GH.problems(lab, agent_id), activity=mgr.activity),
             host=host, port=port, log_level="warning"))
         status_server.install_signal_handlers = lambda: None   # this process handles signals
         asyncio.create_task(status_server.serve())

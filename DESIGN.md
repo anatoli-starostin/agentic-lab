@@ -123,8 +123,17 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   offline in Slack until someone asks the secretary to power the host on. A manager's own
   work (a turn, following a task on another host) isn't measured, so a host where that
   matters sets `idle_stop_with_managers: false`: any manager there then counts as busy.
-  A host with managers and **no worker** counts as busy: nothing measures it, so only an
-  admin may power it off (it's never idle-stopped either).
+  A host that runs **only managers** is judged by their activity (#70): it's idle when no
+  manager there is answering, none has had a turn (or started) within `idle_stop_min`,
+  none follows an unfinished task, and none has an approval pending; then it's stopped
+  like a worker host (its `idle_stop_min` above 0 opts it in). A manager that can't be
+  reached, or doesn't report its activity, keeps the host busy (admins only).
+- **Status in both views** (#74): the secretary computes one status per host (running,
+  stopped, starting/stopping, always on for its own host; for a host without power
+  control, running or unreachable from its agents) and per agent (up; "host stopped" when
+  its host is powered off; "down" with the reason and since when otherwise) into the
+  snapshot, and the Home tab and the web UI both show it. Every host in lab.yaml is
+  listed, and the Home tab lists managers, the person's own first.
 - **Keep-awake**: someone working on a machine directly (not through agents, e.g. a
   CPU-only job) creates `~/.lab-keep-awake` in their home (first line, optional: why); while
   it's there the machine is busy, and the web UI shows who keeps it awake. A root timer

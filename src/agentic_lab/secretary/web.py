@@ -311,10 +311,11 @@ def _hosts(state):
     hosts = state.get("hosts") or {}
     if not hosts:
         return ""
-    cls = {"RUNNING": "ok", "STOPPED": "muted", "STOPPING": "warn", "STARTING": "warn"}
     rows = "".join(
-        f"<tr><td><b>{e(h)}</b></td><td class='{cls.get(v.get('state'), 'muted')}'>"
-        f"{e((v.get('state') or '—').lower())}</td><td class='small'>{e(f"idle stop {v['idle_stop_min']} min" if v.get('idle_stop_min') else 'no idle stop')}"
+        f"<tr><td><b>{e(h)}</b></td><td class='{e(_st(v)['level'])}'>{e(_st(v)['word'])}"
+        + (f"<div class='muted small'>{e(_st(v)['hint'])}</div>" if _st(v).get("hint") else "")
+        + "</td><td class='small'>"
+        + e(f"idle stop {v['idle_stop_min']} min" if v.get("idle_stop_min") else "no idle stop")
         + (f"<div class='muted small'>idle since {e(ago(v['idle_since']))}</div>"
            if v.get("idle_since") else "")
         + (f"<div class='small {'bad' if v['stale'].get('gave_up') else 'warn'}'>"
@@ -335,6 +336,11 @@ def stale_text(s):
             + (" · catch-up gave up: deploy by hand" if s.get("gave_up") else ""))
 
 
+def _st(x):
+    """A host's or agent's one status (secretary/overview.py), or a neutral one."""
+    return x.get("status") or {"word": "—", "level": "muted"}
+
+
 def _agents(state):
     rows = "".join(
         f"<tr><td><b><a href='/logs/{e(aid)}'>{e(a['name'])}</a></b>"
@@ -342,8 +348,11 @@ def _agents(state):
         + "".join(f"<div class='small bad'>⚠ GitHub {e(n)}: {e(p)}</div>"
                   for n, p in (a.get("github") or {}).items()) + "</td>"
         f"<td>{e(a.get('role'))}</td><td>{e(a.get('human'))}</td><td>{e(a.get('host'))}</td>"
-        f"<td class='{'ok' if a.get('service') == 'active' or a.get('up') else 'muted'}'>"
-        f"{e(a.get('service') or ('up' if a.get('up') else '—'))}</td></tr>"
+        f"<td class='{e(_st(a)['level'])}'>{e(_st(a)['word'])}"
+        + "".join(f"<div class='muted small'>{e(x)}</div>" for x in (
+            _st(a).get("hint"), _st(a).get("reason"),
+            f"since {ago(_st(a)['since'])}" if _st(a).get("since") else "") if x)
+        + "</td></tr>"
         for aid, a in state["agents"].items())
     return ("<section><h2>Agents</h2><table><tr><th>Agent</th><th>Role</th><th>Seat</th>"
             "<th>Host</th><th>Status</th></tr>" + rows + "</table></section>")

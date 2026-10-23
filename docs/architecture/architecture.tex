@@ -430,8 +430,10 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
     The request's tailnet address must not be a lab host; \code{tailscale whois} must name
     a person (not a tagged device) whose login is a member's in \code{lab.yaml}. Tailscale authenticates
     every packet with the device's key, so the address can't be forged.
-  \item \textbf{A Slack Home tab}: a personal digest (your usage, your tasks, approvals
-    waiting for you, machines) with a link to the web UI.
+  \item \textbf{A Slack Home tab}: a personal digest (your usage, managers and workers,
+    your tasks, approvals waiting for you, every machine) with a link to the web UI. Both
+    show the same status for each host and agent, computed once in the snapshot: an agent
+    on a powered-off host reads ``host stopped'', not ``down''.
 \end{itemize}
 
 \subsection{Claude usage}
@@ -468,9 +470,10 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
   \item \textbf{Idle stop}: a host with workers is stopped after its
     \code{idle\_stop\_min} minutes (if above 0) of not being busy. It's judged by its workers alone: a
     manager there goes offline in Slack until the host is powered on. A manager's own work
-    isn't measured, so \code{idle\_stop\_with\_managers: false} makes managers keep the
-    host busy A host with managers and no worker counts as busy (only an admin
-    powers it off).
+    isn't measured there, so \code{idle\_stop\_with\_managers: false} makes managers keep
+    the host busy. A host with only managers is judged by their activity: no turn going or
+    within \code{idle\_stop\_min}, no task they follow, no approval of theirs pending; a
+    manager that can't be reached keeps it busy.
   \item \textbf{Who may power}: any member may power a machine on, or off when idle;
     powering off a busy machine is for admins only, after confirming (\code{force\_off}).
 \end{itemize}
