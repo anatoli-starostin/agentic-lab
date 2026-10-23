@@ -157,8 +157,11 @@ What it took:
   Give members SSH without `sudo`.
 - **The secret intake is open only minutes at a time** (#63): it runs while a one-time
   code is open (5 minutes each), links go only by DM to the person who pastes the secret,
-  and it runs hardened. It still runs as the secretary's Unix user: a flaw in it, while
-  it runs, reaches what the secretary holds.
+  and it runs hardened; other users' processes aren't visible to it
+  (`ProtectProc=invisible`); the secretary's are, since it runs as the same user. A flaw
+  in it, while it runs, reaches what the secretary holds within its unit (the secretary's
+  state folder, the secrets it handles), and can still read the environments of the
+  secretary's processes and signal them.
 - **What members see of each other** (#62): the web UI, the Home tab and the secretary
   show a member the lab's state (machines, task states and owners, usage), not other
   members' instructions, results, files or approval details; anonymous tailnet devices and

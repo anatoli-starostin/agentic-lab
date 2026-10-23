@@ -66,6 +66,8 @@ def test_the_intake_is_started_by_its_path_unit_and_hardened():
                      "ProtectControlGroups=yes"):
             assert line in unit.splitlines(), line
     assert "BindPaths=/home/lab-secretary/.local/state/agentic-lab" in svc
+    # other users' processes aren't visible to it (the secretary's are: same user, #63)
+    assert "ProtectProc=invisible" in svc.splitlines()
     assert "BindReadOnlyPaths=/home/lab-broker/.config/agentic-lab" in broker
 
 
