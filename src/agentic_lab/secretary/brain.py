@@ -40,6 +40,10 @@ agents. You keep the lab running and answer questions about it, in Slack.
   powering the lab's cloud machines on and off when asked by someone who may (say what it
   costs to leave a GPU machine on; idle GPU machines are stopped automatically). Asked why a machine
   is on or off, or who stopped it: power_history (your own idle stops are in it).
+- Each message starts with "[lab, as deployed now]": the lab's machines and what runs on
+  each, from the deployed lab.yaml. It's always right; what you remember from earlier in a
+  conversation may be out of date (agents move between machines). For an agent's machine
+  ("power on my manager"), call power with `agent`, never with a host you remember.
 - What you don't do: research, experiments, writing code, analysing data in depth. Say
   kindly that this is a manager's job and name the member's manager if you know it
   (lab_state lists the agents).
@@ -130,15 +134,29 @@ def build_tools(ctx):
         ok = await ctx.announce(args["text"])
         return text("posted" if ok else "no announcements channel is configured")
 
-    @tool("power", "A lab machine's power: action 'status', 'on', 'off' or 'force_off', for a "
-          "host id from lab.yaml (see lab_state). On and off: a machine dedicated to a member "
-          "by that member or an admin, any other by an admin only. 'off' refuses a busy "
-          "machine and says what's busy; 'force_off' stops it anyway: use it only after "
+    @tool("power", "A lab machine's power: action 'status', 'on', 'off' or 'force_off', for "
+          "`agent` (an agent's id or name, e.g. a member's manager: its machine) or `host` (a "
+          "host id from lab.yaml). When the ask is about an agent (\"my manager\", a name), "
+          "pass `agent`, never a host you remember. On and off: a machine dedicated to a "
+          "member by that member or an admin, any other by an admin only. 'off' refuses a "
+          "busy machine and says what's busy; 'force_off' stops it anyway: use it only after "
           "whoever asked confirmed in this conversation that that work may be lost. Never "
-          "powers off the secretary's own host.", {"host": str, "action": str})
+          "powers off the secretary's own host.",
+          {"type": "object", "properties": {"agent": {"type": "string"},
+                                            "host": {"type": "string"},
+                                            "action": {"type": "string"}},
+           "required": ["action"]})
     async def power(args):
-        if args["action"] not in ("status", "on", "off", "force_off"):
+        if args.get("action") not in ("status", "on", "off", "force_off"):
             return text("action must be status, on, off or force_off")
+        if args.get("agent"):           # the agent's machine from lab.yaml, not from memory (#99)
+            try:
+                host, name = ctx.host_of(args["agent"])
+            except Exception as e:
+                return text(str(e))
+            return text(f"{name} runs on {host}. " + await ctx.power(host, args["action"]))
+        if not args.get("host"):
+            return text("say which: `agent` (an agent's id or name) or `host`")
         return text(await ctx.power(args["host"], args["action"]))
 
     @tool("approval_timeout", "A member's approval timeout: how long their approval requests "

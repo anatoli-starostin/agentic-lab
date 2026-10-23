@@ -573,7 +573,10 @@ anything else goes to the broker.
   host are separated by Unix permissions. Nobody runs anything else as these users (GPU
   agents allow Unix sockets, so a socket server running as the agent's user would be a way
   out). Humans log in as themselves; `sudo lab debug <agent>` switches to the agent's user.
-- Sessions persist on disk and resume after restarts.
+- Sessions persist on disk and resume after restarts. A resumed session may remember an
+  older layout of the lab (agents move between machines), so every secretary turn starts
+  with the layout as deployed, and its `power` tool takes an agent and looks its machine
+  up in `lab.yaml` (#99).
 - **Every agent is attached to a human, in terms of tokens**: `human:` names the member whose
   Claude seat it runs on (a `claude setup-token` token, valid a year). Who may *use* the
   agent is set separately (`access`). No per-token billing in this version.

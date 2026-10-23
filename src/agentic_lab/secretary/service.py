@@ -105,6 +105,7 @@ class Secretary:
             announce=self.announce, save=self.state.save,
             power=lambda host, action: self.power(host, action, f"asked by {who} {self.via}",
                                                   asked_by=human),
+            host_of=lambda agent: P.host_of(self.lab, agent),
             power_history=lambda host=None, hours=48: self.power_history(host, hours),
             approval_timeout=lambda member=None, minutes=None, until=None:
                 self.approval_timeout(member or human, minutes, until, asked_by=human),
@@ -739,6 +740,7 @@ class Secretary:
         lock = self._locks.setdefault(conv.key, asyncio.Lock())
         who = (self.lab.humans.get(msg.human) or {}).get("name") or msg.human
         prompt = "\n\n".join(filter(None, [
+            P.layout(self.lab),         # never a remembered layout (#99)
             ("Earlier in this thread:\n" + "\n".join(msg.history)) if msg.history else "",
             f"[{who} ({msg.human})]: {msg.text}",
             "" if msg.mentioned else f"(Not addressed to you: answer only if useful from "
