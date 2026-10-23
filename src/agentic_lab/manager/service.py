@@ -61,6 +61,10 @@ def compose(lab, msg, guest_thread=None):
 
 MEANWHILE_MAX = 20      # guest lines kept for the owner's next turn
 
+CATCH_UP = ("[lab] While you weren't running, these direct messages came here (oldest "
+            "first; you haven't seen or answered them). Answer them along with the new one "
+            "where they still need it:\n")
+
 BUSY = ("Still working on the previous message here; I'll read this right after "
         "(a few minutes at most).")
 
@@ -74,6 +78,7 @@ class Manager:
         self.lab, self.agent_id = lab, agent_id
         self.slack, self.brain, self.workers, self.broker = slack, brain, workers, broker
         self.state, self.memory, self.workdir = state, memory, workdir
+        self._caught_up = set()         # DMs caught up on since this manager started
         self._locks = {}
         self._told_busy = set()         # conversations told "still working" this busy spell
         self.started_at, self.last_turn_at = _now(), None
@@ -120,7 +125,24 @@ class Manager:
                                guest_name=(self.lab.humans.get(requester) or {}).get("name")
                                or requester)
 
-    async def _turn(self, conv, requester, private, prompt):
+    async def _catch_up(self, conv, ts):
+        """A DM's new message `ts`: on the first one since this manager started, the DMs
+        missed since the last one a turn saw (none if it never saw one here). Marks `ts`
+        seen."""
+        note, seen = "", conv.last_seen_ts
+        if conv.key not in self._caught_up:
+            self._caught_up.add(conv.key)
+            missed = getattr(self.slack, "missed_dms", None)
+            if seen is not None and missed is not None:
+                lines = await missed(conv.channel, conv.thread_ts, seen, ts)
+                if lines:
+                    note = CATCH_UP + "\n".join(lines) + "\n\n"
+        if seen is None or float(ts) > float(seen):
+            conv.last_seen_ts = ts
+            self.state.save()
+        return note
+
+    async def _turn(self, conv, requester, private, prompt, dm_ts=None):
         lock = self._locks.setdefault(conv.key, asyncio.Lock())
         async with lock:                # one turn at a time per conversation
             self.last_turn_at = _now()
@@ -137,6 +159,8 @@ class Manager:
                           + "\n".join(conv.meanwhile) + "\n\n" + prompt)
                 conv.meanwhile = []
                 self.state.save()
+            if dm_ts is not None:       # in turn order, so a DM is never marked seen early
+                prompt = await self._catch_up(conv, dm_ts) + prompt
             try:
                 reply = await self.brain.turn(ctx, prompt)
             except Exception as e:
@@ -172,7 +196,8 @@ class Manager:
                               )[-MEANWHILE_MAX:]
         else:
             prompt = compose(self.lab, msg)
-        reply = await self._turn(conv, msg.human, msg.private, prompt)
+        reply = await self._turn(conv, msg.human, msg.private, prompt,
+                                 dm_ts=msg.ts if msg.private else None)
         if msg.mentioned:
             await self.slack.react(msg.channel, msg.ts, "eyes", add=False)
         await self.slack.post(conv.channel, conv.thread_ts, reply)

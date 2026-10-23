@@ -197,6 +197,12 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   only threads where it's mentioned or already involved, reading the thread so far on first
   mention (its first 5 messages, which often set the topic, and the last 50 before the
   mention). Only lab members are answered.
+- **DM catch-up** (#70): on a DM's first new message since the manager started, it first
+  reads the member's messages there that it missed while it wasn't running: those after
+  the last message a turn saw, at most 72 hours back, the last 20, each cut to 1000
+  characters (attachments aren't downloaded). They come before the new message, marked as
+  missed, and are answered in the one reply. A DM it has never seen a message in has
+  nothing to catch up on; channel threads aren't caught up on.
 - Attached to a human **for tokens**; **access** `dedicated` (its member gets everything;
   other members are **guests**) or `shared` (every member gets everything, with a
   separate memory per member, enforced in code).

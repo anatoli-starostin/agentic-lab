@@ -448,7 +448,7 @@ def test_busy_note_once_per_busy_spell(monkeypatch):
     m.lab = None
     started = asyncio.Event()
 
-    async def turn(conv_, requester, private, prompt):
+    async def turn(conv_, requester, private, prompt, dm_ts=None):
         lock = m._locks.setdefault(conv_.key, asyncio.Lock())
         async with lock:
             m._told_busy.discard(conv_.key)
