@@ -202,7 +202,7 @@ class Brain:
                         ctx.conv.session_id = sid
                         ctx.state.save()
                 elif isinstance(msg, AssistantMessage):
-                    clock.replied()
+                    clock.output(any(isinstance(b, TextBlock) for b in msg.content))
                     for b in msg.content:
                         if isinstance(b, TextBlock):
                             out["last"] = b.text
@@ -220,8 +220,8 @@ class Brain:
                     if self.usage:
                         self.usage.run(f"conv:{ctx.conv.key}", msg.model_usage)
 
-        clock = TurnClock()     # a Claude Code start-up per message (#69): measured
-        async with self.client_factory(options) as client:
+        # a Claude Code start-up per message (#69): measured, however the turn ends
+        async with TurnClock(log) as clock, self.client_factory(options) as client:
             await client.query(prompt)
             try:
                 await asyncio.wait_for(drain(client), budget)
@@ -229,6 +229,7 @@ class Brain:
                 # too long: stop it, so the conversation is free again, and let the agent say
                 # where it got to (or hand the rest to a worker) in one short turn
                 log("note", f"turn cut off after {budget:.0f} s")
+                clock.cut = True
                 await self._stop(client, drain)
                 out["reply"] = None
                 await client.query(GUEST_TIME_UP if guest else TIME_UP)
@@ -238,7 +239,5 @@ class Brain:
                     await self._stop(client, drain)
                     out["reply"] = out["last"] = CUT_OFF
         reply, last_text = out["reply"], out["last"]
-        text, timing = clock.done()
-        log("timing", text, **timing)
         log("reply", reply or last_text or "")
         return reply or last_text or ""
