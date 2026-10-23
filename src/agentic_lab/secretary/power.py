@@ -159,6 +159,38 @@ async def stop(lab, host):
     await _cli("compute", "instance", "stop", "--id", h["instance"])
 
 
+def owner(lab, host):
+    """The member a host is dedicated to (#91), or None (shared): every agent on it is a
+    worker or manager with `access: dedicated` (the default), all of the same member (their
+    `human`). A shared agent, agents of several members, the secretary or no agents: None."""
+    here = [x for x in lab.agents.values() if x.get("host") == host]
+    members = {x.get("human") for x in here}
+    if (here and len(members) == 1 and all(
+            x.get("role") in ("worker", "manager") and x.get("access", "dedicated") == "dedicated"
+            for x in here)):
+        return members.pop()
+    return None
+
+
+def why_not_dedicated(lab, host):
+    """Why `host` has no owner() (for a refusal): every cause that holds."""
+    here = {aid: x for aid, x in lab.agents.items() if x.get("host") == host}
+    if not here:
+        return "no agents run there"
+    why = []
+    if any(x.get("role") == "secretary" for x in here.values()):
+        why.append("the secretary runs there")
+    shared = [lab.display_name(aid) for aid, x in here.items()
+              if x.get("role") in ("worker", "manager") and x.get("access") == "shared"]
+    if shared:
+        why.append(", ".join(shared) + (" is" if len(shared) == 1 else " are") + " shared")
+    members = sorted({(lab.humans.get(x.get("human")) or {}).get("name") or x.get("human")
+                      for x in here.values()})
+    if len(members) > 1:
+        why.append("it runs agents of more than one member (" + ", ".join(members) + ")")
+    return "; ".join(why)
+
+
 def note_gpu(snapshot):
     """Remember each worker's GPU utilization over the last readings (one per collection),
     and write its highest into the snapshot (`gpu_recent_max`): a GPU counts as idle only

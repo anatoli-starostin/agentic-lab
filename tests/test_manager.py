@@ -286,8 +286,9 @@ def test_idle_watch():
 
 
 def test_admin_only_actions(monkeypatch):
-    """Powering off a busy machine and asking for someone else's token: admins only,
-    enforced in code. A busy machine needs force_off even from an admin."""
+    """Powering a machine not dedicated to the member asking, and asking for someone
+    else's token: admins only, enforced in code. A busy machine needs force_off even from
+    an admin."""
     from agentic_lab.secretary import power as P
     from agentic_lab.secretary.service import Secretary
     lab = registry.load(EXAMPLE)
@@ -309,8 +310,13 @@ def test_admin_only_actions(monkeypatch):
         return asyncio.run(coro)
     assert P.busy(lab, "gpu-a", sec.latest["state"]) == "worker-a has 1 running"
     assert P.busy(lab, "gpu-b", sec.latest["state"]) is None
-    assert run(sec.ctx("bob").power("gpu-b", "off")).startswith("gpu-b: powering off")
-    assert "Only an admin (Alice)" in run(sec.ctx("bob").power("gpu-a", "off"))
+    # gpu-b is dedicated to alice (#91): not bob's to power; alice's own is fine
+    assert "dedicated to Alice" in run(sec.ctx("bob").power("gpu-b", "off"))
+    assert "dedicated to Alice" in run(sec.ctx("bob").power("gpu-b", "on"))
+    assert run(sec.ctx("alice").power("gpu-b", "off")).startswith("gpu-b: powering off")
+    # gpu-a has a shared agent: an admin's only, busy or idle, on or off
+    assert "only an admin (Alice)" in run(sec.ctx("bob").power("gpu-a", "off"))
+    assert "only an admin (Alice)" in run(sec.ctx("bob").power("gpu-a", "on"))
     assert "refused" in run(sec.ctx("bob").power("gpu-a", "force_off"))
     assert "use force_off" in run(sec.ctx("alice").power("gpu-a", "off"))
     assert run(sec.ctx("alice").power("gpu-a", "force_off")).startswith("gpu-a: powering off")

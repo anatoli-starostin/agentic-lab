@@ -113,11 +113,15 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   the broker's overview, local systemd units, machine power states (Nebius through its
   CLI; AWS EC2 through boto3 with the secretary's own access key, never an instance
   role).
-- **Power**: any member may power a machine on, or off when it's idle. A **busy** machine
+- **Power** (#91), on and off alike: a machine **dedicated** to a member (every agent on
+  it a worker or manager with `access: dedicated`, all that member's, however many) by that
+  member or an admin, **busy or not**; any other machine (a shared agent, agents of more
+  than one member, the secretary, or no agents) by an admin only. The secretary's own
+  actions (the idle stop) aren't a member's and aren't checked. A **busy** machine
   (a worker task running, queued, awaiting approval or waiting on its long runs; a long
   run going, even CPU-only; any process on a GPU, anyone's; a GPU
   above 0% in any of its last 5 readings, about 75 s; someone's `~/.lab-keep-awake`; a
-  manager on it, if the host has `idle_stop_with_managers: false`) may be powered off only by an admin, after confirming. Idle hosts with workers are stopped after their `idle_stop_min` minutes (required on every cloud host, the only switch; `0` means never).
+  manager on it, if the host has `idle_stop_with_managers: false`) is powered off only with `force_off`, after the secretary has said what's busy and the member asking has confirmed. Idle hosts with workers are stopped after their `idle_stop_min` minutes (required on every cloud host, the only switch; `0` means never).
   Managers on a host don't keep it on: it's judged by its workers alone (e.g. a member's
   manager beside its only worker on an on-demand GPU VM). Stopping it only takes the manager
   offline in Slack until someone asks the secretary to power the host on. A manager's own
@@ -127,7 +131,7 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   manager there is answering, none has had a turn (or started) within `idle_stop_min`,
   none follows an unfinished task, and none has an approval pending; then it's stopped
   like a worker host (its `idle_stop_min` above 0 opts it in). A manager that can't be
-  reached, or doesn't report its activity, keeps the host busy (admins only).
+  reached, or doesn't report its activity, keeps the host busy (it goes off only with `force_off`).
 - **Status in both views** (#74): the secretary computes one status per host (running,
   stopped, starting/stopping, always on for its own host; for a host without power
   control, running or unreachable from its agents) and per agent (up; "host stopped" when
