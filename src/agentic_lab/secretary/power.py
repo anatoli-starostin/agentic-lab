@@ -5,7 +5,7 @@ A host can be powered if lab.yaml gives it `kind: cloud`, a provider below and i
 - Nebius, through its CLI, authenticated as a service account (only the secretary holds the
   key).
 - AWS EC2 (#68), through boto3 with the default credential chain: on an EC2 instance, its
-  instance role (no stored keys). `region:` on the host, else the chain's default region.
+  instance role (no stored keys), in the host's `region:` (lab check requires it).
 
 Idle stop: a host with `idle_stop_min` above 0 that runs workers is stopped once all
 its workers have had nothing running, queued or waiting, and its GPUs nothing on them

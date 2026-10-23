@@ -315,7 +315,7 @@ def script(plan):
         lines.append(f"/opt/agentic-lab/src/deploy/worker/create-agent-user.sh {u} >/dev/null")
     if plan.get("aws_sdk"):
         lines.append('say "AWS SDK (VM power)"')
-        lines.append("uv pip install -q -p /opt/agentic-lab/venv 'boto3>=1.34,<2'")
+        lines.append("uv pip install -q -p /opt/agentic-lab/venv '/opt/agentic-lab/src[aws]'")
     if plan.get("nebius_cli"):
         u = plan["nebius_cli"]
         lines.append('say "Nebius CLI (VM power)"')

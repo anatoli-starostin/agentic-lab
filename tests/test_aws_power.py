@@ -100,6 +100,26 @@ def test_an_idle_aws_host_is_stopped_like_any_other():
     assert watch.candidates(lab(), snap, now=t0 + dt.timedelta(minutes=30)) == ["gpu"]
 
 
+def test_a_powered_aws_host_needs_its_region(tmp_path):
+    import yaml
+    from pathlib import Path
+
+    from agentic_lab import registry
+    d = yaml.safe_load((Path(__file__).parent.parent / "examples" / "minimal" / "lab.yaml")
+                       .read_text())
+    d["hosts"]["gpu-x"] = {"kind": "cloud", "provider": "aws", "instance": "i-0",
+                           "idle_stop_min": 30}
+    d["hosts"]["mgr-x"] = {"kind": "cloud", "provider": "aws", "idle_stop_min": 0}  # unpowered
+    p = tmp_path / "lab.yaml"
+    p.write_text(yaml.safe_dump(d))
+    issues = [str(i) for i in registry.check(registry.load(p))]
+    assert any(i.startswith("ERROR") and "gpu-x" in i and "region" in i for i in issues)
+    assert not any("mgr-x" in i for i in issues)
+    d["hosts"]["gpu-x"]["region"] = "eu-west-1"
+    p.write_text(yaml.safe_dump(d))
+    assert not any("gpu-x" in str(i) for i in registry.check(registry.load(p)))
+
+
 def test_lab_apply_installs_the_sdk_only_for_aws_labs():
     from pathlib import Path
 
@@ -113,7 +133,7 @@ def test_lab_apply_installs_the_sdk_only_for_aws_labs():
                                     lambda owner, name: None))
     assert "boto3" not in script()
     lb.hosts["gpu-x"] = {"kind": "cloud", "provider": "aws", "instance": "i-0", "idle_stop_min": 30}
-    assert "uv pip install -q -p /opt/agentic-lab/venv 'boto3>=1.34,<2'" in script()
+    assert "uv pip install -q -p /opt/agentic-lab/venv '/opt/agentic-lab/src[aws]'" in script()
     other = next(a["host"] for a in lb.agents.values() if a.get("role") == "worker")
     assert other != sec and "boto3" not in A.script(A.host_plan(          # the secretary's only
         lb, other, SimpleNamespace(get=lambda k: "t"), lambda owner, name: None))

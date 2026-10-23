@@ -75,7 +75,7 @@ _AGENT = {"role": (str, True), "human": (str, True), "host": (str, True),
           "turn_budget_min": (int, False),  # a manager's turns are cut off after this
           "keep_free_gb": (int, False)}     # a worker prunes its caches below this (#45)
 _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False),
-         "region": (str, False),        # AWS: the instance's region (default: the chain's)
+         "region": (str, False),        # AWS: the instance's region (required with instance:)
          # minutes idle before the secretary stops it (cloud hosts: required; 0: never)
          "idle_stop_min": (int, False), "tailnet_name": (str, False),
          "ssh_user": (str, False),      # who `lab apply` logs in as (default: the admin)
@@ -303,6 +303,9 @@ def check(lab: Lab, today: dt.date | None = None):
         if h.get("kind") == "cloud" and prov and prov not in PROVIDERS:
             W(where, f"provider {prov!r} isn't one the lab knows ({', '.join(PROVIDERS)}): the "
                      "host works, but the secretary can't power it")
+        if prov == "aws" and h.get("instance") and not h.get("region"):
+            # the secretary's service user has no AWS config: without it every call fails
+            E(where, "an AWS host the secretary powers (instance:) needs its region:")
         if (h.get("kind") == "cloud" and prov and prov not in POWERED
                 and isinstance(h.get("idle_stop_min"), int) and h["idle_stop_min"] > 0):
             W(where, f"no power control for {prov} hosts (yet): idle_stop_min has no effect; "

@@ -233,8 +233,9 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
         "Condition": {"StringEquals": {"aws:ResourceTag/<tag-key>": "<tag-value>"}}},
        {"Effect": "Allow", "Action": "ec2:DescribeInstances", "Resource": "*"}]}
      ```
-     `lab apply` installs the AWS SDK (boto3) on the secretary's host when `lab.yaml` has
-     AWS hosts. If the host restricts the instance metadata service to some users (where
+     `region:` is required on a powered AWS host (the secretary's service user has no AWS
+     config). `lab apply` installs the AWS SDK (boto3, the `aws` extra) on the secretary's
+     host when `lab.yaml` has AWS hosts. If the host restricts the instance metadata service to some users (where
      the role's credentials come from), allow the secretary's user. A secretary not on EC2
      has no stored-key option yet (#68 follow-up).
    - **Stopping changes the public IPv4** (an auto-assigned one), which is fine: the lab
