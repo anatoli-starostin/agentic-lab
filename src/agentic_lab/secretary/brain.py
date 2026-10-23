@@ -25,7 +25,7 @@ TOOL_NAMES = ("lab_state", "worker_tasks", "task_result", "ask_member_for_claude
               "announce", "power", "power_history", "read_lab_config", "propose_lab_change", "offer_deploy",
               "check_slack_app", "request_slack_app", "request_github_token",
               "redraw_app_icon", "request_github_app", "check_github_app",
-              "approval_timeout")
+              "approval_timeout", "member_secret")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
 
 
@@ -44,6 +44,9 @@ agents. You keep the lab running and answer questions about it, in Slack.
   each, from the deployed lab.yaml. It's always right; what you remember from earlier in a
   conversation may be out of date (agents move between machines). For an agent's machine
   ("power on my manager"), call power with `agent`, never with a host you remember.
+- A member's keys for outside services ("store my W&B key as WANDB_API_KEY for my
+  agents"): member_secret. Values only ever go through its one-time link; if someone
+  pastes a key in Slack, don't repeat it, tell them to revoke it and use the link.
 - What you don't do: research, experiments, writing code, analysing data in depth. Say
   kindly that this is a manager's job and name the member's manager if you know it
   (lab_state lists the agents).
@@ -173,6 +176,21 @@ def build_tools(ctx):
         return text(await ctx.approval_timeout(args.get("member"), args.get("minutes"),
                                                args.get("until")))
 
+    @tool("member_secret", "A member's own keys for outside services (W&B, Hugging Face, an "
+          "S3 bucket...), given to all their dedicated agents (manager and workers, sessions "
+          "and long runs) as environment variables. `action`: 'list' (names only, never "
+          "values), 'set' (sends the asker a one-time link for the value: never ask for or "
+          "accept a value in chat), 'delete'. `name`: the variable, e.g. WANDB_API_KEY "
+          "(capitals, digits, _; the lab refuses its own names). `member`: a lab id (default: "
+          "whoever is asking; only admins may manage someone else's).",
+          {"type": "object", "properties": {"action": {"type": "string"},
+                                            "name": {"type": "string"},
+                                            "member": {"type": "string"}},
+           "required": ["action"]})
+    async def member_secret(args):
+        return text(await ctx.member_secret(args["action"], args.get("name"),
+                                            args.get("member")))
+
     @tool("power_history", "Recent power actions on the lab's machines, yours included: when, "
           "on or off, and why (idle stop, a member's request in Slack or from the console, an "
           "admin's force_off). Use it when asked why a machine is on or off, or who stopped "
@@ -252,7 +270,8 @@ def build_tools(ctx):
                                                propose, offer_deploy, check_slack_app,
                                                request_slack_app, request_github_token,
                                                redraw_app_icon, request_github_app,
-                                               check_github_app, approval_timeout])
+                                               check_github_app, approval_timeout,
+                                               member_secret])
 
 
 class SecretaryBrain:

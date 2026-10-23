@@ -61,9 +61,10 @@ def target(state):
     return ap["config_commit"], ap.get("framework_commit")
 
 
-def differing(state, sec_host, want=None):
+def differing(state, sec_host, want=None, keys=None):
     """{host: what it runs} for hosts whose agents report other commits than `want`
-    (default: the lab's)."""
+    (default: the lab's), or, with `keys` ({host: the member keys' revision it should
+    have}, member_env.py), other member keys."""
     want = want or target(state)
     out = {}
     if want is None:
@@ -73,9 +74,14 @@ def differing(state, sec_host, want=None):
         if not (a.get("up") and ap and host) or host == sec_host:
             continue
         theirs = (ap.get("config_commit"), ap.get("framework_commit") if want[1] else None)
-        if theirs != tuple(want) or ap.get("unreviewed"):
+        if theirs != tuple(want) or ap.get("unreviewed") or keys_differ(ap, host, keys):
             out[host] = ap
     return out
+
+
+def keys_differ(ap, host, keys):
+    """Does a host run other member keys than it should (`keys`: {host: revision})?"""
+    return keys is not None and (ap or {}).get("member_env") != keys.get(host)
 
 
 def is_ancestor(repo, old, new):
@@ -90,12 +96,15 @@ def is_ancestor(repo, old, new):
     return {0: True, 1: False}.get(r.returncode)
 
 
-def behind(state, sec_host, repo):
+def behind(state, sec_host, repo, keys=None):
     """{host: what it runs} for the hosts to catch up: on a reviewed commit strictly before
-    the lab's (never a newer or unreviewed one: that would be a rollback)."""
+    the lab's (never a newer or unreviewed one: that would be a rollback), or on the lab's
+    commit with other member keys (`keys`, member_env.py)."""
     want = target(state)
-    return {h: ap for h, ap in differing(state, sec_host).items()
-            if not ap.get("unreviewed") and is_ancestor(repo, ap.get("config_commit"), want[0])}
+    return {h: ap for h, ap in differing(state, sec_host, keys=keys).items()
+            if not ap.get("unreviewed") and (
+                is_ancestor(repo, ap.get("config_commit"), want[0])
+                or (ap.get("config_commit") == want[0] and keys_differ(ap, h, keys)))}
 
 
 def active_work(lab, host, state):
@@ -261,22 +270,22 @@ async def _refresh(cu, lab, refresh, commit, hosts, announce, now):
 
 
 async def step(cu, lab, state, sec_host, start, result, announce, repo=None, now=None,
-               refresh=None):
+               refresh=None, keys=None):
     """One round. `start()` starts `lab apply-main --catch-up` and returns its log (raises
     with "already running" in the message while another deploy holds the lock);
     `result(log)` -> None while it runs, else (ok, tail); `announce(text)` (async);
     `repo`: the config repository's clone (which commit is older); `refresh(commit)`: makes
     that clone know `commit` (cloning or fetching main), raising with the reason if it
-    can't (#95)."""
+    can't (#95); `keys`: {host: the member keys' revision it should have} (member_env.py)."""
     now = now or _now()
     want = target(state)
     if want is None:
         return
     commit = want[0]
-    other = differing(state, sec_host)
+    other = differing(state, sec_host, keys=keys)
     if refresh is not None and other and lab.data.get("auto_catch_up", True):
         await _refresh(cu, lab, refresh, commit, sorted(other), announce, now)
-    stale = behind(state, sec_host, repo)
+    stale = behind(state, sec_host, repo, keys)
     current = {a.get("host") for a in (state.get("agents") or {}).values()
                if a.get("up") and a.get("host") not in other}
     for key in list(cu.attempts):               # caught up since: forget its failures

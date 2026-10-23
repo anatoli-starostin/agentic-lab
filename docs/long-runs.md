@@ -53,7 +53,7 @@ These are the sandbox's limits, the same for a command and a run.
 
 | What | Instead |
 |---|---|
-| Writing to the home outside the working folder (`pip install --user`, `git config --global`, `~/.netrc`, `wandb login`, a conda env in `~/miniconda3`) | Install into the working folder (`uv venv work/envs/x`, `conda create -p work/envs/x`); repository-local git config; pass credentials in the environment (`WANDB_API_KEY`, `HF_TOKEN`). |
+| Writing to the home outside the working folder (`pip install --user`, `git config --global`, `~/.netrc`, `wandb login`, a conda env in `~/miniconda3`) | Install into the working folder (`uv venv work/envs/x`, `conda create -p work/envs/x`); repository-local git config; pass credentials in the environment (`WANDB_API_KEY`, `HF_TOKEN`): a member gives them to the lab through the secretary, and runs get them (DESIGN.md §6.4). |
 | Writing outside the working folder elsewhere (`/data`, `/mnt/...`) | A write grant for that folder. |
 | Seeing or signalling other processes | `run_status`, `stop_run`. |
 | Files in a run's `/tmp` after it ends | Write them to the working folder. |

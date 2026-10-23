@@ -48,6 +48,29 @@ FIELDS = {
                   ("private_key", "Private key (PEM)", "-----BEGIN")],
 }
 MULTILINE = {"private_key"}         # shown as a text area in the web form
+ENV = "env:"                        # a member's own key: env:<NAME> (member_env.py)
+
+
+def is_env(name):
+    return isinstance(name, str) and name.startswith(ENV)
+
+
+def known(name):
+    """A secret the intake takes: one of NAMES, or a member's key env:<NAME>."""
+    if is_env(name):
+        from ..member_env import MemberEnvError, check_name
+        try:
+            return check_name(name[len(ENV):]) == name[len(ENV):]
+        except MemberEnvError:
+            return False
+    return name in NAMES
+
+
+def fields(name):
+    """What secret `name` is made of, for the web form: (field, label, required prefix)."""
+    if is_env(name):
+        return [("value", f"{name[len(ENV):]} (its value)", "")]
+    return FIELDS[name]
 _OWNER = re.compile(r"^(service:)?[a-z][a-z0-9-]*$")
 _ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"     # no 0/O, 1/I
 MAX_FAILURES = 20            # failed attempts per window, across all codes...
@@ -159,10 +182,12 @@ class Intake:
         """Create a one-time code to hand over secret `name`. `human` is the owner: a
         human id, or `service:<name>` for a lab service (e.g. `service:broker`). Opens the
         intake (the flag file) for as long as it's active."""
-        if name not in NAMES:
-            raise IntakeError(f"unknown secret {name!r} (known: {NAMES})")
+        if not known(name):
+            raise IntakeError(f"unknown secret {name!r} (known: {NAMES}, or env:<NAME>)")
         if not _OWNER.match(human or ""):
             raise IntakeError(f"bad owner {human!r}")
+        if is_env(name) and human.startswith("service:"):
+            raise IntakeError("a member's key belongs to a member, not a service")
         raw = "".join(pysecrets.choice(_ALPHABET) for _ in range(8))
         code = f"{raw[:4]}-{raw[4:]}"
         req = Request(human, name, (_now() + ttl).isoformat(timespec="seconds"))
@@ -274,8 +299,12 @@ class Intake:
         return req
 
     def _secret_path(self, owner, name):
-        if not _OWNER.match(owner or "") or name not in NAMES:
+        if not _OWNER.match(owner or "") or not known(name):
             raise IntakeError("bad owner or secret name")
+        if is_env(name):                # a member's own key (member_env.py)
+            if owner.startswith("service:"):
+                raise IntakeError("a member's key belongs to a member, not a service")
+            return os.path.join(self.secrets_dir, "humans", owner, "env", name[len(ENV):])
         if owner.startswith("service:"):
             return os.path.join(self.secrets_dir, "services", owner[8:], name)
         return os.path.join(self.secrets_dir, "humans", owner, name)
@@ -284,6 +313,35 @@ class Intake:
         _write_private(self._secret_path(human, name), value.strip() + "\n")
         _write_private(self._secret_path(human, name) + ".meta",
                        json.dumps({"received": _now().isoformat(timespec="seconds")}))
+
+    def member_env(self, human):
+        """A member's own keys: {NAME: value} (member_env.py)."""
+        from ..member_env import load_dir
+        return load_dir(self.secrets_dir, human)
+
+    def member_env_info(self, human):
+        """[(NAME, when it was received)] of a member's keys: never their values."""
+        out = []
+        for n in sorted(self.member_env(human)):
+            try:
+                with open(self._secret_path(human, ENV + n) + ".meta") as f:
+                    when = json.load(f).get("received")
+            except (OSError, ValueError):
+                when = None
+            out.append((n, when))
+        return out
+
+    def delete_member_env(self, human, name):
+        """Remove a member's key. True if it was there."""
+        path = self._secret_path(human, ENV + name)
+        found = False
+        for p in (path, path + ".meta"):
+            try:
+                os.unlink(p)
+                found = True
+            except FileNotFoundError:
+                pass
+        return found
 
     def load(self, human, name):
         try:
@@ -296,13 +354,20 @@ class Intake:
 def check_value(name, value):
     """Validate a secret and return the text to store. A one-field secret is a string; a
     several-field one (slack-app) is a dict of its fields."""
-    fields = FIELDS[name]
-    if len(fields) == 1 and isinstance(value, str):
-        value = {fields[0][0]: value}
+    flds = fields(name)
+    if len(flds) == 1 and isinstance(value, str):
+        value = {flds[0][0]: value}
     if not isinstance(value, dict):
         raise IntakeError("bad secret")
+    if is_env(name):                    # a member's key: any value, one line
+        v = str(value.get("value") or "").strip()
+        if not v:
+            raise IntakeError("missing: the value")
+        if "\n" in v or len(v) > 8192:
+            raise IntakeError("a key is one line, at most 8 KB")
+        return v
     out = {}
-    for key, label, prefix in fields:
+    for key, label, prefix in flds:
         v = (value.get(key) or "").strip()
         if not v:
             raise IntakeError(f"missing: {label}")

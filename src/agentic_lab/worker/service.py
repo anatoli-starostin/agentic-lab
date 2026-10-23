@@ -70,7 +70,8 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
 
     access = access_for(lab, agent_id, _read_secret(f"{CONFIG}/manager-tokens.yaml"))
     store = T.TaskStore(os.path.expanduser(f"{STATE}/tasks"))
-    env = {}
+    from .. import member_env as ME
+    env = ME.read(STATE)        # its member's own keys (member_env.py): the lab's below win
     seat_token = _read_secret(f"{CONFIG}/claude-oauth-token")
     if seat_token:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat_token
