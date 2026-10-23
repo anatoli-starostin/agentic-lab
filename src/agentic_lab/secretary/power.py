@@ -270,10 +270,10 @@ def _pending(snapshot, aid):
 
 
 def counts_busy(lab, host, aid):
-    """Does a non-worker agent on `host` make it busy by being there? A manager doesn't
-    when a worker there judges the host (unless idle_stop_with_managers: false); on a host
-    with no worker it does: nothing measures it, and stopping it would take a member's
-    manager offline, so it goes off only with force_off."""
+    """Does a non-worker agent on `host` count when judging it? A manager doesn't when a
+    worker there judges the host (unless idle_stop_with_managers: false); on a host with no
+    worker it does: a managers-only host is judged by its managers' activity
+    (manager_busy), any other by their being there."""
     a = lab.agents[aid]
     has_worker = any(x.get("host") == host and x.get("role") == "worker"
                      for x in lab.agents.values())
@@ -283,7 +283,10 @@ def counts_busy(lab, host, aid):
 
 def busy(lab, host, snapshot):
     """Why powering `host` off would interrupt work (None if it wouldn't): a worker busy
-    (see worker_busy), or a manager there if the host has idle_stop_with_managers: false."""
+    (worker_busy); on a managers-only host, a manager busy (manager_busy); or another
+    agent that counts by being there (counts_busy: a manager where
+    idle_stop_with_managers: false, the secretary). A member's power-off of a busy host
+    needs force_off; who may power it at all is owner()."""
     for aid, a in lab.agents.items():
         if a.get("host") != host:
             continue
@@ -313,8 +316,9 @@ def busy(lab, host, snapshot):
 
 
 class IdleWatch:
-    """Remembers since when each on-demand host has been idle (and since when a host's
-    worker has been down), across the secretary's restarts when given a `path` (#60)."""
+    """Remembers since when each on-demand host has been idle (and since when a running
+    host's agents have been down), across the secretary's restarts when given a `path`
+    (#60)."""
 
     def __init__(self, path=None):
         self.path = path
@@ -344,14 +348,17 @@ class IdleWatch:
         os.replace(tmp, self.path)
 
     def down_too_long(self, now=None, grace=dt.timedelta(minutes=DOWN_GRACE_MIN)):
-        """Hosts whose worker has been down (or unknown) for longer than the grace."""
+        """Hosts whose agents (its workers, or a managers-only host's managers) have been down
+    (or unknown) for longer than the grace, while the host runs."""
         now = now or dt.datetime.now(dt.timezone.utc)
         return [h for h, t in self.down_since.items() if now - t >= grace]
 
     def candidates(self, lab, snapshot, now=None, power=None):
-        """Hosts to stop now: idle_stop_min above 0, with workers (and managers, unless
-        idle_stop_with_managers: false), all workers idle for idle_stop_min. `power`:
-        host -> its power state, if known (a stopped host's workers aren't "down")."""
+        """Hosts to stop now: idle_stop_min above 0, and idle for idle_stop_min: a host with
+        workers when all of them are (worker_busy; a manager there counts as busy only with
+        idle_stop_with_managers: false), a managers-only host when all its managers are
+        (manager_busy), counted from their latest turn or start. `power`: host -> its power
+        state, if known (a stopped host's agents aren't "down")."""
         now = now or dt.datetime.now(dt.timezone.utc)
         out = []
         for host, h in lab.hosts.items():
