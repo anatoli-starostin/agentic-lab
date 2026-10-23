@@ -142,7 +142,9 @@ def build_tools(ctx):
     @tool("approval_timeout", "A member's approval timeout: how long their approval requests "
           "wait before they're denied as timed out. Without `minutes`, shows it. `minutes`: a "
           "number (1 to 10080), 'none' (wait for the member), or 'default' (back to lab.yaml). "
-          "`until`: an ISO time when the change ends (optional). `member`: a lab id (default: "
+          "`until`: when the change ends (optional), e.g. 2026-10-23T18:00, in the member's "
+          "own time (their Slack time zone; the answer shows it in UTC too). `member`: a lab "
+          "id (default: "
           "whoever is asking; only admins may change someone else's).",
           {"type": "object", "properties": {"member": {"type": "string"},
                                             "minutes": {"type": "string"},

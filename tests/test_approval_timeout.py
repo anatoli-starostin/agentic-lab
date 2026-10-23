@@ -65,7 +65,7 @@ def test_a_timed_out_request_is_never_approved(tmp_path, monkeypatch):
     late = dt.datetime.fromisoformat(req.expires) + dt.timedelta(seconds=1)
     monkeypatch.setattr(C, "now", lambda: late)
     # a click after the deadline, before the expiry sweep: a timeout, not a yes
-    with pytest.raises(C.BrokerError, match="timed out"):
+    with pytest.raises(C.BrokerError, match="timed out before your answer"):
         b.decide(req.id, "once", "U-BOB")
     r = b.get(req.id)
     assert r.state == C.DECIDED and r.decision["action"] == "timeout"
@@ -118,8 +118,12 @@ def test_a_member_changes_their_own_an_admin_anyones():
         sent.append(body)
         return {"bob": {"timeout_s": 900, "source": "set by bob"}}
 
+    async def tz_of(member):
+        return None
+
     def ask(member, minutes, asked_by, until=None):
-        return asyncio.run(s.approval_timeout(member, minutes, until, asked_by, call=call))
+        return asyncio.run(s.approval_timeout(member, minutes, until, asked_by, call=call,
+                                              tz_of=tz_of))
     assert "refused" in ask("carol", "15", "bob") and sent == []
     assert "15 minutes" in ask("bob", "15", "bob")
     assert sent[-1] == {"human": "bob", "by": "bob", "until": None, "timeout_s": 900}
@@ -130,3 +134,58 @@ def test_a_member_changes_their_own_an_admin_anyones():
     assert "number" in ask("bob", "soon", "bob")
     assert ask("bob", None, "carol").startswith("bob's approval timeout")    # reading: anyone
     assert [k for k, _ in logged] == ["approval_timeout"] * 3
+
+
+def test_until_is_the_members_own_time_shown_in_both():
+    from zoneinfo import ZoneInfo
+    sent = []
+    s = secretary(None)
+
+    async def call(body):
+        sent.append(body)
+        return {"bob": {"timeout_s": 600, "source": f"set by bob until {body['until']}"}}
+
+    async def berlin(member):
+        return ZoneInfo("Europe/Berlin")
+
+    async def unknown(member):
+        return None
+    out = asyncio.run(s.approval_timeout("bob", "10", "2026-10-23T18:00", "bob", call=call,
+                                         tz_of=berlin))
+    assert sent[-1]["until"] == "2026-10-23T16:00:00+00:00"          # 18:00 CEST is 16:00 UTC
+    assert "until 2026-10-23 18:00 CEST (16:00 UTC)" in out
+    out = asyncio.run(s.approval_timeout("bob", "10", "2026-10-23T18:00", "bob", call=call,
+                                         tz_of=unknown))
+    assert sent[-1]["until"] == "2026-10-23T18:00:00+00:00" and "isn't known" in out
+    assert "goes with" in asyncio.run(s.approval_timeout("bob", None, "2026-10-23T18:00",
+                                                         "bob", call=call, tz_of=berlin))
+
+
+def test_a_late_click_is_told_it_timed_out(tmp_path, monkeypatch):
+    from agentic_lab.broker.slack import SlackChannel
+    b = broker(tmp_path)
+    b.set_timeout("bob", 60, by="bob")
+    req = b.submit("worker-a", "bob", "Bash", BASH)
+    monkeypatch.setattr(C, "now", lambda: dt.datetime.fromisoformat(req.expires)
+                        + dt.timedelta(seconds=1))
+    told = []
+
+    class Web:
+        async def chat_postEphemeral(self, **kw):
+            told.append(kw["text"])
+
+    async def click():
+        ch = SlackChannel.__new__(SlackChannel)
+        ch.broker, ch.web, ch.loop = b, Web(), asyncio.get_running_loop()
+        ch._decide(req.id, "once", "U-BOB", None, {"channel": {"id": "D-BOB"}})
+        await asyncio.sleep(0.05)
+    asyncio.run(click())
+    assert told == ["Not applied: it timed out before your answer, so it was denied"]
+    assert b.get(req.id).decision["action"] == "timeout"
+
+
+def test_an_unreadable_overrides_file_is_said_and_falls_back(tmp_path, caplog):
+    b = broker(tmp_path)
+    (tmp_path / "timeouts.json").write_text("{not json")
+    assert b.timeout_for("alice") == (120, "lab.yaml")
+    assert "unreadable" in caplog.text

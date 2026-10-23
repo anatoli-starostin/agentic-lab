@@ -577,13 +577,15 @@ class Secretary:
         return f"{host}: powering {verb}; it takes a minute or two"
 
     async def approval_timeout(self, member, minutes=None, until=None, asked_by=None,
-                               call=None):
+                               call=None, tz_of=None):
         """A member's approval timeout (#77): shown, or set (`minutes`: a number, "none" or
         "default"; `until`: when the override ends). A member changes their own, an admin
         anyone's. It only ever denies, so it's changed here, not through lab.yaml."""
         if member not in self.lab.humans:
             return f"no member {member!r} in lab.yaml"
-        body = None
+        body, echo = None, ""
+        if until and minutes is None:
+            return "`until` goes with `minutes`"
         if minutes is not None:
             if asked_by is not None and asked_by != member and not self.is_admin(asked_by):
                 return (f"refused: only {member} themselves or an admin ({self.admins()}) may "
@@ -591,8 +593,22 @@ class Secretary:
             m = str(minutes).strip().lower()
             if m not in ("none", "default") and not m.isdigit():
                 return "minutes must be a number, 'none' or 'default'"
-            body = {"human": member, "by": asked_by or "the secretary", "until": until,
+            body = {"human": member, "by": asked_by or "the secretary", "until": None,
                     "timeout_s": None if m == "none" else m if m == "default" else int(m) * 60}
+            if until:
+                # the member's own time, from their Slack profile; echoed in both, so a
+                # mistake shows at once
+                try:
+                    u = dt.datetime.fromisoformat(until)
+                except ValueError:
+                    return "`until` must be a time like 2026-10-23T18:00"
+                tz = await (tz_of or self.member_tz)(member)
+                local = u if u.tzinfo else u.replace(tzinfo=tz or dt.timezone.utc)
+                utc = local.astimezone(dt.timezone.utc)
+                body["until"] = utc.isoformat(timespec="seconds")
+                echo = (f", until {local:%Y-%m-%d %H:%M} {local.tzname()} ({utc:%H:%M} UTC)"
+                        + ("" if tz or u.tzinfo else "; their Slack time zone isn't known, "
+                           "so that's UTC"))
         try:
             r = await (call or _broker_timeouts)(body)
         except Exception as e:
@@ -604,8 +620,22 @@ class Secretary:
                             f"{minutes} by {body['by']}", member=member, by=body["by"])
         t = (r.get(member) or {})
         s = t.get("timeout_s")
+        source = t.get("source") or ""
+        source = source.split(" until ")[0] if echo else source
         return (f"{member}'s approval timeout: " + (f"{s // 60} minutes" if s else "none")
-                + f" ({t.get('source')}). It applies to new requests; pending ones keep theirs.")
+                + f" ({source}{echo}). It applies to new requests; pending ones keep theirs.")
+
+    async def member_tz(self, member):
+        """A member's time zone from their Slack profile (users.info), or None."""
+        from zoneinfo import ZoneInfo
+        uid = (self.lab.humans.get(member) or {}).get("slack_user")
+        if getattr(self, "slack", None) is None or not uid:
+            return None
+        try:
+            tz = ((await self.slack.web.users_info(user=uid)).get("user") or {}).get("tz")
+            return ZoneInfo(tz) if tz else None
+        except Exception:
+            return None
 
     def power_history(self, host=None, hours=48):
         """Recent power actions (who or what, when, why), oldest first: idle stops, members'

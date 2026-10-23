@@ -18,6 +18,7 @@ Decisions:
 """
 import datetime as dt
 import json
+import logging
 import os
 import re
 import secrets
@@ -240,7 +241,11 @@ class Broker:
         try:
             with open(self._timeouts_path()) as f:
                 return json.load(f)
-        except (OSError, ValueError):
+        except FileNotFoundError:
+            return {}
+        except (OSError, ValueError) as e:      # unreadable: lab.yaml's for everyone, said
+            logging.getLogger("agentic_lab.broker").warning(
+                "members' approval timeouts unreadable (%s): using lab.yaml's", e)
             return {}
 
     def timeout_for(self, human):
@@ -367,7 +372,7 @@ class Broker:
                     req.expires):
                 self._time_out(req)         # past its deadline: a timeout, never a yes
                 self._notify(req)           # (listeners only schedule their updates)
-                raise BrokerError("timed out before this answer: it can't be decided now")
+                raise BrokerError("it timed out before your answer, so it was denied")
             if req.state != PENDING:
                 raise BrokerError("already decided")
             expected = self.humans.get(req.human, {}).get("slack_user")
