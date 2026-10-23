@@ -359,6 +359,9 @@ sandbox violations that explain it.
     so far on first mention: its first 5 messages (they often set the topic) and the
     last 50 before the mention. In such a thread it sees every message and
     may stay silent. Attachments (up to 50 MB) are downloaded into its working folder.
+  \item \textbf{DM catch-up}: on a DM's first new message since the manager started, it
+    first reads the member's messages there that it missed while it wasn't running (after
+    the last one it saw; at most 72 hours back, the last 20) and answers them in one reply.
   \item Every message is checked against \code{lab.yaml}: only lab members are answered. On
     a dedicated manager, other members are \emph{guests} (\S6.3).
   \item \textbf{Tools}: list workers, submit and follow tasks, pending approvals and notes

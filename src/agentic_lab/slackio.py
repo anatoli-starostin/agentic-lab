@@ -1,7 +1,8 @@
 """An agent's presence in Slack: what it sees, and how it answers (DESIGN.md §4.3).
 
 Shared by managers and the secretary. Scope:
-  - A DM is one conversation (its threads are conversations of their own).
+  - A DM is one conversation (its threads are conversations of their own). A manager
+    catches up on the DMs it missed while it wasn't running (missed_dms; manager/service.py).
   - In channels, the agent takes part only in threads where it's mentioned or already
     involved, never the whole channel. When first mentioned partway through a thread, it
     reads the thread so far: its first 5 messages (they often set the topic) and the last
@@ -33,6 +34,9 @@ MAX_FILE_BYTES = 50 * 1024 * 1024
 HISTORY_MESSAGES = 50           # on first mention: the last messages before it...
 HISTORY_FIRST = 5               # ...plus the thread's first ones (where the topic is set)
 HISTORY_PAGES = 5               # at most 5 x 200 messages read
+DM_CATCHUP_HOURS = 72           # DMs missed while a manager wasn't running: at most this far
+DM_CATCHUP_MAX = 20             # back, the last this many of them,
+DM_CATCHUP_CHARS = 1000         # each cut to this length
 
 
 class Incoming:
@@ -146,6 +150,39 @@ class SlackIO:
         skipped = len(lines) - HISTORY_FIRST - HISTORY_MESSAGES
         return (lines[:HISTORY_FIRST] + [f"[... {skipped} messages skipped ...]"]
                 + lines[-HISTORY_MESSAGES:])
+
+    async def missed_dms(self, channel, thread_ts, after_ts, before_ts):
+        """The member's messages in a DM (or one of its threads) after `after_ts` and before
+        `before_ts`, oldest first, within the DM_CATCHUP_* bounds. [] if Slack fails."""
+        after = max(float(after_ts), float(before_ts) - DM_CATCHUP_HOURS * 3600)
+        kw = {"channel": channel, "oldest": f"{after:.6f}", "latest": before_ts,
+              "inclusive": False, "limit": 200}
+        if thread_ts is None:
+            call = self.web.conversations_history
+        else:
+            call, kw["ts"] = self.web.conversations_replies, thread_ts
+        msgs, cursor = [], None
+        try:
+            for _ in range(HISTORY_PAGES):
+                r = await call(cursor=cursor, **kw)
+                msgs += r.get("messages", [])
+                cursor = (r.get("response_metadata") or {}).get("next_cursor")
+                if not cursor:
+                    break
+        except Exception as e:
+            log.warning("couldn't read missed DMs in %s: %s", channel, e)
+            return []
+        msgs = sorted((m for m in msgs
+                       if after < float(m.get("ts", 0)) < float(before_ts)
+                       and not m.get("bot_id") and m.get("user") in self.members
+                       and m.get("subtype") in (None, "file_share")),
+                      key=lambda m: float(m["ts"]))
+        lines = [self._line(m)[:DM_CATCHUP_CHARS].rstrip()
+                 + (" [attachments, not downloaded]" if m.get("files") else "") for m in msgs]
+        if len(lines) > DM_CATCHUP_MAX:
+            lines = ([f"[... {len(lines) - DM_CATCHUP_MAX} earlier messages not shown ...]"]
+                     + lines[-DM_CATCHUP_MAX:])
+        return lines
 
     async def thread_history(self, channel, thread_ts, before_ts):
         """The thread as everyone sees it, before `before_ts` (a guest's turn starts here)."""
