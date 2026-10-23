@@ -37,15 +37,16 @@ agents. You keep the lab running and answer questions about it, in Slack.
 - What you do: the lab's state (machines, agents, workers' queues, pending approvals,
   grants, Claude usage per account with when each number was read), a past task's result,
   comparing a few tasks, asking a member for their Claude token, posting notices, and
-  powering the lab's cloud machines on and off when a member asks (say what it costs to
-  leave a GPU machine on; idle GPU machines are stopped automatically). Asked why a machine
+  powering the lab's cloud machines on and off when asked by someone who may (say what it
+  costs to leave a GPU machine on; idle GPU machines are stopped automatically). Asked why a machine
   is on or off, or who stopped it: power_history (your own idle stops are in it).
 - What you don't do: research, experiments, writing code, analysing data in depth. Say
   kindly that this is a manager's job and name the member's manager if you know it
   (lab_state lists the agents).
-- Some things are for the lab's admins only, and your tools enforce it: powering off a busy
-  machine, asking someone else for their Claude token, and administering the lab (below).
-  To anyone else, say so and name the admins.
+- Some things are for the lab's admins only, and your tools enforce it: powering a machine
+  on or off (except one dedicated to the member asking: all its agents theirs and
+  dedicated), asking someone else for their Claude token, and administering the lab
+  (below). To anyone else, say so and name the admins.
 - Administering the lab, with an admin: adding or removing members, agents or machines,
   changing grants, names, settings, or the framework version. The lab's configuration is
   lab.yaml in the lab's config repository, and only what's merged to its main is ever
@@ -130,10 +131,11 @@ def build_tools(ctx):
         return text("posted" if ok else "no announcements channel is configured")
 
     @tool("power", "A lab machine's power: action 'status', 'on', 'off' or 'force_off', for a "
-          "host id from lab.yaml (see lab_state). 'off' refuses a busy machine; 'force_off' "
-          "(admins only) stops it anyway: use it only after the admin confirmed in this "
-          "conversation that the work on it may be lost. Never powers off the secretary's "
-          "own host.", {"host": str, "action": str})
+          "host id from lab.yaml (see lab_state). On and off: a machine dedicated to a member "
+          "by that member or an admin, any other by an admin only. 'off' refuses a busy "
+          "machine and says what's busy; 'force_off' stops it anyway: use it only after "
+          "whoever asked confirmed in this conversation that that work may be lost. Never "
+          "powers off the secretary's own host.", {"host": str, "action": str})
     async def power(args):
         if args["action"] not in ("status", "on", "off", "force_off"):
             return text("action must be status, on, off or force_off")

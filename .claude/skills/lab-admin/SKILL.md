@@ -168,16 +168,19 @@ asking before each one. The whole lab, one host, or one agent.
   `lab apply`). A run has the same filesystem rules as the agent's sandboxed commands
   (writes only in the working folder, /tmp and write grants): docs/long-runs.md lists what
   that means and what doesn't work in runs.
-- **The secretary refuses to power off an idle machine "dedicated to" someone:** only that
-  member or an admin may (every agent on it is theirs and `access: dedicated`); otherwise
-  the secretary stops it itself after its `idle_stop_min` (#91).
+- **The secretary refuses to power a machine on or off:** a machine "dedicated to" a
+  member (every agent on it theirs and `access: dedicated`) is powered on and off by that
+  member or an admin, busy or not; any other machine (a shared agent, agents of more than
+  one member, the secretary, or no agents) by an admin only (#91). The refusal names the
+  cause. An idle machine is still stopped by the secretary after its `idle_stop_min`.
 - **A machine wasn't stopped when idle** (or the secretary refuses to power it off): it's
   *busy*. The secretary says why: a worker task running, queued, awaiting approval or
   waiting on its long runs; a long run going; a
   process on a GPU (anyone's); a GPU above 0% in its last 5 readings (~75 s); someone's
   `~/.lab-keep-awake` (the web UI shows who); or a manager runs there and the host has
   `idle_stop_with_managers: false` or no worker. Ask the person, or
-  an admin powers it off anyway (`force_off`, after confirming). Managers don't keep a
+  its member (if it's dedicated to them) or an admin powers it off anyway (`force_off`,
+  after confirming). Managers don't keep a
   host on by default (it's judged by its workers alone; a manager there goes offline with
   it); remove `idle_stop_with_managers: false` from the host in `lab.yaml` (PR → merge →
   deploy) if the manager may go offline.

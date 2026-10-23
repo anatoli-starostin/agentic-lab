@@ -113,21 +113,22 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
   the broker's overview, local systemd units, machine power states (Nebius through its
   CLI; AWS EC2 through boto3 with the secretary's own access key, never an instance
   role).
-- **Power**: any member may power a machine on. Off when it's idle: a machine
-  **dedicated** to a member (every agent on it `access: dedicated` and that member's) by
-  that member or an admin; any other machine by any member (#91). The secretary's own idle
-  stop is unaffected. A **busy** machine
+- **Power** (#91), on and off alike: a machine **dedicated** to a member (every agent on
+  it a worker or manager with `access: dedicated`, all that member's, however many) by that
+  member or an admin, **busy or not**; any other machine (a shared agent, agents of more
+  than one member, the secretary, or no agents) by an admin only. The secretary's own
+  actions (the idle stop) aren't a member's and aren't checked. A **busy** machine
   (a worker task running, queued, awaiting approval or waiting on its long runs; a long
   run going, even CPU-only; any process on a GPU, anyone's; a GPU
   above 0% in any of its last 5 readings, about 75 s; someone's `~/.lab-keep-awake`; a
-  manager on it, if the host has `idle_stop_with_managers: false`) may be powered off only by an admin, after confirming. Idle hosts with workers are stopped after their `idle_stop_min` minutes (required on every cloud host, the only switch; `0` means never).
+  manager on it, if the host has `idle_stop_with_managers: false`) is powered off only with `force_off`, after the secretary has said what's busy and the member asking has confirmed. Idle hosts with workers are stopped after their `idle_stop_min` minutes (required on every cloud host, the only switch; `0` means never).
   Managers on a host don't keep it on: it's judged by its workers alone (e.g. a member's
   manager beside its only worker on an on-demand GPU VM). Stopping it only takes the manager
   offline in Slack until someone asks the secretary to power the host on. A manager's own
   work (a turn, following a task on another host) isn't measured, so a host where that
   matters sets `idle_stop_with_managers: false`: any manager there then counts as busy.
-  A host with managers and **no worker** counts as busy: nothing measures it, so only an
-  admin may power it off (it's never idle-stopped either).
+  A host with managers and **no worker** counts as busy: nothing measures it, so it's
+  never idle-stopped, and powering it off takes `force_off`.
 - **Keep-awake**: someone working on a machine directly (not through agents, e.g. a
   CPU-only job) creates `~/.lab-keep-awake` in their home (first line, optional: why); while
   it's there the machine is busy, and the web UI shows who keeps it awake. A root timer

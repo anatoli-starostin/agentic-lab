@@ -78,7 +78,8 @@ mechanisms that bind them together, and the conventions the framework relies on.
     and lends their Claude seat to the agents attached to them.
   \item[Admin] A member with \code{admin: true} and a \code{tailscale\_login}. Only admins
     can read agents' logs in the web UI, change the lab (through the secretary or the
-    console), deploy, power off a busy machine, or ask for someone else's token.
+    console), deploy, power a machine that isn't dedicated to them on or off, or ask for
+    someone else's token.
 \end{description}
 
 \subsection{Agents}
@@ -471,10 +472,10 @@ services (systemd) and machines (Nebius, every few rounds). It serves:
     isn't measured, so \code{idle\_stop\_with\_managers: false} makes managers keep the
     host busy A host with managers and no worker counts as busy (only an admin
     powers it off).
-  \item \textbf{Who may power}: any member may power a machine on. An idle machine
-    dedicated to a member (all its agents theirs and dedicated) only that member or an admin
-    may power off; any other idle machine, any member. Powering off a busy machine is for
-    admins only, after confirming (\code{force\_off}).
+  \item \textbf{Who may power}, on and off alike: a machine dedicated to a member (all its
+    agents theirs and dedicated), that member or an admin, busy or not; any other machine
+    (a shared agent, agents of more than one member, the secretary, or no agents), an admin
+    only. A busy machine goes off only after confirming (\code{force\_off}).
 \end{itemize}
 
 \subsection{Notices}

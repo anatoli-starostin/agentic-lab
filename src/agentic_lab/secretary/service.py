@@ -549,26 +549,41 @@ class Secretary:
         return " or ".join((h or {}).get("name") or hid for hid, h in self.lab.humans.items()
                            if (h or {}).get("admin")) or "the lab's admin"
 
+    def _power_refused(self, host, action, asked_by):
+        """Who may power a machine on or off (#91): one dedicated to a member (P.owner),
+        that member or an admin, busy or not; any other, an admin only."""
+        if self.is_admin(asked_by):
+            return None
+        verb = "on" if action == "on" else "off"
+        mine = P.owner(self.lab, host)
+        if mine is None:
+            return (f"refused: {host} isn't dedicated to one member "
+                    f"({P.why_not_dedicated(self.lab, host)}), so only an admin "
+                    f"({self.admins()}) may power it {verb}.")
+        if asked_by == mine:
+            return None
+        name = (self.lab.humans.get(mine) or {}).get("name") or mine
+        if verb == "on":
+            return (f"refused: {host} is dedicated to {name}: only {name} or an admin "
+                    f"({self.admins()}) may power it on.")
+        stop = (self.lab.hosts.get(host) or {}).get("idle_stop_min")
+        return (f"refused: {host} is dedicated to {name}: only {name} or an admin "
+                f"({self.admins()}) may power it off. "
+                + (f"I stop it myself once it has been idle for {stop} min."
+                   if stop else "It has no idle stop (idle_stop_min: 0)."))
+
     async def power(self, host, action, why="asked in Slack", asked_by=None):
         """`asked_by`: the member asking (None: the secretary itself, e.g. an idle stop).
-        Powering off a busy machine is for admins only, and only with `force_off`; an idle
-        machine dedicated to a member, for that member or an admin (#91)."""
-        if action in ("off", "force_off") and asked_by is not None:
-            mine = P.owner(self.lab, host)
-            if mine and asked_by != mine and not self.is_admin(asked_by):
-                name = (self.lab.humans.get(mine) or {}).get("name") or mine
-                stop = (self.lab.hosts.get(host) or {}).get("idle_stop_min")
-                return (f"refused: {host} is dedicated to {name}: only {name} or an admin "
-                        f"({self.admins()}) may power it off. "
-                        + (f"I stop it myself once it has been idle for {stop} min."
-                           if stop else "It has no idle stop (idle_stop_min: 0)."))
-            busy = P.busy(self.lab, host, self.latest["state"])
-            if busy and not self.is_admin(asked_by):
-                return (f"refused: {host} is busy ({busy}). Only an admin "
-                        f"({self.admins()}) may power off a busy machine.")
-            if busy and action != "force_off":
-                return (f"{host} is busy ({busy}): powering it off loses that work. Ask the "
-                        "admin to confirm, then use force_off.")
+        Who may: _power_refused. A busy machine is powered off only with `force_off`, once
+        the member asking has confirmed losing what it names."""
+        if action in ("on", "off", "force_off") and asked_by is not None:
+            refused = self._power_refused(host, action, asked_by)
+            if refused:
+                return refused
+            busy = action == "off" and P.busy(self.lab, host, self.latest["state"])
+            if busy:
+                return (f"{host} is busy ({busy}): powering it off interrupts that and loses "
+                        "its work. Tell them so, and once they confirm, use force_off.")
         try:
             if action == "status":
                 return f"{host}: {await P.status(self.lab, host)}"

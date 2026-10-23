@@ -1,8 +1,8 @@
-"""Who may power a machine off (#91): an idle machine dedicated to a member, that member or
-an admin; a shared one, any member; a busy one, admins only (force_off), as before."""
+"""Who may power a machine on or off (#91): one dedicated to a member (every agent on it a
+worker or manager with access: dedicated, all that member's), that member or an admin,
+busy or not; any other machine, an admin only. A busy one goes off only with force_off."""
 import asyncio
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -43,7 +43,7 @@ def setup(monkeypatch, busy=False):
     return lab, sec, done
 
 
-def off(sec, host, who, action="off"):
+def power(sec, host, action, who):
     return asyncio.run(sec.power(host, action, "asked", asked_by=who))
 
 
@@ -72,40 +72,86 @@ def test_two_members_or_a_shared_agent_make_it_shared():
     assert P.owner(lab, "gpu-b") == lab.agents["worker-b"]["human"]  # both the same member's
 
 
-def test_only_the_owner_or_an_admin_stops_an_idle_dedicated_machine(monkeypatch):
+def test_the_owner_powers_their_machine_on_and_off(monkeypatch):
     lab, sec, done = setup(monkeypatch)
-    out = off(sec, "gpu-b", "carol")
-    assert out.startswith("refused: gpu-b is dedicated to Bob: only Bob or an admin")
-    assert "idle for 30 min" in out and done == []                # not a permanent block
-    assert "powering off" in off(sec, "gpu-b", "bob")             # the owner
-    assert "powering off" in off(sec, "gpu-b", "alice")           # an admin
-    assert done == [("off", "gpu-b"), ("off", "gpu-b")]
-
-
-def test_a_shared_idle_machine_any_member(monkeypatch):
-    lab, sec, done = setup(monkeypatch)
-    assert "powering off" in off(sec, "gpu-a", "carol")
-    assert done == [("off", "gpu-a")]
-
-
-def test_busy_still_needs_an_admin_and_force_off(monkeypatch):
-    lab, sec, done = setup(monkeypatch, busy=True)
-    assert "busy" in off(sec, "gpu-b", "bob")                     # even the owner
-    assert "busy" in off(sec, "gpu-a", "carol")
-    assert "force_off" in off(sec, "gpu-b", "alice")              # the admin, to confirm
-    assert "powering off" in off(sec, "gpu-b", "alice", "force_off")
-    assert done == [("off", "gpu-b")]
-
-
-def test_power_on_and_the_idle_stop_are_unchanged(monkeypatch):
-    lab, sec, done = setup(monkeypatch)
-    assert "powering on" in asyncio.run(sec.power("gpu-b", "on", "asked", asked_by="carol"))
-    assert "powering off" in asyncio.run(sec.power("gpu-b", "off", "idle for 30 min"))
+    lab.agents["mgr-bob"] = {"role": "manager", "human": "bob", "host": "gpu-b"}
+    assert P.owner(lab, "gpu-b") == "bob"                         # two agents, still bob's
+    assert power(sec, "gpu-b", "on", "bob") == "gpu-b: powering on; it takes a minute or two"
+    assert power(sec, "gpu-b", "off", "bob").startswith("gpu-b: powering off")
     assert done == [("on", "gpu-b"), ("off", "gpu-b")]
 
 
+def test_the_owner_stops_their_busy_machine_once_told_what_is_busy(monkeypatch):
+    lab, sec, done = setup(monkeypatch, busy=True)
+    assert power(sec, "gpu-b", "off", "bob") == (
+        "gpu-b is busy (worker-b has 1 running): powering it off interrupts that and loses "
+        "its work. Tell them so, and once they confirm, use force_off.")
+    assert done == []
+    assert power(sec, "gpu-b", "force_off", "bob").startswith("gpu-b: powering off")
+    assert done == [("off", "gpu-b")]
+
+
+def test_another_member_is_refused_both_ways(monkeypatch):
+    lab, sec, done = setup(monkeypatch, busy=True)
+    assert power(sec, "gpu-b", "on", "carol") == (
+        "refused: gpu-b is dedicated to Bob: only Bob or an admin (Alice) may power it on.")
+    assert power(sec, "gpu-b", "off", "carol") == (
+        "refused: gpu-b is dedicated to Bob: only Bob or an admin (Alice) may power it off. "
+        "I stop it myself once it has been idle for 30 min.")
+    assert power(sec, "gpu-b", "force_off", "carol").startswith("refused: gpu-b is dedicated")
+    assert done == []
+
+
 @pytest.mark.parametrize("stop_min,said", [(30, "idle for 30 min"), (0, "no idle stop")])
-def test_the_refusal_says_when_it_stops_by_itself(monkeypatch, stop_min, said):
+def test_the_off_refusal_says_when_it_stops_by_itself(monkeypatch, stop_min, said):
     lab, sec, done = setup(monkeypatch)
     lab.hosts["gpu-b"]["idle_stop_min"] = stop_min
-    assert said in off(sec, "gpu-b", "carol")
+    assert said in power(sec, "gpu-b", "off", "carol")
+    assert "idle" not in power(sec, "gpu-b", "on", "carol")       # not when powering on
+
+
+def test_an_admin_powers_any_machine(monkeypatch):
+    lab, sec, done = setup(monkeypatch, busy=True)
+    for host in ("gpu-b", "gpu-a"):
+        assert "powering on" in power(sec, host, "on", "alice")
+        assert "use force_off" in power(sec, host, "off", "alice")    # busy: confirm first
+        assert "powering off" in power(sec, host, "force_off", "alice")
+    assert done == [("on", "gpu-b"), ("off", "gpu-b"), ("on", "gpu-a"), ("off", "gpu-a")]
+
+
+def test_a_machine_dedicated_to_no_one_is_for_admins_only(monkeypatch):
+    lab, sec, done = setup(monkeypatch)
+    sec_host = next(x["host"] for x in lab.agents.values() if x["role"] == "secretary")
+    lab.agents["worker-c"] = {"role": "worker", "human": "carol", "host": "mgr-vm-01"}
+    lab.hosts["empty"] = {"kind": "cloud", "provider": "nebius", "instance": "x",
+                          "idle_stop_min": 30}
+    why = {"gpu-a": "worker-a is shared",
+           "mgr-vm-01": "it runs agents of more than one member (Alice, Carol)",
+           sec_host: "the secretary runs there",
+           "empty": "no agents run there"}
+    for host, cause in why.items():
+        for action, verb in (("on", "on"), ("off", "off"), ("force_off", "off")):
+            for who in ("bob", "carol"):                         # members, but not admins
+                assert power(sec, host, action, who) == (
+                    f"refused: {host} isn't dedicated to one member ({cause}), so only an "
+                    f"admin (Alice) may power it {verb}.")
+    assert done == []
+
+
+def test_every_cause_is_named():
+    lab = registry.load(EXAMPLE)
+    lab.humans["bob"] = {"name": "Bob"}
+    sec_host = next(x["host"] for x in lab.agents.values() if x["role"] == "secretary")
+    lab.agents["worker-z"] = {"role": "worker", "human": "bob", "host": sec_host,
+                              "access": "shared"}
+    assert P.why_not_dedicated(lab, sec_host) == (
+        "the secretary runs there; worker-z is shared; "
+        "it runs agents of more than one member (Alice, Bob)")
+
+
+def test_the_secretarys_own_actions_are_unaffected(monkeypatch):
+    lab, sec, done = setup(monkeypatch, busy=True)
+    for host in ("gpu-b", "gpu-a"):                             # dedicated, and not
+        assert "powering on" in asyncio.run(sec.power(host, "on", "asked by the console"))
+        assert "powering off" in asyncio.run(sec.power(host, "off", "idle for 30 min"))
+    assert done == [("on", "gpu-b"), ("off", "gpu-b"), ("on", "gpu-a"), ("off", "gpu-a")]

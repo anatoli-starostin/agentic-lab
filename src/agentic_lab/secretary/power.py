@@ -171,6 +171,25 @@ def owner(lab, host):
     return None
 
 
+def why_not_dedicated(lab, host):
+    """Why `host` has no owner() (for a refusal): every cause that holds."""
+    here = {aid: x for aid, x in lab.agents.items() if x.get("host") == host}
+    if not here:
+        return "no agents run there"
+    why = []
+    if any(x.get("role") == "secretary" for x in here.values()):
+        why.append("the secretary runs there")
+    shared = [lab.display_name(aid) for aid, x in here.items()
+              if x.get("role") in ("worker", "manager") and x.get("access") == "shared"]
+    if shared:
+        why.append(", ".join(shared) + (" is" if len(shared) == 1 else " are") + " shared")
+    members = sorted({(lab.humans.get(x.get("human")) or {}).get("name") or x.get("human")
+                      for x in here.values()})
+    if len(members) > 1:
+        why.append("it runs agents of more than one member (" + ", ".join(members) + ")")
+    return "; ".join(why)
+
+
 def note_gpu(snapshot):
     """Remember each worker's GPU utilization over the last readings (one per collection),
     and write its highest into the snapshot (`gpu_recent_max`): a GPU counts as idle only
