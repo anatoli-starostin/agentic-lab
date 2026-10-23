@@ -117,6 +117,14 @@ What it took:
 
 ## Accepted trade-offs
 
+- **The cloud's metadata service is closed to every lab user** (`169.254.169.254`, and
+  AWS's IPv6 address): the host's instance role or service account is never the lab's.
+  Every lab unit, and every long run, has `IPAddressDeny` for it (`policy/sandbox.METADATA`),
+  which systemd applies to everything the unit starts. It's per unit, not per user: it
+  can't tell a service from its own children, which is fine because none of them needs it.
+  It relies on cgroup v2 with BPF; `lab doctor` probes it as an agent's user, so a kernel
+  that doesn't enforce it shows up as a failure, not a silent pass.
+
 - **Local reads are free**, except `/run` and the agent's service's own secrets and state
   (`~/.config/agentic-lab`, `~/.local/state/agentic-lab`): the agent's Read tool is denied
   there and its sandbox hides them; the Claude token is stripped from sandboxed commands.

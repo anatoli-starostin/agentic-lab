@@ -20,6 +20,8 @@ RestartSec=5
 # A /tmp of its own: sockets other processes leave in the host's /tmp (tmux, forwarded SSH
 # agents, other agents) aren't even visible to this agent.
 PrivateTmp=yes
+# the cloud's metadata service (instance roles, service-account tokens): never the lab's
+IPAddressDeny=169.254.169.254/32 fd00:ec2::254/128
 # New files private to the agent (its working folder's ACL lets readers in, #43).
 UMask=0077
 

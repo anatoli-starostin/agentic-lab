@@ -12,6 +12,7 @@ import shutil
 import socket
 import stat
 import subprocess
+import sys
 from dataclasses import dataclass
 
 from .registry import check as lab_check
@@ -100,6 +101,43 @@ def host_checks(gpu):
         out.append(Result(OK, f"GPU visible inside the sandbox ({msg.splitlines()[0][:60]})")
                    if code == 0 else
                    Result(FAIL, "GPU not visible through bwrap-gpu", msg[-200:]))
+    return out
+
+
+PROBE = ("import socket,sys\ntry:\n socket.create_connection(('169.254.169.254', 80), 3)"
+         "\nexcept OSError:\n sys.exit(1)")
+
+
+def metadata_checks(units, templates, user):
+    """The cloud's metadata service (role and service-account credentials) is closed to the
+    lab's users: every lab unit here denies it, and this kernel enforces the denial (a probe
+    as an agent's user, under the same setting; root's own probe tells whether there's a
+    metadata service at all)."""
+    from .policy.sandbox import METADATA
+    out = []
+    missing = [u for u in units if METADATA.split()[0] not in sh(
+        "systemctl", "show", "-p", "IPAddressDeny", u)[1]]
+    for t in templates:
+        try:
+            with open(t) as f:
+                if f"IPAddressDeny={METADATA}" not in f.read():
+                    missing.append(os.path.basename(t))
+        except OSError:
+            pass
+    out.append(Result(FAIL, f"metadata service not denied to: {', '.join(missing)}",
+                      "sudo lab apply") if missing else
+               Result(OK, "metadata service denied to every lab unit here"))
+    if sh(sys.executable, "-c", PROBE, timeout=10)[0] != 0:
+        out.append(Result(OK, "no cloud metadata service answers on this host"))
+        return out
+    code, msg = sh("systemd-run", "--wait", "--pipe", "--quiet", f"--uid={user}",
+                   f"--property=IPAddressDeny={METADATA}", sys.executable, "-c", PROBE,
+                   timeout=30)
+    out.append(Result(OK, "an agent's user can't reach the metadata service") if code == 1 else
+               Result(FAIL, "an agent's user can reach the metadata service (this kernel "
+                            "doesn't enforce IPAddressDeny)" if code == 0 else
+                      f"couldn't probe the metadata service as {user} ({msg[-120:]})",
+                      "the host needs cgroup v2 with BPF; see docs/security-notes.md"))
     return out
 
 
@@ -221,7 +259,12 @@ def run(lab_path, host=None):
         return sections
     here = [aid for aid, a in lab.agents.items() if (a or {}).get("host") == host]
     gpu = any(lab.agents[a].get("gpu", lab.agents[a].get("role") == "worker") for a in here)
-    sections.append((f"host {host}", host_checks(gpu)))
+    units = [UNITS[lab.agents[a]["role"]].format(a) for a in here
+             if lab.agents[a].get("role") in UNITS]
+    templates = [f"/etc/systemd/system/lab-run-{a}@.service" for a in here
+                 if lab.agents[a].get("role") == "worker"]
+    sections.append((f"host {host}", host_checks(gpu) + (
+        metadata_checks(units, templates, lab.unix_user(here[0])) if here else [])))
 
     for aid in here:
         role = lab.agents[aid].get("role")
