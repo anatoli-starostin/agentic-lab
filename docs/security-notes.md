@@ -123,7 +123,9 @@ What it took:
   which systemd applies to everything the unit starts. It's per unit, not per user: it
   can't tell a service from its own children, which is fine because none of them needs it.
   It relies on cgroup v2 with BPF; `lab doctor` probes it as an agent's user, so a kernel
-  that doesn't enforce it shows up as a failure, not a silent pass.
+  that doesn't enforce it shows up as a failure, not a silent pass. A host whose DNS server
+  is the metadata address (some GCP images without systemd-resolved) would lose DNS in
+  every lab unit: `lab doctor` fails there. AWS and Nebius hosts resolve elsewhere.
 
 - **AWS power uses a stored access key** (#68), an IAM user's, limited to start/stop on
   the lab's tagged instances plus `DescribeInstances` (docs/install.md), never the host's

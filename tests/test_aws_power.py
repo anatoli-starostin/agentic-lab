@@ -127,7 +127,8 @@ def test_a_powered_aws_host_needs_its_region(tmp_path):
     assert not any("mgr-x" in i for i in issues)
     d["hosts"]["gpu-x"]["region"] = "eu-west-1"
     p.write_text(yaml.safe_dump(d))
-    assert not any("gpu-x" in str(i) for i in registry.check(registry.load(p)))
+    assert not any("gpu-x" in str(i) and "region" in str(i)
+                   for i in registry.check(registry.load(p)))
 
 
 def test_lab_apply_installs_the_sdk_only_for_aws_labs():
@@ -236,3 +237,29 @@ def test_doctor_checks_the_key_against_each_aws_host(tmp_path):
     res = D.aws_checks(lab(), pw, ec2=ec2)
     assert [r.status for r in res] == [D.OK, D.OK, D.OK]     # the key, then each AWS host
     assert asked == [(None, str(d / "aws-key.json")), ("eu-west-1", str(d / "aws-key.json"))]
+
+
+def test_endpoints_from_the_environment_cant_redirect_the_calls(boto, tmp_path, monkeypatch):
+    key_file(tmp_path, monkeypatch)
+    asyncio.run(P.status(lab(), "gpu"))
+    assert boto.clients[0][1]["config"]["ignore_configured_endpoint_urls"] is True
+
+
+def test_lab_check_warns_without_an_aws_key_rotation_entry(tmp_path):
+    import yaml
+    from pathlib import Path
+
+    from agentic_lab import registry
+    d = yaml.safe_load((Path(__file__).parent.parent / "examples" / "minimal" / "lab.yaml")
+                       .read_text())
+    d["hosts"]["gpu-x"] = {"kind": "cloud", "provider": "aws", "instance": "i-0",
+                           "region": "eu-west-1", "idle_stop_min": 30}
+    p = tmp_path / "lab.yaml"
+    p.write_text(yaml.safe_dump(d))
+    issues = [str(i) for i in registry.check(registry.load(p))]
+    warn = [i for i in issues if "aws-key" in i]
+    assert len(warn) == 1 and warn[0].startswith("WARN") and "gpu-x" in warn[0]
+    d.setdefault("credentials", []).append({"name": "aws-key", "host": "gpu-x",
+                                            "expires": "2099-01-01"})
+    p.write_text(yaml.safe_dump(d))
+    assert not any("aws-key" in str(i) for i in registry.check(registry.load(p)))

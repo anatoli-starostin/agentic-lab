@@ -64,3 +64,15 @@ def test_doctor_when_the_kernel_doesnt_enforce_it(monkeypatch, tmp_path):
 def test_doctor_when_a_unit_lacks_it(monkeypatch, tmp_path):
     res, _ = doctor(monkeypatch, tmp_path, "IPAddressDeny=", False, None)
     assert res[0].status == D.FAIL and "lab-worker@w" in res[0].what
+
+
+@pytest.mark.parametrize("conf,status", [
+    ("nameserver 127.0.0.53\noptions edns0\n", D.OK),
+    ("# GCP without resolved\nnameserver 169.254.169.254\nsearch c.example.internal\n", D.FAIL),
+])
+def test_doctor_fails_when_dns_goes_through_the_metadata_address(tmp_path, conf, status):
+    real = tmp_path / "stub-resolv.conf"
+    real.write_text(conf)
+    (tmp_path / "resolv.conf").symlink_to(real)                    # followed, like Ubuntu's
+    res = D.resolver_checks(str(tmp_path / "resolv.conf"))
+    assert [r.status for r in res] == [status]

@@ -108,6 +108,22 @@ PROBE = ("import socket,sys\ntry:\n socket.create_connection(('169.254.169.254',
          "\nexcept OSError:\n sys.exit(1)")
 
 
+def resolver_checks(path="/etc/resolv.conf"):
+    """#86's deny would cut DNS for every lab unit on a host whose resolver is the metadata
+    address (e.g. a GCP image without systemd-resolved)."""
+    try:
+        with open(os.path.realpath(path)) as f:
+            servers = [ln.split()[1] for ln in f if ln.split()[:1] == ["nameserver"]
+                       and len(ln.split()) > 1]
+    except OSError:
+        return []
+    if "169.254.169.254" in servers:
+        return [Result(FAIL, "the host's DNS server is the metadata address, which every lab "
+                             "unit denies: the lab's services can't resolve names here",
+                       "use a resolver that isn't 169.254.169.254 (e.g. systemd-resolved)")]
+    return [Result(OK, "DNS doesn't go through the metadata address")]
+
+
 def metadata_checks(units, templates, user):
     """The cloud's metadata service (role and service-account credentials) is closed to the
     lab's users: every lab unit here denies it, and this kernel enforces the denial (a probe
@@ -286,7 +302,7 @@ def run(lab_path, host=None):
              if lab.agents[a].get("role") in UNITS]
     templates = [f"/etc/systemd/system/lab-run-{a}@.service" for a in here
                  if lab.agents[a].get("role") == "worker"]
-    sections.append((f"host {host}", host_checks(gpu) + (
+    sections.append((f"host {host}", host_checks(gpu) + resolver_checks() + (
         metadata_checks(units, templates, lab.unix_user(here[0])) if here else [])))
 
     for aid in here:

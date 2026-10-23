@@ -470,6 +470,12 @@ def check(lab: Lab, today: dt.date | None = None):
             if not any(lab.agents[m].get("human") == owner for m in roles.get("manager", [])):
                 W(f"agents.{aid}", f"dedicated to {owner!r}, who has no manager to submit tasks")
 
+    powered_aws = [h for h, x in lab.hosts.items()
+                   if (x or {}).get("provider") == "aws" and (x or {}).get("instance")]
+    if powered_aws and not any(c.get("name") == "aws-key" for c in lab.credentials):
+        # an AWS key never expires by itself: without an entry, no rotation warning (#68)
+        W("credentials", f"no aws-key entry for the secretary's AWS key ({', '.join(powered_aws)}"
+                         " powered): add one with its rotation date (docs/install.md)")
     for i, c in enumerate(lab.credentials):
         where = f"credentials[{i}]"
         if not _fields(c, _CRED, where, issues):

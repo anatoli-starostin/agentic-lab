@@ -102,7 +102,9 @@ def _ec2(region, key=AWS_KEY):
     except ImportError:
         raise PowerError("boto3 isn't installed for the secretary (lab apply installs it "
                          "when lab.yaml has AWS hosts)") from None
-    cfg = Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 3})
+    # endpoints from the environment or a config file can't redirect the signed calls
+    cfg = Config(connect_timeout=10, read_timeout=30, retries={"max_attempts": 3},
+                 ignore_configured_endpoint_urls=True)
     try:
         return boto3.client("ec2", region_name=region, config=cfg, **creds)
     except Exception as e:      # no region anywhere, a bad profile...
