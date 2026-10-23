@@ -13,7 +13,7 @@ policy (`policy/sandbox.filesystem`), and keeps it going until it ends or is sto
 | Files | reads what the agent's user can read, except what's hidden below |
 | Writes | only the working folder (`workdir`, `~/work` by default; a link to another disk is fine), `/tmp`, and folders granted for writing |
 | Hidden | the lab's secrets (`~/.config/agentic-lab`), the service's state (`~/.local/state/agentic-lab`), `/run` (except the GPU's socket) |
-| Processes | only its own: `ps`, `top`, `kill` see nothing else |
+| Processes | only its own: `ps`, `top`, `kill` see nothing else (bwrap's PID namespace; the unit's `PrivatePIDs=` is ignored on systemd < 257, e.g. Ubuntu 24.04's 255, where the unit still starts and logs one line, and becomes a second layer from 257 on) |
 | Caches | shared, in `work/.cache` (below) |
 | The agent's GitHub setup | readable: `git push` and `gh` work |
 
