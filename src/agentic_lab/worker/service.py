@@ -62,6 +62,18 @@ def access_for(lab, agent_id, tokens_text):
     return Access(tokens, allowed_humans={a["human"]} if dedicated else None)
 
 
+def loop_ended(task, stop, server):
+    """The task loop ended. If the worker isn't stopping, that's a bug: its tasks
+    would never run or wake again while the worker still looks up. Say why, and exit so
+    systemd restarts the worker (Restart=always) with its loops running again."""
+    if stop.is_set():
+        return
+    err = None if task.cancelled() else task.exception()
+    log.error("the task loop ended unexpectedly (%s): restarting the worker",
+              f"{type(err).__name__}: {err}" if err else "no error", exc_info=err)
+    server.should_exit = True
+
+
 async def serve(lab_path, agent_id, host, port, model=None, names=()):
     lab = load_lab(lab_path)
     if agent_id not in lab.agents or lab.agents[agent_id].get("role") != "worker":
@@ -127,6 +139,7 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
     log.info("worker %s: %d manager(s), serving on %s:%d", agent_id,
              len(access._tokens), host, port)
     tasks = asyncio.create_task(run_tasks(store, runner, stop, runs))
+    tasks.add_done_callback(lambda t: loop_ended(t, stop, server))
     GH.start(lab, agent_id, stop)       # a GitHub App identity: keep its token fresh
     prober = asyncio.create_task(probe_loop(usage, seat_token, stop))
     await server.serve()
