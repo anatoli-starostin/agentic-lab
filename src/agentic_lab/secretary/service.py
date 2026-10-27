@@ -1011,6 +1011,7 @@ async def serve(lab_path, host, port):
                                      f"idle for {lab.hosts[host]['idle_stop_min']} min")
             if result.startswith(("couldn't", "refused")):   # retried next round
                 log.warning("idle stop of %s failed: %s", host, result)
+                await P.release(lab, host, workers)
                 if sec.events is not None:
                     sec.events.add("power", f"{host} off failed: {result}", host=host,
                                    action="off", why="idle stop")

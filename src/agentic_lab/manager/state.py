@@ -41,6 +41,8 @@ class TrackedTask:
     wrapup_next: float = 0.0            # not before this (time.time()), after a failure
     register_tries: int = 0             # failed registrations with the broker
     register_next: float = 0.0          # retried not before this
+    unreachable_since: float = 0.0      # the worker hasn't answered since (time.time())
+    unreachable_noted: bool = False     # and the conversation has been told
 
 
 class ManagerState:

@@ -2,10 +2,13 @@
 
 Every few seconds, for each open task: new progress lines are posted in the task's
 conversation as they arrive (by code, verbatim, no LLM); when a task starts waiting for a
-human's approval, the conversation is told where to look; when it finishes, the manager
-agent gets a message about it and writes the wrap-up for the member.
+human's approval, the conversation is told where to look; when its worker can't be
+reached for a while (its machine stopped...), the conversation is told once, and again
+when it's back; when it finishes, the manager agent gets a message about it and writes the
+wrap-up for the member.
 """
 import asyncio
+import datetime as dt
 import logging
 import time
 
@@ -23,6 +26,7 @@ WRAPUP_TRIES = 5                # failed wrap-ups before giving up on one
 WRAPUP_PAUSE_S = (30, 120, 600, 1800)   # between them
 REFUSED = (400, 404, 409)       # the broker's definite "no" to a registration
 REGISTER_PAUSE_MAX_S = 600      # retries back off up to this
+QUIET_NOTICE_S = 120            # a worker unreachable this long is said in the conversation
 
 
 async def _wrapup(state, finished, post, conv, t, view):
@@ -94,6 +98,8 @@ async def check_once(state, workers, post, finished, mention=lambda human: human
                                          "I've stopped following it.")
                     t.done = True
                 state.save()
+            elif "unreachable" in str(e):
+                await _unreachable(state, post, mention, t)
             log.warning("following %s: %s", t.task_id, e)
             continue
         t.misses = 0
@@ -101,6 +107,12 @@ async def check_once(state, workers, post, finished, mention=lambda human: human
         if conv is None:
             t.done = True
             continue
+        if t.unreachable_since:                 # it answers again
+            if t.unreachable_noted:
+                await post(conv, f"✅ _{t.worker}_ is reachable again; I'm following task "
+                                 f"{t.task_id} again.")
+            t.unreachable_since, t.unreachable_noted = 0.0, False
+            state.save()
         lines = view.get("progress") or []
         # new lines by the total ever added: the worker keeps only the last ones (#58)
         total = max(view.get("progress_total") or 0, len(lines))
@@ -134,6 +146,27 @@ async def check_once(state, workers, post, finished, mention=lambda human: human
             else:
                 await _wrapup(state, finished, post, conv, t, view)
         state.save()
+
+
+async def _unreachable(state, post, mention, t):
+    """The worker doesn't answer: after QUIET_NOTICE_S, the conversation is told once (the
+    member may need to power its machine on), instead of the manager going on silently."""
+    now = time.time()
+    if not t.unreachable_since:
+        t.unreachable_since = now
+        state.save()
+    if t.unreachable_noted or now - t.unreachable_since < QUIET_NOTICE_S:
+        return
+    conv = state.conversations.get(t.conversation)
+    if conv is None:
+        return
+    since = dt.datetime.fromtimestamp(t.unreachable_since, dt.timezone.utc)
+    await post(conv, f"⚠️ _{t.worker}_ can't be reached since {since:%H:%M} UTC (is its "
+                     f"machine stopped?). Task {t.task_id} is on hold there, not lost: "
+                     f"{mention(t.requester)}, ask the secretary to power it on if it's off. "
+                     "I'll say when it's back.")
+    t.unreachable_noted = True
+    state.save()
 
 
 async def follow(state, workers, post, finished, stop: asyncio.Event, mention=None,

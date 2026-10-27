@@ -24,8 +24,10 @@ for `idle_stop_min`, no task they still follow, no approval of theirs pending.
 import asyncio
 import datetime as dt
 import json
+import logging
 import os
 
+log = logging.getLogger("agentic_lab.secretary")
 NEBIUS = os.path.expanduser("~/.nebius/bin/nebius")
 if not os.path.exists(NEBIUS) and os.path.exists("/usr/local/bin/nebius"):
     NEBIUS = "/usr/local/bin/nebius"
@@ -433,10 +435,39 @@ class IdleWatch:
         return out
 
 
-async def recheck(lab, host, workers, snapshot, manager_activity=None):
+STOP_HOLD_S = 300          # new tasks are refused this long while a host is being stopped
+
+
+async def _hold(workers, aid, seconds):
+    """A worker's health, read as it starts holding new tasks off for `seconds` (0: ends
+    the hold); a worker from before holds existed is only read."""
+    try:
+        return await workers.call(aid, "hold_for_stop", {"seconds": seconds}, retries=0)
+    except Exception as e:
+        if "hold_for_stop" not in str(e) and "nknown tool" not in str(e):
+            raise
+    return await workers.call(aid, "health_check", retries=0)
+
+
+async def release(lab, host, workers):
+    """The idle stop of `host` is called off or failed: its workers take tasks again."""
+    for aid, a in lab.agents.items():
+        if a.get("host") == host and a.get("role") == "worker":
+            try:
+                await workers.call(aid, "hold_for_stop", {"seconds": 0}, retries=0)
+            except Exception as e:      # the hold ends by itself anyway
+                log.warning("couldn't end the stop hold on %s: %s", aid, e)
+
+
+async def recheck(lab, host, workers, snapshot, manager_activity=None, hold=True):
     """Right before an idle stop: is the host still idle? Its workers' health (and on a
     managers-only host, its managers' activity: `manager_activity(aid)`, async) read again
-    now (the snapshot may be minutes old, #60). Returns why it's busy, or None."""
+    now (the snapshot may be minutes old, #60). Returns why it's busy, or None.
+
+    With `hold`, each worker refuses new tasks from that reading on (STOP_HOLD_S), so no
+    task arrives between it and the machine going off: one that does is told the machine
+    is stopping. A busy host is released at once; the caller releases it if the stop
+    fails (release())."""
     agents = dict((snapshot or {}).get("agents") or {})
     for aid in managers_only(lab, host):
         try:
@@ -448,8 +479,11 @@ async def recheck(lab, host, workers, snapshot, manager_activity=None):
         if a.get("host") != host or a.get("role") != "worker":
             continue
         try:
-            h = await workers.call(aid, "health_check", retries=0)
+            h = await (_hold(workers, aid, STOP_HOLD_S) if hold else
+                       workers.call(aid, "health_check", retries=0))
         except Exception as e:
+            if hold:
+                await release(lab, host, workers)
             return f"couldn't re-check {lab.display_name(aid)} ({e})"
         prev = agents.get(aid, {})
         agents[aid] = {"up": True, "queue": h.get("tasks"), "runs": h.get("runs"),
@@ -457,4 +491,7 @@ async def recheck(lab, host, workers, snapshot, manager_activity=None):
                        "gpu_processes": h.get("gpu_processes"),
                        "gpu_recent_max": prev.get("gpu_recent_max"),
                        "gpu_readings": prev.get("gpu_readings")}
-    return busy(lab, host, {"agents": agents, "approvals": (snapshot or {}).get("approvals")})
+    why = busy(lab, host, {"agents": agents, "approvals": (snapshot or {}).get("approvals")})
+    if why and hold:
+        await release(lab, host, workers)
+    return why
