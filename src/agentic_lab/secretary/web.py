@@ -58,7 +58,19 @@ font-size:12px}code{font-size:12px;word-break:break-all}
 .ahead h3{margin-bottom:0}.check{margin:14px 0 0}.check button{font:12px system-ui,sans-serif;
 padding:3px 10px;border-radius:6px;border:1px solid var(--line);background:var(--card);
 color:var(--fg);cursor:pointer}.check button:hover{border-color:var(--meter)}
-@media (max-width:420px){main{padding:12px;grid-template-columns:1fr}header{padding:14px 16px}}
+section.wide{grid-column:1/-1}
+.machines td:first-child{width:22%}.machines td:nth-child(2){width:18%}
+.agent+.agent{margin-top:6px;padding-top:6px;border-top:1px dashed var(--line)}
+.check.inline{display:inline;margin:0 0 0 4px}
+.tasks td.what{width:62%}.tasks .tid{font-size:11px;word-break:normal}
+.tasks details summary{cursor:pointer;list-style:none}.tasks details summary::-webkit-details-marker{display:none}
+.tasks details summary .more{color:var(--meter);font-size:12px;white-space:nowrap}
+.tasks details[open] summary .more{display:none}
+.tasks .full{white-space:pre-wrap;word-break:break-word;margin:6px 0 2px;font-size:13px}
+.tasks .st{white-space:nowrap}.tasks .detail{font-size:12px;color:var(--muted);margin-top:2px;
+word-break:break-word}
+@media (max-width:420px){main{padding:12px;grid-template-columns:1fr}header{padding:14px 16px}
+.tasks td.what{width:auto}}
 """
 
 LIMIT_NAMES = {"five_hour": "5-hour window", "seven_day": "weekly", "seven_day_opus":
@@ -182,8 +194,11 @@ def _tokens(state, acc):
 
 
 def _accounts(state):
-    cards = []
+    cards, quiet = [], []
     for hid, acc in state["accounts"].items():
+        if not acc["limits"] and not any((acc.get("tokens_today") or {}).values()):
+            quiet.append((hid, acc))        # nothing to show: one line below
+            continue
         agents = ", ".join(e(state["agents"][a]["name"]) for a in acc["agents"]) or "—"
         order = [k for k, _, _ in WINDOWS]
         meters = [_meter(k, acc["limits"][k]) for k in sorted(
@@ -201,6 +216,14 @@ def _accounts(state):
         cards.append(f"<div class='account'><div class='ahead'><h3>{e(acc['name'])}</h3>{check}"
                      f"</div><div class='muted small'>seat used by: {agents}</div>{note}"
                      f"{''.join(meters)}{_tokens(state, acc)}</div>")
+    if quiet:
+        cards.append("<div class='account'><div class='muted small'>No readings yet for "
+                     + ", ".join(
+                         f"{e(acc['name'])}"
+                         + (f" <form method='post' action='/usage/check/{e(hid)}' class='check "
+                            f"inline'><button>Check now</button></form>" if acc["agents"] else "")
+                         for hid, acc in quiet)
+                     + ": they arrive while an agent on the seat runs.</div></div>")
     return "<section><h2>Claude usage, by account</h2>" + "".join(cards) + "</section>"
 
 
@@ -220,20 +243,21 @@ def _workers(state):
         if a.get("role") != "worker":
             continue
         if not a.get("up"):
-            out.append(f"<h2>{e(a['name'])} <span class='pill bad'>down</span></h2>"
-                       f"<p class='muted small'>{e(a.get('error'))}</p>")
+            st = _st(a)
+            word = st["word"] if st["word"] != "—" else "down"
+            out.append(f"<h2>{e(a['name'])} <span class='pill {e(st.get('level') or 'bad')}'>"
+                       f"{e(word)}</span></h2>"
+                       + (f"<p class='muted small'>{e(st.get('hint'))}</p>" if st.get("hint")
+                          else f"<p class='muted small'>{e(a.get('error'))}</p>"))
             continue
         q = a.get("queue") or {}
         busy = q.get("running", 0) + q.get("awaiting_approval", 0) + q.get("waiting", 0)
-        status = ("<span class='pill warn'>busy</span>" if busy else
-                  "<span class='pill ok'>idle</span>")
-        rows = "".join(
-            f"<tr><td><code>{e(t['id'])}</code><div class='muted small'>"
-            f"{e((t.get('instruction') or '')[:90])}</div></td>"
-            f"<td class='{STATE_CLASS.get(t['state'], '')}'>{e(t['state'])}</td>"
-            f"<td>{e(t.get('requester'))}<div class='muted small'>via {e(t.get('manager'))}</div></td>"
-            f"<td class='muted small'>{e(ago(t.get('finished') or t.get('created')))}</td></tr>"
-            for t in a.get("recent") or [])
+        why = ", ".join(f"{q[k]} {k.replace('_', ' ')}" for k in
+                        ("running", "awaiting_approval", "waiting", "queued") if q.get(k))
+        status = (f"<span class='pill warn'>busy: {e(why)}</span>" if busy else
+                  "<span class='pill ok'>idle</span>"
+                  + (f" <span class='muted small'>{e(why)}</span>" if why else ""))
+        rows = "".join(_task_row(t) for t in a.get("recent") or [])
         out.append(f"<h2>{e(a['name'])} {status}</h2>"
                    + "".join(f"<div class='small warn'>kept awake by {e(h['user'])}"
                              f"{' (' + e(h['note']) + ')' if h.get('note') else ''} "
@@ -245,9 +269,75 @@ def _workers(state):
                            for r in a.get("runs") or []) +
                    f"<div class='small'>GPU: {e(_gpu_line(a))} · disk free "
                    f"{e(a.get('disk_free_gb'))} GB</div>"
-                   f"<table><tr><th>Task</th><th>State</th><th>For</th><th>When</th></tr>"
-                   f"{rows or '<tr><td class=muted>no tasks yet</td></tr>'}</table>")
-    return "<section>" + ("".join(out) or "<h2>Workers</h2><p class=muted>none</p>") + "</section>"
+                   f"<table class='tasks'><tr><th>Task</th><th>State</th><th>For</th></tr>"
+                   f"{rows or '<tr><td class=muted colspan=3>no tasks yet</td></tr>'}</table>")
+    return ("<section class='wide'>" + ("".join(out) or "<h2>Workers' tasks</h2><p class=muted>no workers</p>")
+            + "</section>")
+
+
+SHORT = 140         # a task's instruction before "more": the whole of it is one click away
+
+
+def _clock(iso):
+    """'16:03 UTC' (today) or 'Oct 26 16:03 UTC'."""
+    import datetime as dt
+    try:
+        t = dt.datetime.fromisoformat(iso).astimezone(dt.timezone.utc)
+    except (TypeError, ValueError):
+        return ""
+    today = dt.datetime.now(dt.timezone.utc).date()
+    return f"{t:%H:%M} UTC" if t.date() == today else f"{t:%b %d %H:%M} UTC"
+
+
+def _for(iso):
+    """'14 min' for how long since `iso`."""
+    return ago(iso).replace(" ago", "") if iso else "…"
+
+
+def _when(t):
+    """What a task's state means for it right now, in words."""
+    st, w = t.get("state"), t.get("waiting") or {}
+    if st == "running":
+        return f"running for {_for(t['started'])}" if t.get("started") else "running"
+    if st == "awaiting_approval":
+        return "waiting for a human's approval (Slack)"
+    if st == "waiting":
+        bits = [f"waiting since {ago(w['since'])}" if w.get("since") else "waiting for its runs"]
+        if w.get("wake_at"):
+            bits.append(f"check-in {_clock(w['wake_at'])}")
+        if w.get("runs"):
+            bits.append("runs " + ", ".join(w["runs"]))
+        return "; ".join(bits)
+    if st == "queued":
+        return f"queued {ago(t.get('created'))}"
+    if st in ("done", "failed", "cancelled"):
+        return f"{st} {ago(t.get('finished'))}" if t.get("finished") else st
+    return st or ""
+
+
+def _task_row(t):
+    """One task: what it is (all of it on a click), what its state means now, and who for.
+    The id is small: it's for logs and `lab debug`, not for reading."""
+    text = (t.get("instruction") or "").strip()
+    first, rest = text[:SHORT], text[SHORT:]
+    what = (f"<details><summary>{e(first)}{'… <span class=more>more</span>' if rest else ''}"
+            f"</summary><div class='full'>{e(text)}</div></details>" if rest else e(first)) \
+        if text else "<span class='muted'>(details hidden)</span>"
+    extra = ""
+    if t.get("state") == "waiting" and (t.get("waiting") or {}).get("note"):
+        extra = f"<div class='detail'>{e(t['waiting']['note'])}</div>"
+    elif t.get("state") == "failed" and t.get("error"):
+        extra = f"<div class='detail bad'>{e(t['error'])}</div>"
+    if t.get("last_progress") and t.get("state") in ("running", "awaiting_approval", "waiting"):
+        extra += (f"<div class='detail'>latest: {e(t['last_progress'])}"
+                  f"{' (' + e(ago(t['last_progress_at'])) + ')' if t.get('last_progress_at') else ''}"
+                  "</div>")
+    return (f"<tr><td class='what'>{what}<div class='muted tid'><code>{e(t.get('id'))}</code>"
+            f"</div></td>"
+            f"<td><span class='st {STATE_CLASS.get(t.get('state'), '')}'>{e(t.get('state'))}"
+            f"</span><div class='detail'>{e(_when(t))}</div>{extra}</td>"
+            f"<td>{e(t.get('requester'))}<div class='muted small'>via {e(t.get('manager'))}"
+            f"</div></td></tr>")
 
 
 def timeout_text(t, tz=None):
@@ -294,10 +384,12 @@ def _approvals(state):
                    f"<td>{e(r['human'])}</td><td class='muted small'>until "
                    f"{e(r['expires'][11:16]) + ' UTC' if r.get('expires') else 'no timeout'}</td></tr>"
                    for r in ap.get("pending") or [])
-    grants = "".join(f"<tr><td>{e(agent)}</td><td>{e(g['kind'])} <b>{e(g['value'])}</b></td>"
-                     f"<td>{e(g.get('granted_by'))}</td><td class='muted small'>until "
-                     f"{e(g['expires'][11:16])} UTC</td></tr>"
-                     for agent, gs in (ap.get("grants") or {}).items() for g in gs)
+    grants = "".join(
+        f"<tr><td>{e(agent)}</td><td>{e(kind)} <b>{e(value)}</b>"
+        + (f" <span class='muted small'>×{len(gs)}</span>" if len(gs) > 1 else "")
+        + f"</td><td>{e(', '.join(sorted({g.get('granted_by') or '?' for g in gs})))}</td>"
+        f"<td class='muted small'>until {e(_clock(max(g['expires'] for g in gs)))}</td></tr>"
+        for (agent, kind, value), gs in _grouped(ap.get("grants") or {}))
     return ("<section><h2>Approvals</h2><table><tr><th>Agent</th><th>Asks</th><th>Who decides"
             "</th><th></th></tr>" + (pend or "<tr><td class=muted colspan=4>nothing pending"
                                      "</td></tr>") +
@@ -307,23 +399,66 @@ def _approvals(state):
             _timeouts(state) + "</section>")
 
 
-def _hosts(state):
-    hosts = state.get("hosts") or {}
-    if not hosts:
+def _grouped(grants):
+    """Grants as ((agent, kind, value), [grants]) sorted by agent and value: the same grant
+    given several times is one row."""
+    out = {}
+    for agent, gs in grants.items():
+        for g in gs:
+            out.setdefault((agent, g.get("kind"), g.get("value")), []).append(g)
+    return sorted(out.items(), key=lambda kv: (kv[0][0], str(kv[0][1]), str(kv[0][2])))
+
+
+def _machines(state):
+    """Every machine with what runs on it: its power and idle policy, and each agent there
+    with its status (one status for all views, secretary/overview.py)."""
+    hosts, agents = state.get("hosts") or {}, state.get("agents") or {}
+    names = list(dict.fromkeys(list(hosts) + [a.get("host") for a in agents.values()
+                                             if a.get("host")]))
+    homeless = [aid for aid, a in agents.items() if not a.get("host")]
+    if not names and not homeless:
         return ""
-    rows = "".join(
-        f"<tr><td><b>{e(h)}</b></td><td class='{e(_st(v)['level'])}'>{e(_st(v)['word'])}"
-        + (f"<div class='muted small'>{e(_st(v)['hint'])}</div>" if _st(v).get("hint") else "")
-        + "</td><td class='small'>"
-        + e(f"idle stop {v['idle_stop_min']} min" if v.get("idle_stop_min") else "no idle stop")
-        + (f"<div class='muted small'>idle since {e(ago(v['idle_since']))}</div>"
-           if v.get("idle_since") else "")
-        + (f"<div class='small {'bad' if v['stale'].get('gave_up') else 'warn'}'>"
-           f"{e(stale_text(v['stale']))}</div>" if v.get("stale") else "")
-        + f"</td><td class='muted small'>{e(ago(v.get('at')) if v.get('at') else '')}</td></tr>"
-        for h, v in hosts.items())
-    return ("<section><h2>Machines</h2><table><tr><th>Host</th><th>Power</th><th>Policy</th>"
-            "<th>Checked</th></tr>" + rows + "</table></section>")
+    rows = []
+    for h in names:
+        v = hosts.get(h) or {}
+        policy = (f"idle stop {v['idle_stop_min']} min" if v.get("idle_stop_min")
+                  else "no idle stop")
+        if v.get("idle_since"):
+            policy += f" · idle since {ago(v['idle_since'])}"
+        here = "".join(_agent_line(aid, a) for aid, a in agents.items() if a.get("host") == h)
+        rows.append(
+            f"<tr><td><b>{e(h)}</b><div class='muted small'>{e(policy)}</div>"
+            + (f"<div class='small {'bad' if v['stale'].get('gave_up') else 'warn'}'>"
+               f"{e(stale_text(v['stale']))}</div>" if v.get("stale") else "")
+            + f"</td><td><span class='{e(_st(v)['level'])}'>{e(_st(v)['word'])}</span>"
+            + (f"<div class='muted small'>{e(_st(v)['hint'])}</div>" if _st(v).get("hint") else "")
+            + f"</td><td>{here or '<span class=muted>no agents</span>'}</td></tr>")
+    if homeless:                # never left out: an agent whose machine isn't known
+        rows.append("<tr><td class='muted'>(machine unknown)</td><td></td><td>"
+                    + "".join(_agent_line(aid, agents[aid]) for aid in homeless) + "</td></tr>")
+    return ("<section class='wide'><h2>Machines and agents</h2><table class='machines'><tr>"
+            "<th>Machine</th><th>Power</th><th>Agents</th></tr>" + "".join(rows)
+            + "</table></section>")
+
+
+def _agent_line(aid, a):
+    """One agent on its machine: name (its log), role and seat, status and why."""
+    st = _st(a)
+    who = " · ".join(x for x in (a.get("role"), f"seat {a['human']}" if a.get("human") else "",
+                                 aid if a.get("name") and a.get("name") != aid else "") if x)
+    why = " · ".join(x for x in (st.get("hint"), st.get("reason"),
+                                 f"since {ago(st['since'])}" if st.get("since") else "") if x)
+    q = a.get("queue") or {}
+    queue = ", ".join(f"{q[k]} {k.replace('_', ' ')}" for k in
+                      ("running", "awaiting_approval", "waiting", "queued") if q.get(k))
+    return (f"<div class='agent'><b><a href='/logs/{e(aid)}'>{e(a.get('name') or aid)}</a></b> "
+            f"<span class='muted small'>{e(who)}</span> "
+            f"<span class='{e(st['level'])}'>{e(st['word'])}</span>"
+            + (f"<div class='muted small'>{e(why)}</div>" if why else "")
+            + (f"<div class='small'>tasks: {e(queue)}</div>" if queue else "")
+            + "".join(f"<div class='small bad'>⚠ GitHub {e(n)}: {e(p)}</div>"
+                      for n, p in (a.get("github") or {}).items())
+            + "</div>")
 
 
 def stale_text(s):
@@ -342,23 +477,6 @@ def _st(x):
     return x.get("status") or {"word": "—", "level": "muted"}
 
 
-def _agents(state):
-    rows = "".join(
-        f"<tr><td><b><a href='/logs/{e(aid)}'>{e(a['name'])}</a></b>"
-        f"<div class='muted small'>{e(aid)}</div>"
-        + "".join(f"<div class='small bad'>⚠ GitHub {e(n)}: {e(p)}</div>"
-                  for n, p in (a.get("github") or {}).items()) + "</td>"
-        f"<td>{e(a.get('role'))}</td><td>{e(a.get('human'))}</td><td>{e(a.get('host'))}</td>"
-        f"<td class='{e(_st(a)['level'])}'>{e(_st(a)['word'])}"
-        + "".join(f"<div class='muted small'>{e(x)}</div>" for x in (
-            _st(a).get("hint"), _st(a).get("reason"),
-            f"since {ago(_st(a)['since'])}" if _st(a).get("since") else "") if x)
-        + "</td></tr>"
-        for aid, a in state["agents"].items())
-    return ("<section><h2>Agents</h2><table><tr><th>Agent</th><th>Role</th><th>Seat</th>"
-            "<th>Host</th><th>Status</th></tr>" + rows + "</table></section>")
-
-
 def render(state):
     if state is None:
         body = "<main><section><p>Collecting the lab's state…</p></section></main>"
@@ -370,8 +488,9 @@ def render(state):
             f" · config {str(ap.get('config_commit'))[:7]}"
             f"{' (UNREVIEWED)' if ap.get('unreviewed') else ''}"
             f" · framework {str(ap.get('framework_commit'))[:7]}" if ap.get("config_commit") else "")
-        body = ("<main>" + _accounts(state) + _workers(state) + _approvals(state) +
-                _hosts(state) + _agents(state) + "</main>")
+        # what runs where first, then the work, what waits for a human, and usage last
+        body = ("<main>" + _machines(state) + _workers(state) + _approvals(state) +
+                _accounts(state) + "</main>")
     return (f"<!doctype html><html><head><meta charset='utf-8'><title>{e(title)}</title>"
             f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
             f"<meta http-equiv='refresh' content='{REFRESH_S}'><style>{CSS}</style></head>"

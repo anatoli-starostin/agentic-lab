@@ -75,6 +75,23 @@ async def check_seat(lab, human, workers: Workers, managers, own=None):
     raise RuntimeError("; ".join(errors) or "no running agent on this seat to ask")
 
 
+RECENT = 10                 # a worker's latest tasks on the dashboard
+
+
+def task_summary(t):
+    """A task as the dashboard shows it: what it is, its state and timing, and (for its
+    member and admins only: visibility.TASK_PUBLIC keeps the rest from others) why it waits
+    or failed and its latest progress line."""
+    w = t.get("waiting") or {}
+    last = (t.get("progress") or [{}])[-1] or {}
+    return {**{k: t.get(k) for k in ("id", "state", "requester", "manager", "created",
+                                      "started", "finished", "instruction")},
+            "waiting": {k: w.get(k) for k in ("note", "since", "wake_at", "runs") if w.get(k)}
+            or None,
+            "error": (t.get("error") or "")[:300] or None,
+            "last_progress": (last.get("message") or "")[:300] or None,
+            "last_progress_at": last.get("at")}
+
 async def collect(lab, workers: Workers, broker=None, local_units=None, managers=None,
                   own=None):
     """One snapshot of the lab. `managers`: {manager-id: the secretary's token there};
@@ -104,10 +121,7 @@ async def collect(lab, workers: Workers, broker=None, local_units=None, managers
                              keep_awake=h.get("keep_awake"), runs=h.get("runs"),
                              github=h.get("github") or {}, applied=h.get("applied"),
                              usage=h.get("usage"), disk_free_gb=h.get("disk_free_gb"),
-                             recent=[{k: t.get(k) for k in ("id", "state", "requester",
-                                                            "manager", "created", "finished",
-                                                            "instruction")}
-                                     for t in (tasks or [])[-8:]][::-1])
+                             recent=[task_summary(t) for t in (tasks or [])[-RECENT:]][::-1])
         except WorkerError as e:
             agents[w].update(up=False, error=str(e))
     for aid, unit in (local_units or {}).items():

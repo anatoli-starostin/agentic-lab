@@ -14,7 +14,7 @@ import copy
 
 ALL, MEMBER, NOBODY = "all", "member", "nobody"
 VISIBILITY = ("private", "team")
-TASK_PUBLIC = ("id", "state", "requester", "manager", "created", "finished")
+TASK_PUBLIC = ("id", "state", "requester", "manager", "created", "started", "finished")
 
 
 def level(lab, member):
