@@ -16,6 +16,8 @@ import os
 import platform
 import shutil
 import subprocess
+import threading
+import time
 from dataclasses import dataclass
 
 from mcp.server.mcpserver import Context, MCPServer
@@ -30,13 +32,14 @@ IDLE_POLL_S = 1.0
 WAKE_CHECK_S = 15.0         # how often waiting tasks are checked against their runs
 RUN_TAIL = 20               # log lines of each run in task_result
 MAX_FILE_BYTES = 20 * 1024 * 1024       # read_file: enough for plots, reports, logs
+STOP_HOLD_MAX_S = 600       # the longest the secretary may hold new tasks off for a stop
 
 
 @dataclass(frozen=True)
 class Caller:
     manager: str
     human: str       # the human that manager belongs to
-    readonly: bool = False      # the secretary's monitoring: status only, never changes
+    readonly: bool = False      # the secretary: status only (and the hold of an idle stop)
 
 
 class AccessError(PermissionError):
@@ -128,16 +131,26 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
             raise ToolError("access denied: this token is for monitoring only")
         return c
 
+    # an idle stop under way: no new tasks until then (time.monotonic()), so none is
+    # accepted between the secretary's last look at the queue and the machine going off
+    stopping = {"until": 0.0}
+    submitting = threading.Lock()       # a submit and the start of a hold never interleave
+
     @mcp.tool(description="Queue a task (first come, first served). `requester` is the "
               "human who asked for it. Returns the task.")
     def submit_task(instruction: str, requester: str, ctx: Context,
                     project: str | None = None) -> dict:
         c = who(ctx, writes=True)
-        try:
-            return store.submit(instruction, requester=requester, manager=c.manager,
-                                project=project).view()
-        except T.TaskError as e:
-            raise ToolError(str(e)) from None
+        with submitting:
+            if time.monotonic() < stopping["until"]:
+                raise ToolError(f"{agent_id}'s machine is being stopped (idle): no new tasks "
+                                "now. Ask the secretary to power it on again, then submit "
+                                "the task again.")
+            try:
+                return store.submit(instruction, requester=requester, manager=c.manager,
+                                    project=project).view()
+            except T.TaskError as e:
+                raise ToolError(str(e)) from None
 
     def task(task_id):
         try:
@@ -221,6 +234,19 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
     @mcp.tool(description="Liveness and state of this worker: queue, GPU, disk, versions.")
     async def health_check(ctx: Context) -> dict:
         who(ctx)
+        return await health_now()
+
+    @mcp.tool(description="For the secretary's idle stop: hold new tasks off for `seconds` "
+              "(0 ends a hold), then report health as health_check does. Every task "
+              "submitted before the hold is in the report; any after it is refused.")
+    async def hold_for_stop(ctx: Context, seconds: float = 300) -> dict:
+        if not who(ctx).readonly:
+            raise ToolError("access denied: only the secretary stops machines")
+        with submitting:
+            stopping["until"] = time.monotonic() + max(0.0, min(seconds, STOP_HOLD_MAX_S))
+        return await health_now()
+
+    async def health_now():
         # nvidia-smi can take seconds: not in the event loop serving the other calls
         h = await asyncio.to_thread(health or default_health, agent_id, store)
         if github is not None:
