@@ -403,7 +403,7 @@ async def run_tasks(store: T.TaskStore, runner, stop: asyncio.Event, runs=None):
     # so they go on while a task runs (#59), and never hold up the start (#58)
     keeper = asyncio.create_task(housekeeping(store, runs, approver, stop))
     try:
-        await _task_loop(store, runner, stop)
+        await _task_loop(store, runner, stop, runs)
     finally:
         keeper.cancel()
 
@@ -439,23 +439,35 @@ async def housekeeping(store, runs, approver, stop):
             pass
 
 
-async def _task_loop(store, runner, stop):
+async def _task_loop(store, runner, stop, runs=None):
     while not stop.is_set():
-        task = store.next_queued()
-        if task is None:
+        try:
+            await _one_task(store, runner, stop, runs)
+        except Exception:           # nothing after a task may stop the loop: it would stop
+            log.exception("the task loop failed; going on")     # every task here for good
             try:
                 await asyncio.wait_for(stop.wait(), IDLE_POLL_S)
             except asyncio.TimeoutError:
                 pass
-            continue
-        log.info("running %s for %s via %s", task.id, task.requester, task.manager)
-        task = store.update(task.id, state=T.RUNNING)
+
+
+async def _one_task(store, runner, stop, runs):
+    """Run the oldest queued task, or wait a little if there's none."""
+    task = store.next_queued()
+    if task is None:
         try:
-            await runner.run(task, store)
-        except Exception as e:      # a runner bug must not stop the worker
-            log.exception("runner failed on %s", task.id)
-            if store.get(task.id).state not in T.TERMINAL:
-                store.update(task.id, state=T.FAILED, error=f"{type(e).__name__}: {e}")
-        if store.get(task.id).state == T.CANCELLED:
-            await asyncio.to_thread(stop_runs, runs, task.id)
-        log.info("%s -> %s", task.id, store.get(task.id).state)
+            await asyncio.wait_for(stop.wait(), IDLE_POLL_S)
+        except asyncio.TimeoutError:
+            pass
+        return
+    log.info("running %s for %s via %s", task.id, task.requester, task.manager)
+    task = store.update(task.id, state=T.RUNNING)
+    try:
+        await runner.run(task, store)
+    except Exception as e:      # a runner bug must not stop the worker
+        log.exception("runner failed on %s", task.id)
+        if store.get(task.id).state not in T.TERMINAL:
+            store.update(task.id, state=T.FAILED, error=f"{type(e).__name__}: {e}")
+    if store.get(task.id).state == T.CANCELLED:     # a cancelled task's runs stop too (#59)
+        await asyncio.to_thread(stop_runs, runs, task.id)
+    log.info("%s -> %s", task.id, store.get(task.id).state)
