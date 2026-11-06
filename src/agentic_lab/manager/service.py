@@ -32,7 +32,7 @@ from .followup import finished_prompt, follow
 from .memory import Memory
 from .state import Conversation, ManagerState
 from .tools import BrokerClient
-from .workers import WorkerError, Workers
+from .workers import CHECK_CONNECT_S, WorkerError, Workers
 
 CONFIG = "~/.config/agentic-lab"
 STATE = "~/.local/state/agentic-lab"
@@ -105,14 +105,19 @@ class Manager:
         return f"<@{uid}>" if uid else human
 
     async def describe_workers(self):
-        out = []
-        for w in self.workers.known():
+        """All workers checked at once, each given CHECK_CONNECT_S to answer: a stopped
+        machine costs seconds, not the full call timeout, and never holds up the others."""
+        async def one(w):
             try:
-                h = await self.workers.call(w, "health_check")
-                out.append({"worker": w, "up": True, "tasks": h.get("tasks"), "gpu": h.get("gpu")})
+                h = await self.workers.call(w, "health_check", connect_timeout=CHECK_CONNECT_S)
+                return {"worker": w, "up": True, "tasks": h.get("tasks"), "gpu": h.get("gpu")}
             except WorkerError as e:
-                out.append({"worker": w, "up": False, "error": str(e)})
-        return out
+                if e.no_answer:
+                    return {"worker": w, "up": False,
+                            "error": f"no answer within {CHECK_CONNECT_S} s: its machine is most "
+                                     "likely stopped (ask the secretary to power it on)"}
+                return {"worker": w, "up": False, "error": str(e)}
+        return list(await asyncio.gather(*(one(w) for w in self.workers.known())))
 
     def _ctx(self, conv, requester, private):
         owner = self.lab.agents[self.agent_id].get("human")
