@@ -1094,6 +1094,8 @@ async def serve(lab_path, host, port):
             now = await workers.call(agent, "now", retries=0, connect_timeout=CHECK_CONNECT_S)
         elif r == "manager" and agent in managers:
             st = await manager_status(lab, agent, managers[agent], 0, now=True)
+            if "now" not in st:     # an older manager ignores now=1: don't show it as idle
+                raise ValueError("it runs an older version, without the live view")
             now = {**(st.get("now") or {}), "limits": (st.get("usage") or {}).get("limits")}
         else:
             return None
