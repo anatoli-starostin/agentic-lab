@@ -189,13 +189,15 @@ def _grant_line(g):
 class SdkRunner:
     def __init__(self, agent_id, workdir, settings_for: Callable[[list], dict],
                  approver: Approver = None, model=None, env=None, cli_path=None, usage=None,
-                 events=None, prompt_extra="", runs=None, keep_free_gb=KEEP_FREE_GB):
+                 events=None, prompt_extra="", runs=None, keep_free_gb=KEEP_FREE_GB,
+                 live=None):
         """`settings_for(grants)` returns the agent's settings given its active Grants;
         `prompt_extra` is added to its system prompt (e.g. its GitHub identity); `runs`: the
         worker's RunStore (long runs; None: no run tools)."""
         self.agent_id = agent_id
         self.workdir = workdir
         self.settings_for = settings_for
+        self.live = live            # what's going on now, for the web UI (live.Live)
         self.approver = approver or NoChannelApprover()
         self.model = model
         self.env = env or {}
@@ -469,6 +471,16 @@ class SdkRunner:
                   task=task.id)
 
     async def _session(self, task, store, outcome, session, grants, prompt):
+        live = self.live
+        if live is not None:
+            live.start(task.id, member=task.requester, task=task.id)
+        try:
+            return await self._session_turn(task, store, outcome, session, grants, prompt, live)
+        finally:
+            if live is not None:
+                live.end(task.id)
+
+    async def _session_turn(self, task, store, outcome, session, grants, prompt, live):
         last_text, result_msg = None, None
         async with ClaudeSDKClient(self._options(task, store, outcome, session, grants)) as client:
             watcher = asyncio.create_task(self._watch_cancel(task, store, client, session))
@@ -480,6 +492,8 @@ class SdkRunner:
                         if sid and sid != store.get(task.id).session_id:
                             store.update(task.id, session_id=sid)
                     elif isinstance(msg, AssistantMessage):
+                        if live is not None:
+                            live.assistant(task.id, msg, tool_summary)
                         for b in msg.content:
                             if isinstance(b, TextBlock):
                                 last_text = b.text
@@ -489,6 +503,8 @@ class SdkRunner:
                     elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
                         for b in msg.content:
                             if isinstance(b, ToolResultBlock):
+                                if live is not None:
+                                    live.tool_done(task.id, b.tool_use_id)
                                 text = b.content if isinstance(b.content, str) else " ".join(
                                     x.get("text", "") for x in (b.content or [])
                                     if isinstance(x, dict))

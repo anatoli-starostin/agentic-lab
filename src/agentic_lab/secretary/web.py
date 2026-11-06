@@ -8,8 +8,11 @@ Every reading shows when it was taken and which agent reported it. No external a
                                             } anyone else machines, states and counts
     GET /logs/{agent}     an agent's event log, for whoever may see it (log_access): admins
                           all; a member their dedicated agents' logs, and their own
-                          entries of shared agents (recognised by `tailscale whois`)
+                          entries of shared agents (recognised by `tailscale whois`),
+                          under "Right now": what it's doing (render_now)
+    GET /logs/{agent}?live=1   the same for the last hour, refreshing every few seconds
 """
+import asyncio
 import datetime as dt
 import html
 
@@ -528,38 +531,108 @@ def own_entries(events, member, task_ids=()):
     return [ev for ev in events if ev.get("member") == member or ev.get("task") in mine]
 
 
-def render_logs(state, agent, hours, events, error=None, scope="all"):
+LIVE_REFRESH_S = 5
+LIVE_HOURS = 1
+
+
+def _secs(n):
+    """'42 s', '3 min 5 s', '2 h 10 min' for a number of seconds."""
+    n = int(n or 0)
+    if n < 60:
+        return f"{n} s"
+    if n < 3600:
+        return f"{n // 60} min {n % 60} s"
+    return f"{n // 3600} h {n % 3600 // 60} min"
+
+
+PRE = ("<pre style='margin:0;white-space:pre-wrap;font:12px/1.4 ui-monospace,monospace'>")
+
+
+def render_now(now, error=None):
+    """The 'right now' box of an agent's log page: its Claude turns (tools running and for
+    how long, tokens), runs with their output's end, GPUs, the seat's limits, processes."""
+    if error:
+        return f"<section><h2>Right now</h2><p class='bad'>{e(error)}</p></section>"
+    if now is None:
+        return ""
+    parts = []
+    turns = now.get("turns") or []
+    if not turns:
+        parts.append("<p class='muted'>No Claude session working.</p>")
+    for t in turns:
+        who = t.get("task") or t.get("member") or ""
+        head = (f"<p><b>Working for {e(_for(t.get('started_at')))}</b> "
+                f"<span class='muted small'>{e(who)}{' (guest)' if t.get('guest') else ''} · "
+                f"{e(t.get('tool_calls'))} tool calls · "
+                f"{e(human(t.get('output_tokens') or 0))} tokens written"
+                + (f" · context {e(human(t['context_tokens']))}" if t.get("context_tokens")
+                   else "") + "</span></p>")
+        tools = "".join(f"<li>running for <b>{e(_for(x.get('since')))}</b>: "
+                        f"<code>{e(x.get('tool'))}</code></li>" for x in t.get("tools") or [])
+        parts.append(head + (f"<ul>{tools}</ul>" if tools else
+                             "<p class='muted small'>thinking or writing (no tool running)</p>")
+                     + (f"<p class='small muted'>latest text:</p>{PRE}{e(t['text'])}</pre>"
+                        if t.get("text") else ""))
+    for r in now.get("runs") or []:
+        parts.append(f"<p><b>Run {e(r.get('name'))}</b> <span class='muted small'>{e(r.get('id'))}"
+                     f" · {e(r.get('state'))} · started {e(ago(r.get('started')))} · task "
+                     f"{e(r.get('task'))}</span></p>{PRE}{e(r.get('log_tail') or '(no output yet)')}"
+                     "</pre>")
+    if now.get("gpus"):
+        parts.append(f"<p class='small'>GPU: {e(_gpu_line(now))}</p>")
+    limits = now.get("limits") or {}
+    if limits:
+        parts.append("<div class='small'>" + "".join(_meter(k, v) for k, v in limits.items()
+                                                     if isinstance(v, dict)) + "</div>")
+    procs = now.get("processes")
+    if procs:
+        rows = "".join(f"<tr><td class='small'>{e(p['pid'])}</td><td class='small'>"
+                       f"{e(_secs(p['seconds']))}</td><td class='small'>{e(p['cpu'])}%</td>"
+                       f"<td class='small'>{e(p['mem_mb'])} MB</td><td>{PRE}{e(p['command'])}"
+                       f"</pre></td></tr>" for p in procs)
+        parts.append("<details><summary class='small'>Processes "
+                     f"({len(procs)})</summary><table><tr><th>PID</th><th>For</th><th>CPU</th>"
+                     f"<th>Memory</th><th>Command</th></tr>{rows}</table></details>")
+    return "<section><h2>Right now</h2>" + "".join(parts) + "</section>"
+
+
+def render_logs(state, agent, hours, events, error=None, scope="all", now=None,
+                now_error=None, live=False):
     name = (state or {}).get("agents", {}).get(agent, {}).get("name", agent)
     picks = " · ".join(f"<a href='/logs/{e(agent)}?hours={h}'>{label}</a>"
                        for h, label in ((1, "1 h"), (24, "24 h"), (168, "7 days")))
+    picks += (" · <b>live</b> (refreshes every " f"{LIVE_REFRESH_S} s)" if live else
+              f" · <a href='/logs/{e(agent)}?live=1'>live</a>")
     rows = "".join(
         f"<tr><td class='muted small' style='white-space:nowrap'>{e(ev.get('at', '')[5:16].replace('T', ' '))}</td>"
         f"<td class='{KIND_CLASS.get(ev.get('kind'), '')} small'>{e(ev.get('kind'))}"
         f"{' ⚠' if ev.get('error') else ''}</td>"
         f"<td class='small muted'>{e(ev.get('task') or ev.get('member') or '')}</td>"
-        f"<td><pre style='margin:0;white-space:pre-wrap;font:12px/1.4 ui-monospace,monospace'>"
-        f"{e(ev.get('text'))}</pre></td></tr>"
+        f"<td>{PRE}{e(ev.get('text'))}</pre></td></tr>"
         for ev in reversed(events))
-    body = (f"<main style='display:block'><section><h2>{e(name)}: the last {e(hours)} h</h2>"
-            f"<p class='small'><a href='/'>← the lab</a> · {picks}</p>"
+    body = (f"<main style='display:block'><p class='small'><a href='/'>← the lab</a> · {picks}</p>"
+            + render_now(now, now_error)
+            + f"<section><h2>{e(name)}: the last {e(hours)} h</h2>"
             + (f"<p class='bad'>{e(error)}</p>" if error else "") +
             f"<table><tr><th>When (UTC)</th><th>What</th><th>Task / member</th><th></th></tr>"
             f"{rows or '<tr><td class=muted colspan=4>nothing in this period</td></tr>'}</table>"
             f"</section></main>")
     return (f"<!doctype html><html><head><meta charset='utf-8'><title>{e(name)} · logs</title>"
             f"<meta name='viewport' content='width=device-width,initial-scale=1'>"
+            + (f"<meta http-equiv='refresh' content='{LIVE_REFRESH_S}'>" if live else "") +
             f"<style>{CSS}</style></head><body><header><h1>{e(name)} · log</h1>"
             f"<span class='muted small'>{'all entries' if scope == 'all' else 'your entries only'}"
             f"</span></header>{body}</body></html>")
 
 
 def app(get_state, get_events=None, viewer=None, check_usage=None, access=None,
-        may_check=None, shape=None):
+        may_check=None, shape=None, get_now=None):
     """`get_events(agent, hours, member)` (async) -> events (only `member`'s own entries
     when given); `viewer(client_ip)` (async) -> the member behind that address, or None;
     `access(member, agent)` -> "all" | "own" | None (log_access); `check_usage(human)`
     (async): read that seat's limits now; `shape(state, member)`: the state as that viewer
-    (None: anonymous) may see it."""
+    (None: anonymous) may see it; `get_now(agent, member)` (async): what it's doing right
+    now (only `member`'s part when given)."""
     async def seen(request):
         state = get_state()
         if shape is None:
@@ -607,17 +680,31 @@ def app(get_state, get_events=None, viewer=None, check_usage=None, access=None,
                                 "(admins: every agent's). Your Tailscale login must be in "
                                 "lab.yaml (tailscale_login).</p>",
                                 status_code=403, headers=HEADERS)
+        live = bool(request.query_params.get("live"))
         try:
-            hours = min(max(float(request.query_params.get("hours", 24)), 0.1), 336)
+            hours = min(max(float(request.query_params.get(
+                "hours", LIVE_HOURS if live else 24)), 0.1), 336)
         except ValueError:
             hours = 24
-        try:
-            events, error = await get_events(agent, hours,
-                                             member if scope == "own" else None), None
-        except Exception as ex:
-            events, error = [], f"couldn't fetch the log: {ex}"
-        return HTMLResponse(render_logs(get_state(), agent, hours, events, error, scope),
-                            headers=HEADERS)
+        own = member if scope == "own" else None
+
+        async def events_():
+            try:
+                return await get_events(agent, hours, own), None
+            except Exception as ex:
+                return [], f"couldn't fetch the log: {ex}"
+
+        async def now_():
+            if get_now is None:
+                return None, None
+            try:
+                return await get_now(agent, own), None
+            except Exception as ex:
+                return None, f"couldn't ask it: {ex}"
+
+        (events, error), (now, now_error) = await asyncio.gather(events_(), now_())
+        return HTMLResponse(render_logs(get_state(), agent, hours, events, error, scope,
+                                        now, now_error, live), headers=HEADERS)
 
     return Starlette(routes=[Route("/", page), Route("/state.json", state_json),
                              Route("/logs/{agent}", logs),

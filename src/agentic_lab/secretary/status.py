@@ -39,11 +39,13 @@ async def broker_overview(url, token):
         return {"error": str(e)}
 
 
-async def manager_status(lab, manager, token, hours=0):
-    """A manager's /v1/status (usage, and events for the last `hours`)."""
+async def manager_status(lab, manager, token, hours=0, now=False):
+    """A manager's /v1/status (usage, and events for the last `hours`; with `now`, what
+    it's doing right now)."""
     name, port = lab.address(manager)
     async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=10) as c:
-        r = await c.get(f"http://{name}:{port}/v1/status", params={"hours": hours})
+        r = await c.get(f"http://{name}:{port}/v1/status",
+                        params={"hours": hours, **({"now": 1} if now else {})})
         r.raise_for_status()
         return r.json()
 

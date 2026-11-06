@@ -111,7 +111,7 @@ CUT_OFF = ("I ran past my time limit on this and had to stop. Tell me how you'd 
 class Brain:
     def __init__(self, agent_id, lab_name, workdir, settings_for, approver=None, model=None,
                  env=None, usage=None, cli_path=None, events=None, prompt_extra="",
-                 turn_budget_s=TURN_BUDGET_S):
+                 turn_budget_s=TURN_BUDGET_S, live=None):
         self.agent_id = agent_id
         self.lab_name = lab_name
         self.workdir = workdir
@@ -125,6 +125,7 @@ class Brain:
         self.prompt_extra = prompt_extra    # e.g. its GitHub identity
         self.turn_budget_s = turn_budget_s  # a turn longer than this is cut off
         self.client_factory = ClaudeSDKClient   # tests pass a fake
+        self.live = live                    # what's going on now, for the web UI (live.Live)
 
     @staticmethod
     async def _stop(client, drain):
@@ -141,6 +142,17 @@ class Brain:
                                                           member=ctx.requester, **m)
                ) if self.events is not None else (lambda *a, **k: None)
         log("message", prompt)
+        live = self.live
+        if live is not None:
+            live.start(ctx.conv.key, member=ctx.requester,
+                       guest=bool(getattr(ctx, "guest", False)) or None)
+        try:
+            return await self._turn(ctx, prompt, log, live)
+        finally:
+            if live is not None:
+                live.end(ctx.conv.key)
+
+    async def _turn(self, ctx, prompt, log, live):
         grants = [g for g in await self.approver.active_grants() if not g.get("task_id")]
         tool_grants = {g["value"] for g in grants if g["kind"] == "tool"}
         violations = []
@@ -205,6 +217,8 @@ class Brain:
                         ctx.state.save()
                 elif isinstance(msg, AssistantMessage):
                     clock.output(any(isinstance(b, TextBlock) for b in msg.content))
+                    if live is not None:
+                        live.assistant(ctx.conv.key, msg, tool_summary)
                     for b in msg.content:
                         if isinstance(b, TextBlock):
                             out["last"] = b.text
@@ -212,6 +226,8 @@ class Brain:
                             log("tool", tool_summary(b.name, b.input))
                 elif isinstance(msg, UserMessage) and isinstance(msg.content, list):
                     for b in msg.content:
+                        if isinstance(b, ToolResultBlock) and live is not None:
+                            live.tool_done(ctx.conv.key, b.tool_use_id)
                         if isinstance(b, ToolResultBlock) and isinstance(b.content, str):
                             violations[:] = (violations + sandbox_violations(b.content))[-10:]
                             log("result", b.content[:1000], error=bool(b.is_error) or None)

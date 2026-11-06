@@ -116,7 +116,8 @@ def write_inbox_file(workdir, name, b64):
 
 
 def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=None,
-              usage=None, workdir=None, events=None, check=None, runs=None, github=None):
+              usage=None, workdir=None, events=None, check=None, runs=None, github=None,
+              live=None):
     """The worker's MCP server. `guardrails()` returns its current settings and grants;
     `check()` probes the seat's limits now; `runs`: its RunStore (long runs)."""
     mcp = MCPServer(name=f"agentic-lab worker {agent_id}",
@@ -260,6 +261,28 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         if usage is not None:
             h["usage"] = usage.load()
         return h
+
+    @mcp.tool(description="For the secretary's web UI: what this worker is doing right "
+              "now: its Claude sessions (tools running, tokens), its processes, its active "
+              "runs with the end of their output, its GPUs.")
+    async def now(ctx: Context) -> dict:
+        if not who(ctx).readonly:
+            raise ToolError("access denied: the live view is for the secretary only")
+        from ..live import mask, processes
+        h = await asyncio.to_thread(health or default_health, agent_id, store)
+        active = []
+        if runs is not None:
+            for r in await asyncio.to_thread(runs.active):
+                v = await asyncio.to_thread(runs.view, r["id"], tail=RUN_TAIL)
+                active.append({**{k: v.get(k) for k in ("id", "name", "task", "state",
+                                                        "started")},
+                               "requester": _requester(store, v.get("task")),
+                               "log_tail": mask(v.get("log_tail") or "")})
+        return {"turns": live.snapshot() if live is not None else [],
+                "processes": await asyncio.to_thread(processes),
+                "runs": active, "gpus": h.get("gpus"),
+                "gpu_processes": h.get("gpu_processes"),
+                "limits": usage.load().get("limits") if usage is not None else None}
 
     @mcp.tool(description="Read this worker's Claude seat limits now (one tiny request); "
               "returns the readings. For the web UI's 'check now'.")
