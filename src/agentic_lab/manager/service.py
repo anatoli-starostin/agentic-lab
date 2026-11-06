@@ -21,6 +21,7 @@ import yaml
 from .. import github as GH
 from ..broker.service import _env_file
 from ..eventlog import EventLog
+from ..live import Live, processes
 from ..registry import load as load_lab
 from ..slackio import SILENT, SlackIO
 from ..worker.approver import BrokerApprover
@@ -32,7 +33,7 @@ from .followup import finished_prompt, follow
 from .memory import Memory
 from .state import Conversation, ManagerState
 from .tools import BrokerClient
-from .workers import WorkerError, Workers
+from .workers import CHECK_CONNECT_S, WorkerError, Workers
 
 CONFIG = "~/.config/agentic-lab"
 STATE = "~/.local/state/agentic-lab"
@@ -91,6 +92,13 @@ class Manager:
                 "turns_in_progress": sum(lock.locked() for lock in self._locks.values()),
                 "followed_tasks_open": len(self.state.open_tasks())}
 
+    def now(self):
+        """What it's doing right now (the web UI's live view): its turns going on, its
+        Unix user's processes (a background command left running shows here)."""
+        live = getattr(self.brain, "live", None)
+        return {"turns": live.snapshot() if live is not None else [],
+                "processes": processes()}
+
     def may_use(self, human):
         """Every lab member may talk to any manager; for a dedicated manager, other members
         are guests (is_guest): conversation only, no work."""
@@ -105,14 +113,19 @@ class Manager:
         return f"<@{uid}>" if uid else human
 
     async def describe_workers(self):
-        out = []
-        for w in self.workers.known():
+        """All workers checked at once, each given CHECK_CONNECT_S to answer: a stopped
+        machine costs seconds, not the full call timeout, and never holds up the others."""
+        async def one(w):
             try:
-                h = await self.workers.call(w, "health_check")
-                out.append({"worker": w, "up": True, "tasks": h.get("tasks"), "gpu": h.get("gpu")})
+                h = await self.workers.call(w, "health_check", connect_timeout=CHECK_CONNECT_S)
+                return {"worker": w, "up": True, "tasks": h.get("tasks"), "gpu": h.get("gpu")}
             except WorkerError as e:
-                out.append({"worker": w, "up": False, "error": str(e)})
-        return out
+                if e.no_answer:
+                    return {"worker": w, "up": False,
+                            "error": f"no answer within {CHECK_CONNECT_S} s: its machine is most "
+                                     "likely stopped (ask the secretary to power it on)"}
+                return {"worker": w, "up": False, "error": str(e)}
+        return list(await asyncio.gather(*(one(w) for w in self.workers.known())))
 
     def _ctx(self, conv, requester, private):
         owner = self.lab.agents[self.agent_id].get("human")
@@ -259,7 +272,8 @@ async def serve(lab_path, agent_id, host=None, port=None):
     brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
                   approver=approver, model=a.get("model"), env=env, usage=usage, events=events,
                   prompt_extra=lambda: GH.instructions(lab, agent_id),
-                  turn_budget_s=60 * a.get("turn_budget_min", TURN_BUDGET_S // 60))
+                  turn_budget_s=60 * a.get("turn_budget_min", TURN_BUDGET_S // 60),
+                  live=Live())
     members = {(h or {}).get("slack_user"): hid for hid, h in lab.humans.items()
                if (h or {}).get("slack_user")}
     mgr = Manager(lab, agent_id, None, brain, workers, broker, state, memory, workdir)
@@ -289,7 +303,8 @@ async def serve(lab_path, agent_id, host=None, port=None):
         status_server = uvicorn.Server(uvicorn.Config(
             status_app(_read_secret(f"{CONFIG}/monitor-token"), usage, events,
                        check=(lambda: probe_now(usage, seat)) if seat else None,
-                       github=lambda: GH.problems(lab, agent_id), activity=mgr.activity),
+                       github=lambda: GH.problems(lab, agent_id), activity=mgr.activity,
+                       now=mgr.now),
             host=host, port=port, log_level="warning"))
         status_server.install_signal_handlers = lambda: None   # this process handles signals
         asyncio.create_task(status_server.serve())

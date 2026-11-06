@@ -22,7 +22,7 @@ import yaml
 
 from ..registry import load as load_lab
 from ..worker.service import _read_secret
-from ..manager.workers import Workers
+from ..manager.workers import CHECK_CONNECT_S, Workers
 from ..broker.service import _env_file
 from ..manager.state import ManagerState
 from ..secrets.intake import CODE_MINUTES, PREREQUISITES, Intake, form_url, message, window
@@ -1086,6 +1086,25 @@ async def serve(lab_path, host, port):
                     if t.get("requester") == member}
         return own_entries(evs, member, mine)
 
+    async def get_now(agent, member=None):
+        """What `agent` is doing right now (the log page's live view); with `member`, only
+        their part: their turns and runs, no process list (it shows everyone's work)."""
+        r = role(agent)
+        if r == "worker":
+            now = await workers.call(agent, "now", retries=0, connect_timeout=CHECK_CONNECT_S)
+        elif r == "manager" and agent in managers:
+            st = await manager_status(lab, agent, managers[agent], 0, now=True)
+            if "now" not in st:     # an older manager ignores now=1: don't show it as idle
+                raise ValueError("it runs an older version, without the live view")
+            now = {**(st.get("now") or {}), "limits": (st.get("usage") or {}).get("limits")}
+        else:
+            return None
+        if member is not None:
+            now = {**now, "processes": None,
+                   "turns": [t for t in now.get("turns") or [] if t.get("member") == member],
+                   "runs": [x for x in now.get("runs") or [] if x.get("requester") == member]}
+        return now
+
     def lab_host_ips():
         """The tailnet addresses of the lab's own hosts: agents run there, never admins."""
         import socket
@@ -1324,6 +1343,7 @@ async def serve(lab_path, host, port):
                                                check_usage,
                                                access=lambda m, a: log_access(lab, m, a),
                                                shape=lambda st, m: V.shape(st, lab, m),
+                                               get_now=get_now,
                                                may_check=lambda m, h: m is not None and (
                                                    m == h or bool((lab.humans.get(m) or {})
                                                                   .get("admin")))),

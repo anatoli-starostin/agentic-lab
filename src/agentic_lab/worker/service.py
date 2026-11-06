@@ -26,6 +26,7 @@ from .runs import RunStore
 from ..policy.sandbox import cache_env
 from .server import Access, Caller, build_mcp, http_app, run_tasks
 from ..eventlog import EventLog
+from ..live import Live
 from .usage import UsageLog, probe_loop, probe_now
 
 CONFIG = "~/.config/agentic-lab"
@@ -117,7 +118,7 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
     runner = SdkRunner(agent_id, workdir, settings_for, approver=approver,
                        model=model or a.get("model"), env=env, usage=usage, events=events,
                        prompt_extra=lambda: GH.instructions(lab, agent_id), runs=runs,
-                       keep_free_gb=a.get("keep_free_gb", KEEP_FREE_GB))
+                       keep_free_gb=a.get("keep_free_gb", KEEP_FREE_GB), live=Live())
 
     async def guardrails():
         active = await approver.active_grants()
@@ -125,7 +126,7 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
                 "standing_grants": a.get("grants") or [], "active_grants": active}
 
     mcp = build_mcp(agent_id, store, access, guardrails=guardrails, usage=usage,
-                    workdir=workdir, events=events, runs=runs,
+                    workdir=workdir, events=events, runs=runs, live=runner.live,
                     github=lambda: GH.problems(lab, agent_id),
                     check=(lambda: probe_now(usage, seat_token)) if seat_token else None)
     # the names managers may use to reach us: the bind address, and e.g. the tailnet name
