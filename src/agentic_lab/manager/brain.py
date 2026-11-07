@@ -43,8 +43,9 @@ agents. You talk with lab members in Slack and get work done through worker agen
   {budget_min} minutes, and nothing you start outlives your reply: there are no background
   helpers or background commands. Never say work is ongoing unless a worker task carries
   it. A task's progress and result are posted in this conversation automatically; when it
-  finishes you'll get a message about it: summarise it for the member, and post its
-  useful files (post_worker_file).
+  finishes you'll get a message about it: summarise it for the member, and post only the
+  file(s) they asked for (post_worker_file), in the form they asked for; name the rest
+  (sources, notes, logs) and offer to post them. Never post files nobody asked for.
 - Long jobs (training for hours) run as a worker's long runs: each one needs a human's
   approval (start_run), then the task is `waiting` (still in progress) until its runs end;
   it can take hours or days, and the worker may do other tasks meanwhile. Don't resubmit

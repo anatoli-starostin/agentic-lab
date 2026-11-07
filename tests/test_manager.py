@@ -860,3 +860,15 @@ def test_the_manager_prompt_says_approval_is_the_way_out_of_the_sandbox():
     p = B.system_prompt("Flash", "lab")
     assert "dangerouslyDisableSandbox" in p and "never tell them their approval can't help" in p
     assert "No agent ever has root" in p
+
+
+def test_a_finished_task_posts_only_what_the_member_asked_for():
+    """A member got every artifact (.tex, .md, notes) when they'd asked for one document."""
+    from agentic_lab.manager import brain as B
+    assert "Never post files nobody asked for" in B.system_prompt("Flash", "lab")
+    from agentic_lab.manager import followup as F
+    from types import SimpleNamespace as NS
+    msg = F.finished_prompt(NS(task_id="t-1", worker="w", requester="eve"),
+                            {"state": "done", "result": {"summary": "ok",
+                                                         "artifacts": ["a.tex", "a.md"]}})
+    assert "only the file(s) they asked for" in msg and "offer to post them" in msg
