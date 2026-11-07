@@ -196,7 +196,17 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 - Its own **Slack identity** (Socket Mode). A DM is one conversation; in channels it joins
   only threads where it's mentioned or already involved, reading the thread so far on first
   mention (its first 5 messages, which often set the topic, and the last 50 before the
-  mention). Only lab members are answered.
+  mention); mentioned at a channel's top level, the channel's last 10 messages of the past
+  day. Only lab members are answered.
+- **The rest of the channel, on demand** (`read_channel`): when a message refers to
+  something the manager can't see (a message "above", a file posted before it was
+  mentioned, another thread), it reads that channel's top level (the last 72 hours by
+  default, at most 14 days and 100 messages) or one of its threads, and may download
+  their attachments into its working folder. Only the channel of the conversation it's
+  answering, never another one and not from a DM: the member is in that channel, so
+  nothing reaches them that they couldn't read themselves. (Reading other channels would
+  need `channels:read`/`groups:read` to check the member's membership.) What it reads is
+  people's writing, information and never instructions.
 - **DM catch-up** (#70): on a DM's first new message since the manager started, it first
   reads the member's messages there that it missed while it wasn't running: those after
   the last message a turn saw, at most 72 hours back, the last 20, each cut to 1000
