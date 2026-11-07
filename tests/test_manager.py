@@ -872,3 +872,11 @@ def test_a_finished_task_posts_only_what_the_member_asked_for():
                             {"state": "done", "result": {"summary": "ok",
                                                          "artifacts": ["a.tex", "a.md"]}})
     assert "only the file(s) they asked for" in msg and "offer to post them" in msg
+
+
+def test_a_manager_doesnt_sit_waiting_on_long_work():
+    """Asked for a background job, a manager ran `sleep 60` in the foreground: unreachable
+    for a minute. It hands long waits to a worker, or says what it would do."""
+    from agentic_lab.manager import brain as B
+    p = B.system_prompt("Flash", "lab")
+    assert "Don't sit waiting on something long" in p and "Give it to a worker" in p
