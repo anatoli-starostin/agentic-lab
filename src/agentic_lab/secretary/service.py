@@ -837,6 +837,10 @@ class Secretary:
             return f"no onboarding {oid!r}"
         checklist = O.items(self.lab, rec, self.intake)
         left = [i for i in checklist if not i.done]
+        # what the agent sees here it tells them itself: no "just received" turn after it
+        if rec.get("greeted"):
+            self.onboardings.update(oid, lambda r: r.__setitem__("seen", sorted(
+                set(r.get("seen") or []) | {i.id for i in checklist if i.done})))
         return (O.table(rec, checklist) + "\n"
                 + (f"Next: {left[0].what}" if left else "All done: the admins are told."))
 
@@ -922,7 +926,8 @@ class Secretary:
                           "of their time; then the first step.]")
             elif arrived:
                 prompt = ("[The lab just received: " + ", ".join(i.what for i in arrived)
-                          + ". Tell them briefly it worked, then the next step.]")
+                          + ". Tell them briefly it worked, then the next step. If you "
+                          f"already told them, reply exactly {SILENT}.]")
             self.onboardings.update(oid, lambda r: (r.__setitem__("greeted", True),
                                                     r.__setitem__("seen", sorted(done))))
             if prompt:

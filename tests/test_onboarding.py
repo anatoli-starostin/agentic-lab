@@ -268,6 +268,23 @@ def test_the_loop_greets_once_carries_on_when_a_secret_arrives_and_tells_the_adm
     assert len([t for c, t in sec.slack.posts if c == "D-U00000001"]) == 1
 
 
+def test_what_the_agent_already_saw_on_its_checklist_isnt_announced_again(tmp_path):
+    """A key arrived while the newcomer's own turn was on: the agent saw it on its checklist
+    and told them; the loop doesn't send a second "the lab just received" turn for it."""
+    sec = secretary(tmp_path)
+    sec.onboardings.start(sec.lab, "dana", "U0DANA001", "Dana", "alice")
+    asyncio.run(sec.onboarding_tick())                  # greeted
+    sec.intake.store("dana", "env:WANDB_TEAM_API_KEY", "w")
+    assert "[x] Their key WANDB_TEAM_API_KEY" in sec.onboarding_ctx("dana").status()
+    asyncio.run(sec.onboarding_tick())
+    assert len(sec.turns) == 1                          # only the greeting
+    sec.intake.store("dana", "claude-token", "t")       # one it didn't see: announced
+    asyncio.run(sec.onboarding_tick())
+    assert len(sec.turns) == 2 and "Claude token" in sec.turns[1][0]
+    p = B.onboarding_prompt("Sec", "lab", "Dana", "")
+    assert "<silent>" in p and 'not "checked"' in p and "Never invent a reason" in p
+
+
 def test_a_stopped_onboarding_no_longer_reaches_the_secretary(tmp_path):
     sec = secretary(tmp_path)
     convs = {}
