@@ -90,7 +90,8 @@ class Live:
 
 def processes(uid=None):
     """The processes of this Unix user (default: ours), busiest first, command lines
-    shortened and masked. ps itself and this process are left out."""
+    shortened and masked; this process (the agent's service) marked `service`. ps itself
+    is left out."""
     uid = os.getuid() if uid is None else uid
     try:
         out = subprocess.run(["ps", "-ww", "-U", str(uid), "-o", "pid=,etimes=,pcpu=,rss=,args="],
@@ -103,9 +104,10 @@ def processes(uid=None):
         if len(parts) < 5:
             continue
         pid, etimes, pcpu, rss, args = parts
-        if int(pid) == os.getpid() or args.startswith("ps -ww -U"):
+        if args.startswith("ps -ww -U"):
             continue
         procs.append({"pid": int(pid), "seconds": int(etimes), "cpu": float(pcpu),
-                      "mem_mb": round(int(rss) / 1024), "command": mask(args)[:ARGS_CHARS]})
+                      "mem_mb": round(int(rss) / 1024), "command": mask(args)[:ARGS_CHARS],
+                      **({"service": True} if int(pid) == os.getpid() else {})})
     procs.sort(key=lambda p: (-p["cpu"], -p["seconds"]))
     return procs[:MAX_PROCESSES]

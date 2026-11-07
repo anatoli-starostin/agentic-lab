@@ -585,13 +585,18 @@ def render_now(now, error=None):
         parts.append("<div class='small'>" + "".join(_meter(k, v) for k, v in limits.items()
                                                      if isinstance(v, dict)) + "</div>")
     procs = now.get("processes")
-    if procs:
-        rows = "".join(f"<tr><td class='small'>{e(p['pid'])}</td><td class='small'>"
+    if procs is not None:
+        others = [p for p in procs if not p.get("service")]
+        rows = "".join(f"<tr><td class='small'>{e(p['pid'])}"
+                       f"{' (the service)' if p.get('service') else ''}</td><td class='small'>"
                        f"{e(_secs(p['seconds']))}</td><td class='small'>{e(p['cpu'])}%</td>"
                        f"<td class='small'>{e(p['mem_mb'])} MB</td><td>{PRE}{e(p['command'])}"
                        f"</pre></td></tr>" for p in procs)
-        parts.append("<details><summary class='small'>Processes "
-                     f"({len(procs)})</summary><table><tr><th>PID</th><th>For</th><th>CPU</th>"
+        parts.append("<details><summary class='small'>Processes: "
+                     + (f"{len(others)} besides the service" if others
+                        else "only the service, nothing else running")
+                     + "</summary><table>"
+                     f"<tr><th>PID</th><th>For</th><th>CPU</th>"
                      f"<th>Memory</th><th>Command</th></tr>{rows}</table></details>")
     return "<section><h2>Right now</h2>" + "".join(parts) + "</section>"
 

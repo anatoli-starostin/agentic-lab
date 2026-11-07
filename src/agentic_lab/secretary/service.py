@@ -1108,6 +1108,9 @@ async def serve(lab_path, host, port):
             now = {**(st.get("now") or {}), "limits": (st.get("usage") or {}).get("limits")}
         else:
             return None
+        # each reading says where it came from, as on the main page
+        now["limits"] = {k: {**v, "from": v.get("from") or agent}
+                         for k, v in (now.get("limits") or {}).items() if isinstance(v, dict)}
         if member is not None:
             now = {**now, "processes": None,
                    "turns": [t for t in now.get("turns") or [] if t.get("member") == member],
