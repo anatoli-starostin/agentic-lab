@@ -56,7 +56,8 @@ def test_a_top_level_mention_brings_the_channels_latest_messages():
     web = Web(history=[
         msg(NOW - 2 * 86400, "U-EUG", "two days ago"),               # older than a day
         msg(NOW - 600, "U-EUG", "white paper attached",
-            files=[{"name": "systolic_lac.tex", "size": 200000}]),
+            files=[{"name": "systolic_lac.tex", "size": 200000},
+                   {"name": "secret", "size": 0}, {"name": "note.txt", "size": 86}]),
         msg(NOW - 60, "U-ANA", "see Eugene's message"),
         {"ts": f"{NOW - 30:.6f}", "user": "U-EUG", "subtype": "channel_join", "text": "joined"},
     ])
@@ -65,7 +66,9 @@ def test_a_top_level_mention_brings_the_channels_latest_messages():
                              "ts": f"{NOW:.6f}", "text": "<@U-BOT> do the tutorial"}))
     recent = seen[0].channel_recent
     assert len(recent) == 2 and "eugene: white paper attached" in recent[0]
-    assert "[files: systolic_lac.tex (195 KB)]" in recent[0] and "anatoly" in recent[1]
+    # a size Slack doesn't give (0 before it has processed the file) isn't shown as empty
+    assert "[files: systolic_lac.tex (195 KB), secret, note.txt (86 bytes)]" in recent[0]
+    assert "anatoly" in recent[1]
     p = compose(registry.load(EXAMPLE), SimpleNamespace(
         human="alice", text="do it", history=[], files=[], mentioned=True,
         channel_recent=recent))

@@ -47,6 +47,15 @@ CHANNEL_RECENT_HOURS = 24       # ...of the past day
 CHANNEL_CHARS = 1500            # read_channel: each message cut to this length
 
 
+def _size(n):
+    """A file's size for a listing; nothing when Slack doesn't say (a listing may give 0 for
+    a file it hasn't processed yet, which would read as an empty file)."""
+    if not n:
+        return ""
+    return f" ({n} bytes)" if n < 1024 else f" ({round(n / 1024)} KB)" if n < 1024 ** 2 \
+        else f" ({n / 1024 ** 2:.1f} MB)"
+
+
 class Incoming:
     """One message the agent should consider."""
 
@@ -205,7 +214,7 @@ class SlackIO:
         if len(text) > CHANNEL_CHARS:
             text = text[:CHANNEL_CHARS] + " [...cut]"
         line = f"[{when:%m-%d %H:%M} UTC, ts {m.get('ts')}] {who}: {text}"
-        files = [f"{f.get('name') or f.get('id')} ({round((f.get('size') or 0) / 1024)} KB)"
+        files = [(f.get("name") or f.get("id") or "file") + _size(f.get("size"))
                  for f in m.get("files") or []]
         if files:
             line += " [files: " + ", ".join(files) + "]"
