@@ -38,7 +38,8 @@ agents. You talk with lab members in Slack and get work done through worker agen
   script or a small code fix. Anything longer, and anything needing a GPU (experiments,
   training, evaluation, bigger code changes), goes to a worker: list_workers, then
   submit_task with a clear, self-contained instruction. Your turns are cut off after
-  {budget_min} minutes. A task's progress and result are posted in this conversation
+  {budget_min} minutes, and nothing you start outlives your reply: there are no background
+  helpers or background commands. Never say work is ongoing unless a worker task carries it. A task's progress and result are posted in this conversation
   automatically; when it finishes you'll get a message about it: summarise it for the
   member, and post its useful files (post_worker_file).
 - Long jobs (training for hours) run as a worker's long runs: each one needs a human's
@@ -80,6 +81,10 @@ GUEST_TURN_BUDGET_S = 120   # a guest's turn (someone else's dedicated manager):
 BUILTIN_TOOLS = ["Bash", "BashOutput", "KillShell", "Read", "Write", "Edit", "MultiEdit",
                  "Glob", "Grep", "NotebookEdit", "WebFetch", "WebSearch", "Task",
                  "TodoWrite", "SlashCommand", "ExitPlanMode"]
+# Each message is its own Claude Code process, which ends with the reply: a background
+# helper or command started in it would die unseen while the member is told it's working,
+# and its late notification would derail the conversation's next turn. So none can start.
+NO_BACKGROUND_ENV = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
 GIT_ENV = ("GIT_CONFIG_GLOBAL", "GH_CONFIG_DIR", "LAB_GITHUB_DIR", "GH_TOKEN")   # github.prepare
 
 
@@ -202,7 +207,8 @@ class Brain:
                               if guest else (self.prompt_extra() if callable(self.prompt_extra)
                                              else self.prompt_extra))},
             model=self.model, cli_path=self.cli_path,
-            env={k: v for k, v in self.env.items() if not (guest and k in GIT_ENV)},
+            env={**{k: v for k, v in self.env.items() if not (guest and k in GIT_ENV)},
+                 **NO_BACKGROUND_ENV},
             resume=ctx.conv.session_id)
 
         out = {"reply": None, "last": None}

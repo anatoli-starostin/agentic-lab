@@ -514,6 +514,9 @@ def test_guest_mode(monkeypatch):
     o = clients[-1].options
     assert "lab" in o.mcp_servers and o.env["GH_TOKEN"] == "ghp_x"
     assert "flash-bot" in o.system_prompt["append"]
+    # a manager's turn is one process: nothing may run in the background past the reply
+    assert o.env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
+    assert "no background" in o.system_prompt["append"]
 
 
 def test_gpu_idle_only_after_several_zero_readings():
