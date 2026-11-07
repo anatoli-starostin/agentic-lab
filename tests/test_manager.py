@@ -790,3 +790,73 @@ def test_idle_and_down_are_judged_only_while_watched(tmp_path):
     d["saved"] = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=3)).isoformat()
     (tmp_path / "idle.json").write_text(json.dumps(d))
     assert P.IdleWatch(str(tmp_path / "idle.json")).idle_since == {}
+
+
+class _WidenApprover:
+    """A member who widens the sandbox for the first request, and sees what was asked."""
+
+    def __init__(self):
+        self.asked = []
+
+    async def active_grants(self):
+        return []
+
+    async def ask(self, asker, tool_name, tool_input, violations):
+        from agentic_lab.worker.runner import Decision
+        self.asked.append(list(violations))
+        return Decision("grant", grants=[{"kind": "domain", "value": "dl.example.org",
+                                          "expires": "2099-01-01T00:00:00+00:00"}])
+
+
+class _AsksOutsideClient(_FakeClient):
+    """The first session runs a command outside the sandbox; the next one just answers."""
+    first = False
+
+    async def receive_response(self):
+        from claude_agent_sdk import AssistantMessage, TextBlock
+        if self.first:
+            d = await self.options.can_use_tool(
+                "Bash", {"command": "curl https://dl.example.org/x",
+                         "dangerouslyDisableSandbox": True}, None)
+            self.decision = d
+            return
+        yield AssistantMessage(content=[TextBlock(text="downloaded")], model="m")
+
+
+def test_a_widened_sandbox_applies_in_the_same_turn():
+    """The member widens the sandbox in Lab Approvals: the session restarts with it at once,
+    so they needn't send another message; the hosts refused in an earlier turn of this
+    conversation are offered too."""
+    from agentic_lab.manager import brain as B
+    clients, settings = [], []
+
+    def factory(options):
+        clients.append(_AsksOutsideClient(options))
+        clients[-1].first = len(clients) == 1
+        return clients[-1]
+
+    def settings_for(grants):
+        settings.append([g.value for g in grants])
+        return {}
+    ap = _WidenApprover()
+    br = B.Brain("Flash", "lab", "/tmp", settings_for, approver=ap, turn_budget_s=5)
+    br.client_factory = factory
+    conv = SimpleNamespace(key="c", session_id=None)
+    ctx = SimpleNamespace(conv=conv, requester="alice",
+                          state=SimpleNamespace(save=lambda: None))
+    br._recent_violations["c"] = (B.time.monotonic(),
+                                  ["deny network-outbound cdn.example.org:443"])
+    reply = asyncio.run(br.turn(ctx, "download it, I'll approve"))
+    assert reply == "downloaded"
+    assert ap.asked == [["deny network-outbound cdn.example.org:443"]]
+    assert clients[0].decision.behavior == "deny" and clients[0].decision.interrupt
+    assert len(clients) == 2 and settings == [[], ["dl.example.org"]]
+    assert "widened your sandbox" in clients[1].queries[0]
+    assert "dl.example.org" in clients[1].queries[0]
+
+
+def test_the_manager_prompt_says_approval_is_the_way_out_of_the_sandbox():
+    from agentic_lab.manager import brain as B
+    p = B.system_prompt("Flash", "lab")
+    assert "dangerouslyDisableSandbox" in p and "never tell them their approval can't help" in p
+    assert "No agent ever has root" in p
