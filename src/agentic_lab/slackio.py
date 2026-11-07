@@ -6,7 +6,10 @@ Shared by managers and the secretary. Scope:
   - In channels, the agent takes part only in threads where it's mentioned or already
     involved, never the whole channel. When first mentioned partway through a thread, it
     reads the thread so far: its first 5 messages (they often set the topic) and the last
-    50 before the mention.
+    50 before the mention. Mentioned at a channel's top level, it gets the channel's last
+    10 top-level messages of the past day. Beyond that, a manager reads the channel of its
+    conversation when it needs to (read_channel: the top level or any thread, attachments
+    too), never another channel.
   - In a thread it's involved in, it sees every message and decides for itself whether to
     answer (it may answer `<silent>`): judgment stays in the model, not in filters.
   - Every message is checked against lab.yaml: the sender must be a lab member who may use
@@ -16,9 +19,11 @@ Shared by managers and the secretary. Scope:
 Socket Mode: no public URL, events arrive over a connection authenticated with the app token.
 """
 import asyncio
+import datetime as dt
 import logging
 import os
 import re
+import time
 
 import aiohttp
 from slack_sdk.socket_mode.aiohttp import SocketModeClient
@@ -37,6 +42,9 @@ HISTORY_PAGES = 5               # at most 5 x 200 messages read
 DM_CATCHUP_HOURS = 72           # DMs missed while a manager wasn't running: at most this far
 DM_CATCHUP_MAX = 20             # back, the last this many of them,
 DM_CATCHUP_CHARS = 1000         # each cut to this length
+CHANNEL_RECENT = 10             # mentioned at a channel's top level: its last messages...
+CHANNEL_RECENT_HOURS = 24       # ...of the past day
+CHANNEL_CHARS = 1500            # read_channel: each message cut to this length
 
 
 class Incoming:
@@ -50,6 +58,7 @@ class Incoming:
         self.mentioned = mentioned      # addressed to this agent (DM, or @mention)
         self.history = history or []    # earlier thread messages, on first involvement
         self.files = files or []        # local paths of attachments
+        self.channel_recent = []        # a top-level mention: the channel's latest messages
 
 
 class SlackIO:
@@ -184,6 +193,72 @@ class SlackIO:
                      + lines[-DM_CATCHUP_MAX:])
         return lines
 
+    def _channel_line(self, m, replies=True):
+        """A channel message for read_channel: when, who, its text, its files, its thread."""
+        who = (self.members.get(m.get("user"))
+               or (m.get("bot_profile") or {}).get("name") or m.get("username")
+               or m.get("user") or "bot")
+        if m.get("user") == self.me:
+            who = "you"
+        when = dt.datetime.fromtimestamp(float(m.get("ts", 0)), dt.timezone.utc)
+        text = (m.get("text") or "").strip()
+        if len(text) > CHANNEL_CHARS:
+            text = text[:CHANNEL_CHARS] + " [...cut]"
+        line = f"[{when:%m-%d %H:%M} UTC, ts {m.get('ts')}] {who}: {text}"
+        files = [f"{f.get('name') or f.get('id')} ({round((f.get('size') or 0) / 1024)} KB)"
+                 for f in m.get("files") or []]
+        if files:
+            line += " [files: " + ", ".join(files) + "]"
+        if replies and m.get("reply_count") and m.get("thread_ts") == m.get("ts"):
+            line += f" [thread: {m['reply_count']} replies, thread {m['ts']}]"
+        return line
+
+    async def _read(self, call, **kw):
+        msgs, cursor = [], None
+        for _ in range(HISTORY_PAGES):
+            r = await call(limit=200, cursor=cursor, **kw)
+            msgs += r.get("messages", [])
+            cursor = (r.get("response_metadata") or {}).get("next_cursor")
+            if not cursor:
+                break
+        return sorted(msgs, key=lambda m: float(m.get("ts", 0)))
+
+    async def channel_recent(self, channel, before_ts):
+        """The channel's last CHANNEL_RECENT top-level messages of the past day before
+        `before_ts`, for a top-level mention. [] if Slack fails."""
+        try:
+            msgs = await self._read(self.web.conversations_history, channel=channel,
+                                    oldest=f"{float(before_ts) - CHANNEL_RECENT_HOURS * 3600:.6f}",
+                                    latest=before_ts, inclusive=False)
+        except Exception as e:
+            log.warning("couldn't read recent messages in %s: %s", channel, e)
+            return []
+        msgs = [m for m in msgs if float(m.get("ts", 0)) < float(before_ts)
+                and m.get("subtype") in (None, "file_share", "bot_message")]
+        return [self._channel_line(m) for m in msgs[-CHANNEL_RECENT:]]
+
+    async def read_channel(self, channel, thread_ts=None, hours=72, limit=30,
+                           download_key=None):
+        """A channel's top level over the last `hours` (or one thread of it, whole), its
+        last `limit` messages, oldest first; with `download_key`, their attachments are
+        downloaded too (inbox/<key>). Returns (lines, local paths). Slack errors raise."""
+        if thread_ts:
+            msgs = await self._read(self.web.conversations_replies, channel=channel,
+                                    ts=thread_ts)
+            msgs = msgs[:1] + msgs[1:][-(limit - 1):] if len(msgs) > limit else msgs
+        else:
+            msgs = await self._read(self.web.conversations_history, channel=channel,
+                                    oldest=f"{time.time() - hours * 3600:.6f}")
+            msgs = msgs[-limit:]
+        msgs = [m for m in msgs if m.get("subtype") in (None, "file_share", "bot_message",
+                                                         "thread_broadcast")]
+        lines = [self._channel_line(m, replies=not thread_ts) for m in msgs]
+        paths = []
+        if download_key:
+            paths = await self._download([f for m in msgs for f in m.get("files") or []],
+                                         download_key)
+        return lines, paths
+
     async def thread_history(self, channel, thread_ts, before_ts):
         """The thread as everyone sees it, before `before_ts` (a guest's turn starts here)."""
         return await self._history(channel, thread_ts, before_ts)
@@ -259,16 +334,19 @@ class SlackIO:
                 await self.post(channel, thread_ts if not private else None, reason)
             return
 
-        history = []
+        history, recent = [], []
         key = channel if private and thread_ts is None else f"{channel}/{thread_ts}"
         if not private and key not in self.engaged:
             self.engaged.add(key)
             if thread_ts != ts:         # mentioned partway through a thread: read it first
                 history = await self._history(channel, thread_ts, ts)
+            else:                       # a new thread: what the channel was just saying
+                recent = await self.channel_recent(channel, ts)
         files = await self._download(ev.get("files") or [], key) if ev.get("files") else []
-        await self.on_message(Incoming(channel, thread_ts, ts, user, human,
-                                       self._strip_mention(ev.get("text")), private,
-                                       mentioned, history, files))
+        msg = Incoming(channel, thread_ts, ts, user, human, self._strip_mention(ev.get("text")),
+                       private, mentioned, history, files)
+        msg.channel_recent = recent
+        await self.on_message(msg)
 
     async def start(self):
         auth = await self.web.auth_test()

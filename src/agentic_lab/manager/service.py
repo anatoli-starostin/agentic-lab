@@ -51,6 +51,9 @@ def compose(lab, msg, guest_thread=None):
     elif msg.history:
         parts.append("Earlier in this thread (before you were mentioned):\n" +
                      "\n".join(msg.history))
+    if guest_thread is None and getattr(msg, "channel_recent", None):
+        parts.append("Recent messages in this channel, before this one (more with "
+                     "read_channel):\n" + "\n".join(msg.channel_recent))
     parts.append(f"[{who} ({msg.human})]: {msg.text}")
     if msg.files:
         parts.append("Attached files, saved in your working folder: " + ", ".join(msg.files))
