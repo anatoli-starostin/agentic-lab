@@ -58,7 +58,7 @@ def test_processes_lists_ours(monkeypatch):
             time.sleep(0.1)
         else:
             raise AssertionError(procs)
-        assert all(x["pid"] != os.getpid() for x in procs)
+        assert [x["pid"] for x in procs if x.get("service")] == [os.getpid()]
     finally:
         p.kill()
 
@@ -99,6 +99,11 @@ def test_render_now():
     assert "Bash: git grep x" in h and "step 4200" in h and "1k tokens" in h
     assert "&lt;all&gt;" in h and "2 min 5 s" in h
     assert "No Claude session" in W.render_now({"turns": []})
+    idle = W.render_now({"turns": [], "processes": [{"pid": 1, "seconds": 5, "cpu": 0.1,
+                                                      "mem_mb": 90, "command": "lab manager",
+                                                      "service": True}]})
+    assert "only the service, nothing else running" in idle and "(the service)" in idle
+    assert "1 besides the service" in h
     assert "couldn" in W.render_now(None, "couldn't ask it: down")
     assert W.render_now(None) == ""
 
