@@ -10,7 +10,7 @@
     lab onboarding start <id> --slack U… --name "Full Name"
                                 (as the secretary's user) the secretary DMs a newcomer and
                                 guides them through what they can do on their own
-    lab onboarding status [id] | stop <id>
+    lab onboarding status [id] | stop <id> | skip <id> <KEY>
     lab broker serve            the approval broker (on the secretary host, as lab-broker)
     lab secretary serve         the secretary's service: lab state, web UI, Slack
     lab secretary ask --as <member> "message"
@@ -169,6 +169,10 @@ def cmd_onboarding(args):
             print(f"started: the secretary DMs {args.name} within a minute.")
             print(f"Follow it: lab onboarding status {args.id}. The admins are told in Slack "
                   "when it's finished.")
+        elif args.ocmd == "skip":
+            store.skip_key(lab, args.id, args.key)
+            print(f"skipped {args.key} for {args.id}: they can store it later by DM to the "
+                  "secretary.")
         elif args.ocmd == "stop":
             store.stop(args.id)
             print(f"stopped {args.id}: the secretary no longer talks to them as a newcomer "
@@ -793,7 +797,11 @@ def main(argv=None):
     oss.add_argument("id", nargs="?")
     osp = osub.add_parser("stop", help="stop an onboarding")
     osp.add_argument("id")
-    for p_ in (ost, oss, osp):
+    osk = osub.add_parser("skip", help="skip an optional key (onboarding.optional_keys) "
+                          "for a newcomer who doesn't have it yet")
+    osk.add_argument("id")
+    osk.add_argument("key", help="the key's name, e.g. WANDB_API_KEY")
+    for p_ in (ost, oss, osp, osk):
         p_.add_argument("--state", default=os.path.expanduser(STATE))
         p_.set_defaults(fn=cmd_onboarding)
 

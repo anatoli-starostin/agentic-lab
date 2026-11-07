@@ -824,6 +824,9 @@ class Secretary:
             confirm=lambda item: guard(lambda: (
                 self.onboardings.confirm(self.lab, oid, item),
                 f"confirmed {item}. " + self.onboarding_status(oid))[1]),
+            skip_key=lambda name: guard(lambda: (
+                self.onboardings.skip_key(self.lab, oid, name),
+                f"skipped {name}. " + self.onboarding_status(oid))[1]),
             token=lambda: self.onboarding_secret(oid, "claude-token"),
             key=lambda name: self.onboarding_secret(oid, f"env:{name}"),
             save=self.state.save)
@@ -834,6 +837,10 @@ class Secretary:
             return f"no onboarding {oid!r}"
         checklist = O.items(self.lab, rec, self.intake)
         left = [i for i in checklist if not i.done]
+        # what the agent sees here it tells them itself: no "just received" turn after it
+        if rec.get("greeted"):
+            self.onboardings.update(oid, lambda r: r.__setitem__("seen", sorted(
+                set(r.get("seen") or []) | {i.id for i in checklist if i.done})))
         return (O.table(rec, checklist) + "\n"
                 + (f"Next: {left[0].what}" if left else "All done: the admins are told."))
 
@@ -843,7 +850,8 @@ class Secretary:
         rec = self.onboardings.active().get(oid)
         if rec is None:
             return "this onboarding isn't active"
-        if name.startswith("env:") and name[4:] not in O.config(self.lab)["keys"]:
+        c = O.config(self.lab)
+        if name.startswith("env:") and name[4:] not in c["keys"] + c["optional_keys"]:
             return f"refused: {name[4:]} isn't on the checklist"
         if self.slack is None:
             return "no Slack: an admin runs lab secret request from the console"
@@ -918,7 +926,8 @@ class Secretary:
                           "of their time; then the first step.]")
             elif arrived:
                 prompt = ("[The lab just received: " + ", ".join(i.what for i in arrived)
-                          + ". Tell them briefly it worked, then the next step.]")
+                          + ". Tell them briefly it worked, then the next step. If you "
+                          f"already told them, reply exactly {SILENT}.]")
             self.onboardings.update(oid, lambda r: (r.__setitem__("greeted", True),
                                                     r.__setitem__("seen", sorted(done))))
             if prompt:

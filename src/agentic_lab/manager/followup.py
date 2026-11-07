@@ -194,6 +194,8 @@ def finished_prompt(task, view):
         lines.append("Artifacts on the worker: " + ", ".join(r["artifacts"]))
     if view.get("error"):
         lines.append(f"Error: {view['error']}")
-    lines.append("Tell the member in this conversation what came of it, briefly, and post the "
-                 "files worth seeing (post_worker_file).")
+    lines.append("Tell the member in this conversation what came of it, briefly. Post only "
+                 "the file(s) they asked for, in the form they asked for (e.g. the PDF, not "
+                 "its sources), with post_worker_file; name the other artifacts and offer to "
+                 "post them.")
     return "\n".join(lines)

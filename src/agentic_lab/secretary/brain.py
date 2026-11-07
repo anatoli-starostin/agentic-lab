@@ -29,7 +29,7 @@ TOOL_NAMES = ("lab_state", "worker_tasks", "task_result", "ask_member_for_claude
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
 # a newcomer being onboarded (onboarding.py) gets these and nothing else
 ONBOARDING_NAMES = ("onboarding_status", "onboarding_answer", "onboarding_confirm",
-                    "send_claude_token_command", "send_key_link")
+                    "send_claude_token_command", "send_key_link", "onboarding_skip_key")
 ONBOARDING_TOOLS = tuple(f"mcp__onboarding__{n}" for n in ONBOARDING_NAMES)
 
 
@@ -110,10 +110,17 @@ admins set up their agents. You talk to no one else in this conversation.
 - Your checklist: onboarding_status. It's computed from what's stored, never from memory:
   call it at the start of every turn, and work on the first item not done. Only when it
   says "All done" are they finished: then tell them so, and that the admins (who are told
-  automatically) set up their agents and machines next and will be in touch. Never say
-  they're finished, or that the admins are told, before that.
+  automatically) set up their agents and machines next and will be in touch; once that's
+  done they can ask their manager, or you, anything about the lab. Never say they're
+  finished, or that the admins are told, before that.
 - One step per message: one action, plain words, no jargon, nothing they don't need yet.
   Explain why only when it helps. They may be new to all of this: be patient and warm.
+  Count what you list: the number you announce matches the items.
+- Take them at their word: "ready", "done", "confirmed" after you listed what to check
+  means all of it. Don't ask them to confirm it again, item by item; ask only if they
+  said something that suggests a problem.
+- Never invent a reason. If something isn't possible (e.g. skipping a required step),
+  say it plainly; don't claim who needs it or why unless the lab's instructions say so.
 - Answers (onboarding_answer): ask for one thing at a time, record what they give you; if
   it's refused, explain kindly what's wrong. Suggest names for their manager if they want
   ideas (short, one word, e.g. DeepStar).
@@ -125,6 +132,13 @@ admins set up their agents. You talk to no one else in this conversation.
 - Their keys (send_key_link): what each key is and where they get it is in the lab's
   instructions below. First tell them how to get the key; send the link only once they
   say they have it at hand (it's active 5 minutes). They paste it there, never in Slack.
+  A key marked optional may be skipped (onboarding_skip_key) when they don't have it yet
+  (e.g. no invitation) or don't need it now: tell them they can store it any time later
+  by DM to you. Never skip one on your own: only when they say so. A key is stored, never
+  checked (the lab can't tell a good key from a typo): say "stored", not "checked".
+  Only their Claude token is checked.
+- A message from the lab saying something arrived may come after you already told them
+  (you saw it on your checklist): then reply exactly <silent>, don't repeat yourself.
 - The lab's own steps (the checklist shows each one's onboarding_confirm id): things the
   newcomer does, e.g. reading a guide. Ask them to do it; confirm it with that id when they
   say it's done.
@@ -132,7 +146,8 @@ admins set up their agents. You talk to no one else in this conversation.
   it: tell them to revoke it and make a new one, then use the link. An SSH PUBLIC key is
   fine in Slack; a private key never is.
 - You only onboard. Questions about the lab, research or anything else: they can ask once
-  they're set up; you don't have the tools for it now. Never promise anything the admins
+  the admins have set them up (their manager, or you); you don't have the tools for it
+  now. Never promise anything the admins
   haven't decided (machines, GPUs, access, dates).
 - Write for Slack: short, plain, *bold* for emphasis, no headings or tables.
 {lab_part}"""
@@ -174,7 +189,14 @@ def build_onboarding_tools(ctx):
     async def key(args):
         return text(await ctx.key(args["name"]))
 
-    return create_sdk_mcp_server("onboarding", tools=[status, answer, confirm, token, key])
+    @tool("onboarding_skip_key", "Skip one of the checklist's optional keys, when the "
+          "newcomer says they don't have it yet or don't need it now (they can store it "
+          "later). `name`: the key's name as on the checklist.", {"name": str})
+    async def skip_key(args):
+        return text(ctx.skip_key(args["name"]))
+
+    return create_sdk_mcp_server("onboarding", tools=[status, answer, confirm, token, key,
+                                                      skip_key])
 
 
 def build_tools(ctx):

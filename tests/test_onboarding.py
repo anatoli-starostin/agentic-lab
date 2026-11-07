@@ -52,6 +52,8 @@ def test_a_good_onboarding_section_passes_lab_check():
     ({"welcome": "hi"}, "unknown key 'welcome'"),
     ({"ask": ["github", "shoe_size"]}, "'shoe_size'"),
     ({"keys": ["PATH"]}, "reserved"),
+    ({"keys": ["A_KEY"], "optional_keys": ["A_KEY"]}, "already in onboarding.keys"),
+    ({"optional_keys": ["PATH"]}, "reserved"),
     ({"items": [{"id": "a", "text": "x"}, {"id": "a", "text": "y"}]}, "twice"),
     ({"items": [{"id": "a"}]}, "text"),
     ({"instructions": ["not", "text"]}, "must be a str"),
@@ -136,6 +138,27 @@ def test_the_checklist_comes_from_whats_stored_and_says_when_its_finished(tmp_pa
     assert "[x] Their Claude token" in text and "(onboarding_confirm: read-guide)" in text and "sk-ant" not in text and "DeepTruth" in text
 
 
+def test_an_optional_key_can_be_skipped_and_a_required_one_cant(tmp_path):
+    cfg = {**CONFIG, "optional_keys": ["HF_TOKEN"], "items": []}
+    st, lb, intake = started(tmp_path, lab(cfg)), lab(cfg), I.Intake(tmp_path)
+    st.answer(lb, "dana", "github", "dana", lambda u: None)
+    st.answer(lb, "dana", "manager_name", "DeepTruth")
+    st.answer(lb, "dana", "ssh_key", PUB)
+    intake.store("dana", "claude-token", "sk-ant-oat-x")
+    intake.store("dana", "env:WANDB_TEAM_API_KEY", "w")
+    assert not O.finished(O.items(lb, st.get("dana"), intake))      # HF_TOKEN still open
+    with pytest.raises(O.OnboardingError, match="can't be skipped"):
+        st.skip_key(lb, "dana", "WANDB_TEAM_API_KEY")
+    with pytest.raises(O.OnboardingError, match="no optional key"):
+        st.skip_key(lb, "dana", "OTHER")
+    st.skip_key(lb, "dana", "HF_TOKEN")
+    checklist = O.items(lb, st.get("dana"), intake)
+    assert O.finished(checklist)
+    assert "skipped: they can store it later" in O.table(st.get("dana"), checklist)
+    intake.store("dana", "env:HF_TOKEN", "h")                       # stored after all
+    assert "skipped:" not in O.table(st.get("dana"), O.items(lb, st.get("dana"), intake))
+
+
 # ── the agent ────────────────────────────────────────────────────────────────
 
 def test_a_newcomers_session_has_the_onboarding_tools_and_nothing_else(tmp_path):
@@ -214,6 +237,10 @@ def test_links_go_only_for_the_checklists_keys(tmp_path, monkeypatch):
     assert "sent" in asyncio.run(ctx.token())
     assert [c for c, _ in sec.slack.posts] == ["D-U0DANA001", "D-U0DANA001"]
     assert "refused" in ctx.answer("github", "not a user name")
+    assert "refused" in ctx.skip_key("WANDB_TEAM_API_KEY")          # required: no skipping
+    sec.lab.data["onboarding"] = {**CONFIG, "optional_keys": ["HF_TOKEN"]}
+    assert "sent" in asyncio.run(ctx.key("HF_TOKEN"))               # an optional key's link
+    assert ctx.skip_key("HF_TOKEN").startswith("skipped HF_TOKEN")
 
 
 def test_the_loop_greets_once_carries_on_when_a_secret_arrives_and_tells_the_admins(tmp_path):
@@ -239,6 +266,23 @@ def test_the_loop_greets_once_carries_on_when_a_secret_arrives_and_tells_the_adm
     asyncio.run(sec.onboarding_tick())
     assert "U0DANA001" not in sec.slack.members         # done: not a member until lab.yaml
     assert len([t for c, t in sec.slack.posts if c == "D-U00000001"]) == 1
+
+
+def test_what_the_agent_already_saw_on_its_checklist_isnt_announced_again(tmp_path):
+    """A key arrived while the newcomer's own turn was on: the agent saw it on its checklist
+    and told them; the loop doesn't send a second "the lab just received" turn for it."""
+    sec = secretary(tmp_path)
+    sec.onboardings.start(sec.lab, "dana", "U0DANA001", "Dana", "alice")
+    asyncio.run(sec.onboarding_tick())                  # greeted
+    sec.intake.store("dana", "env:WANDB_TEAM_API_KEY", "w")
+    assert "[x] Their key WANDB_TEAM_API_KEY" in sec.onboarding_ctx("dana").status()
+    asyncio.run(sec.onboarding_tick())
+    assert len(sec.turns) == 1                          # only the greeting
+    sec.intake.store("dana", "claude-token", "t")       # one it didn't see: announced
+    asyncio.run(sec.onboarding_tick())
+    assert len(sec.turns) == 2 and "Claude token" in sec.turns[1][0]
+    p = B.onboarding_prompt("Sec", "lab", "Dana", "")
+    assert "<silent>" in p and 'not "checked"' in p and "Never invent a reason" in p
 
 
 def test_a_stopped_onboarding_no_longer_reaches_the_secretary(tmp_path):
@@ -291,6 +335,7 @@ def test_the_console_starts_and_shows_an_onboarding(tmp_path):
     assert out.returncode == 0, out.stderr
     out = run("status", "dana")
     assert "[ ] Their key WANDB_TEAM_API_KEY" in out.stdout and "Dana Scully" in out.stdout
+    assert run("skip", "dana", "WANDB_TEAM_API_KEY").returncode == 1  # not optional
     assert run("start", "dana", "--slack", "U0DANA001", "--name", "D").returncode == 1
     O.Onboardings(tmp_path / "onboarding.json").update(
         "dana", lambda r: r["answers"].__setitem__("ssh_key", PUB))

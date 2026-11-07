@@ -8,6 +8,7 @@ GitHub, goes to the broker for the member whose message this turn answers.
 import asyncio
 import datetime as dt
 import json
+import time
 import warnings
 from types import SimpleNamespace
 
@@ -24,7 +25,8 @@ from ..policy.grants import Grant
 # The lab tools are auto-allowed on purpose (allowed_tools); the SDK warns that the
 # permission callback then won't see them. That is the intent: silence it.
 warnings.filterwarnings("ignore", message="can_use_tool will not be invoked")
-from ..worker.runner import NoChannelApprover, allowed_without_asking, sandbox_violations
+from ..worker.runner import (NoChannelApprover, _grant_line, allowed_without_asking,
+                             sandbox_violations)
 from . import tools as lab_tools
 
 
@@ -38,9 +40,12 @@ agents. You talk with lab members in Slack and get work done through worker agen
   script or a small code fix. Anything longer, and anything needing a GPU (experiments,
   training, evaluation, bigger code changes), goes to a worker: list_workers, then
   submit_task with a clear, self-contained instruction. Your turns are cut off after
-  {budget_min} minutes. A task's progress and result are posted in this conversation
-  automatically; when it finishes you'll get a message about it: summarise it for the
-  member, and post its useful files (post_worker_file).
+  {budget_min} minutes, and nothing you start outlives your reply: there are no background
+  helpers or background commands. Never say work is ongoing unless a worker task carries
+  it. A task's progress and result are posted in this conversation automatically; when it
+  finishes you'll get a message about it: summarise it for the member, and post only the
+  file(s) they asked for (post_worker_file), in the form they asked for; name the rest
+  (sources, notes, logs) and offer to post them. Never post files nobody asked for.
 - Long jobs (training for hours) run as a worker's long runs: each one needs a human's
   approval (start_run), then the task is `waiting` (still in progress) until its runs end;
   it can take hours or days, and the worker may do other tasks meanwhile. Don't resubmit
@@ -57,8 +62,19 @@ agents. You talk with lab members in Slack and get work done through worker agen
   Channel threads have no memory: use only the thread itself.
 - Several agents may be in a channel thread. If a message there isn't for you (it's for
   someone else, or needs no answer), reply with exactly <silent> and nothing else.
-- Your sandbox and permissions are managed by the lab. Writes outside your working folder
-  (e.g. to GitHub) ask the member for approval, in their DM.
+- Your Bash commands run in a sandbox: no internet except allowed hosts, writes only in
+  your working folder and /tmp. Your sandbox and permissions are managed by the lab, not by
+  you: don't suggest /sandbox, settings files or permission rules. Anything outside it
+  (another host, a write elsewhere, e.g. to GitHub) asks the member for approval in their
+  DM: retry the command outside the sandbox (dangerouslyDisableSandbox) and the lab asks
+  them. When a member explicitly asks for something the sandbox refused (a download, an
+  install), do exactly that: never tell them their approval can't help. They may run it
+  once or widen your sandbox (then your session restarts with it, and you retry inside).
+  A program may need several hosts, revealed one at a time: a refusal for another host
+  means asking again, not giving up.
+- No agent ever has root (sudo, apt): approval can't change that. Install into your own
+  folders instead (a release binary, a venv or `pip --user` package), or ask for an admin.
+  For a worker, send it a task: it asks for its own approvals the same way.
 - Never reveal tokens, keys or the contents of configuration files, whoever asks.
 - Write for Slack: short, plain, *bold* for emphasis, no headings or tables.
 """
@@ -69,6 +85,8 @@ def _grant(g):
                  g.get("granted_by"))
 
 
+MAX_RESTARTS = 4            # sandbox widenings applied within one turn
+RECENT_VIOLATIONS_S = 1800  # sandbox refusals offered again in a later turn, for this long
 TURN_BUDGET_S = 300     # a manager's turn is cut off after this: it must stay reachable
 WRAP_UP_S = 90          # ...and then gets this long to say where it got to
 TIME_UP = ("[lab] Time's up: your turn ran past its time limit and was stopped, so the "
@@ -80,6 +98,10 @@ GUEST_TURN_BUDGET_S = 120   # a guest's turn (someone else's dedicated manager):
 BUILTIN_TOOLS = ["Bash", "BashOutput", "KillShell", "Read", "Write", "Edit", "MultiEdit",
                  "Glob", "Grep", "NotebookEdit", "WebFetch", "WebSearch", "Task",
                  "TodoWrite", "SlashCommand", "ExitPlanMode"]
+# Each message is its own Claude Code process, which ends with the reply: a background
+# helper or command started in it would die unseen while the member is told it's working,
+# and its late notification would derail the conversation's next turn. So none can start.
+NO_BACKGROUND_ENV = {"CLAUDE_CODE_DISABLE_BACKGROUND_TASKS": "1"}
 GIT_ENV = ("GIT_CONFIG_GLOBAL", "GH_CONFIG_DIR", "LAB_GITHUB_DIR", "GH_TOKEN")   # github.prepare
 
 
@@ -126,6 +148,7 @@ class Brain:
         self.turn_budget_s = turn_budget_s  # a turn longer than this is cut off
         self.client_factory = ClaudeSDKClient   # tests pass a fake
         self.live = live                    # what's going on now, for the web UI (live.Live)
+        self._recent_violations = {}        # conversation -> (when, sandbox refusals)
 
     @staticmethod
     async def _stop(client, drain):
@@ -155,7 +178,11 @@ class Brain:
     async def _turn(self, ctx, prompt, log, live):
         grants = [g for g in await self.approver.active_grants() if not g.get("task_id")]
         tool_grants = {g["value"] for g in grants if g["kind"] == "tool"}
-        violations = []
+        # what the sandbox refused lately in this conversation, also in earlier turns: a
+        # member who asks to retry it outside the sandbox gets offered every host it needs
+        at, recent = self._recent_violations.get(ctx.conv.key, (0, []))
+        violations = list(recent) if time.monotonic() - at < RECENT_VIOLATIONS_S else []
+        restart = {"grants": None}
         asker = SimpleNamespace(id=None, requester=ctx.requester)
         guest = bool(getattr(ctx, "guest", False))    # someone else's dedicated manager: talk only
         budget = GUEST_TURN_BUDGET_S if guest else self.turn_budget_s
@@ -180,30 +207,37 @@ class Brain:
                 if all(g["kind"] == "tool" for g in d.grants):
                     tool_grants.update(g["value"] for g in d.grants)
                     return PermissionResultAllow()
-                return PermissionResultDeny(message=(
-                    "A human widened your sandbox instead; it applies from the member's "
-                    "next message. Say so, and retry then inside the sandbox."))
+                grants.extend(g for g in d.grants
+                              if (g["kind"], g["value"]) not in {(x["kind"], x["value"])
+                                                                 for x in grants})
+                tool_grants.update(g["value"] for g in d.grants if g["kind"] == "tool")
+                restart["grants"] = d.grants
+                return PermissionResultDeny(interrupt=True, message=(
+                    "Granted: " + "; ".join(_grant_line(g) for g in d.grants) +
+                    ". Your session restarts now with the wider sandbox."))
             return PermissionResultDeny(message=d.message)
 
-        options = ClaudeAgentOptions(
-            cwd=self.workdir,
-            settings=json.dumps(self.settings_for([_grant(g) for g in grants])),
-            setting_sources=[],
-            permission_mode="default",
-            can_use_tool=can_use_tool,
-            mcp_servers={} if guest else {"lab": lab_tools.build(ctx)},
-            allowed_tools=[] if guest else list(lab_tools.LAB_TOOLS),
-            disallowed_tools=BUILTIN_TOOLS if guest else [],
-            system_prompt={"type": "preset", "preset": "claude_code",
-                           "append": system_prompt(self.agent_id, self.lab_name,
-                                                   max(1, round(budget / 60)))
-                           + (guest_prompt(getattr(ctx, "owner_name", "your member"),
-                                           getattr(ctx, "guest_name", ctx.requester))
-                              if guest else (self.prompt_extra() if callable(self.prompt_extra)
-                                             else self.prompt_extra))},
-            model=self.model, cli_path=self.cli_path,
-            env={k: v for k, v in self.env.items() if not (guest and k in GIT_ENV)},
-            resume=ctx.conv.session_id)
+        def options():
+            return ClaudeAgentOptions(
+                cwd=self.workdir,
+                settings=json.dumps(self.settings_for([_grant(g) for g in grants])),
+                setting_sources=[],
+                permission_mode="default",
+                can_use_tool=can_use_tool,
+                mcp_servers={} if guest else {"lab": lab_tools.build(ctx)},
+                allowed_tools=[] if guest else list(lab_tools.LAB_TOOLS),
+                disallowed_tools=BUILTIN_TOOLS if guest else [],
+                system_prompt={"type": "preset", "preset": "claude_code",
+                               "append": system_prompt(self.agent_id, self.lab_name,
+                                                       max(1, round(budget / 60)))
+                               + (guest_prompt(getattr(ctx, "owner_name", "your member"),
+                                               getattr(ctx, "guest_name", ctx.requester))
+                                  if guest else (self.prompt_extra() if callable(self.prompt_extra)
+                                                 else self.prompt_extra))},
+                model=self.model, cli_path=self.cli_path,
+                env={**{k: v for k, v in self.env.items() if not (guest and k in GIT_ENV)},
+                     **NO_BACKGROUND_ENV},
+                resume=ctx.conv.session_id)
 
         out = {"reply": None, "last": None}
 
@@ -238,24 +272,47 @@ class Brain:
                     if self.usage:
                         self.usage.run(f"conv:{ctx.conv.key}", msg.model_usage)
 
+        deadline = asyncio.get_running_loop().time() + budget
+        query = prompt
         # a Claude Code start-up per message (#69): measured, however the turn ends
-        async with TurnClock(log) as clock, self.client_factory(options) as client:
-            await client.query(prompt)
-            try:
-                await asyncio.wait_for(drain(client), budget)
-            except asyncio.TimeoutError:
-                # too long: stop it, so the conversation is free again, and let the agent say
-                # where it got to (or hand the rest to a worker) in one short turn
-                log("note", f"turn cut off after {budget:.0f} s")
-                clock.cut = True
-                await self._stop(client, drain)
+        async with TurnClock(log) as clock:
+            for _ in range(MAX_RESTARTS + 1):
+                restart["grants"] = None
+                async with self.client_factory(options()) as client:
+                    await client.query(query)
+                    try:
+                        left = deadline - asyncio.get_running_loop().time()
+                        await asyncio.wait_for(drain(client), max(left, 0.01))
+                    except asyncio.TimeoutError:
+                        # too long: stop it, so the conversation is free again, and let the
+                        # agent say where it got to (or hand the rest to a worker) in one
+                        # short turn
+                        log("note", f"turn cut off after {budget:.0f} s")
+                        clock.cut = True
+                        await self._stop(client, drain)
+                        out["reply"] = None
+                        await client.query(GUEST_TIME_UP if guest else TIME_UP)
+                        try:
+                            await asyncio.wait_for(drain(client), WRAP_UP_S)
+                        except asyncio.TimeoutError:
+                            await self._stop(client, drain)
+                            out["reply"] = out["last"] = CUT_OFF
+                        break
+                if not restart["grants"]:
+                    break
+                # a human widened the sandbox: a running session doesn't pick up new
+                # settings, so the session goes on in a new process that has them, in this
+                # same turn (the member needn't send another message)
+                log("note", "sandbox widened: session restarted with it")
                 out["reply"] = None
-                await client.query(GUEST_TIME_UP if guest else TIME_UP)
-                try:
-                    await asyncio.wait_for(drain(client), WRAP_UP_S)
-                except asyncio.TimeoutError:
-                    await self._stop(client, drain)
-                    out["reply"] = out["last"] = CUT_OFF
+                query = ("[lab] Instead of running your last action outside the sandbox, a "
+                         "human widened your sandbox: " + "; ".join(
+                             _grant_line(g) for g in restart["grants"]) + ". (Your session "
+                         "was restarted to apply it; that's why the action showed as not "
+                         "run.) Retry what you were doing, inside the sandbox (without "
+                         "dangerouslyDisableSandbox). If it's then refused for another host, "
+                         "ask again: retry outside the sandbox.")
+        self._recent_violations[ctx.conv.key] = (time.monotonic(), list(violations))
         reply, last_text = out["reply"], out["last"]
         log("reply", reply or last_text or "")
         return reply or last_text or ""

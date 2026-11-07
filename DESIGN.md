@@ -300,7 +300,9 @@ stays with the admins and their tools.
   that adds them. Within a minute the secretary DMs them.
 - **A Claude agent with instructions, not a scripted flow.** The lab's own `onboarding:`
   section in lab.yaml says what to ask (`ask`: github, manager_name, ssh_key), which keys
-  (`keys`: member-key names, e.g. a W&B key), the admins' own steps (`items`: `{id, text}`,
+  (`keys`: member-key names, e.g. a W&B key; `optional_keys`: ones the newcomer may skip
+  when they don't have them yet, `onboarding_skip_key` or `lab onboarding skip <id> <KEY>`,
+  and store later by DM like any member key), the admins' own steps (`items`: `{id, text}`,
   confirmed by the newcomer) and free-form `instructions` (tips, links, where to get each
   key). The agent follows them, one step per message.
 - **The checklist is code**, computed every time from the stored answers and secrets,
@@ -380,7 +382,10 @@ When a human answers a request, they choose how far the answer reaches:
 - **Allow *X* for 1 hour** or **for this task**: a **grant** that widens the sandbox (a
   domain, a writable path, or a tool) with an expiry. The agent's session restarts with
   the wider sandbox and is told what changed (a running session doesn't pick up a changed
-  allowlist; resuming is seamless).
+  allowlist; resuming is seamless). A manager's session restarts within the same reply, so
+  the member needn't send another message. The approval also offers the hosts the sandbox
+  refused in the conversation's last half hour, so a program that needs several hosts
+  (a download redirected to another one) can be allowed in one answer.
 - **Deny**, or a typed reply: "no, do it this way" (the reply goes back to the agent).
 
 A grant always widens the **sandbox**; it never means "trust unsandboxed commands for an

@@ -37,7 +37,8 @@ ANSWERS = {
     "ssh_key": "their SSH public key (to log in to their machines)",
 }
 DEFAULT_ASK = ["github", "manager_name"]
-_CONFIG = {"instructions": str, "ask": list, "keys": list, "items": list}
+_CONFIG = {"instructions": str, "ask": list, "keys": list, "optional_keys": list,
+           "items": list}
 
 
 class OnboardingError(ValueError):
@@ -50,6 +51,7 @@ def config(lab):
     return {"instructions": (c.get("instructions") or "").strip(),
             "ask": list(c.get("ask") if c.get("ask") is not None else DEFAULT_ASK),
             "keys": list(c.get("keys") or []),
+            "optional_keys": list(c.get("optional_keys") or []),
             "items": [dict(i) for i in c.get("items") or []]}
 
 
@@ -66,11 +68,16 @@ def check_config(data):
     for a in data.get("ask") or [] if isinstance(data.get("ask"), list) else []:
         if a not in ANSWERS:
             out.append(("onboarding.ask", f"{a!r}: one of {', '.join(ANSWERS)}"))
-    for k in data.get("keys") or [] if isinstance(data.get("keys"), list) else []:
-        try:
-            check_name(k)
-        except MemberEnvError as e:
-            out.append(("onboarding.keys", str(e)))
+    names = {}
+    for where in ("keys", "optional_keys"):
+        for k in data.get(where) or [] if isinstance(data.get(where), list) else []:
+            try:
+                check_name(k)
+            except MemberEnvError as e:
+                out.append((f"onboarding.{where}", str(e)))
+            if k in names:
+                out.append((f"onboarding.{where}", f"{k} is already in onboarding.{names[k]}"))
+            names.setdefault(k, where)
     seen = set()
     for i, it in enumerate(data.get("items") or [] if isinstance(data.get("items"), list)
                            else []):
@@ -162,6 +169,13 @@ def items(lab, rec, intake, full=False):
                     intake.has(rec["id"], "claude-token")))
     for k in c["keys"]:
         out.append(Item(f"key:{k}", f"Their key {k}, stored", intake.has(rec["id"], f"env:{k}")))
+    skipped = rec.get("skipped") or []
+    for k in c["optional_keys"]:
+        stored = intake.has(rec["id"], f"env:{k}")
+        out.append(Item(f"key:{k}", f"Their key {k}, stored (optional: may be skipped, "
+                        "onboarding_skip_key)", stored or k in skipped,
+                        "skipped: they can store it later by DM to the secretary"
+                        if k in skipped and not stored else ""))
     for it in c["items"]:
         out.append(Item(f"item:{it['id']}", it["text"].strip(),
                         it["id"] in (rec.get("confirmed") or [])))
@@ -275,6 +289,17 @@ class Onboardings:
             raise OnboardingError(f"no item {item!r} (items: {', '.join(known) or 'none'})")
         return self.update(oid, lambda r: r.setdefault("confirmed", []).append(item)
                            if item not in r.get("confirmed", []) else None)
+
+    def skip_key(self, lab, oid, name):
+        """Skip an optional key (they don't have it yet): stored later, by DM to the
+        secretary (member_secret), like any member key."""
+        optional = config(lab)["optional_keys"]
+        if name not in optional:
+            raise OnboardingError(
+                f"{name} can't be skipped" if name in config(lab)["keys"] else
+                f"no optional key {name!r} (optional: {', '.join(optional) or 'none'})")
+        return self.update(oid, lambda r: r.setdefault("skipped", []).append(name)
+                           if name not in r.get("skipped", []) else None)
 
     def stop(self, oid):
         return self.update(oid, lambda r: r.__setitem__("stopped", r.get("stopped") or _now()))
