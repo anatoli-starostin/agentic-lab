@@ -824,6 +824,9 @@ class Secretary:
             confirm=lambda item: guard(lambda: (
                 self.onboardings.confirm(self.lab, oid, item),
                 f"confirmed {item}. " + self.onboarding_status(oid))[1]),
+            skip_key=lambda name: guard(lambda: (
+                self.onboardings.skip_key(self.lab, oid, name),
+                f"skipped {name}. " + self.onboarding_status(oid))[1]),
             token=lambda: self.onboarding_secret(oid, "claude-token"),
             key=lambda name: self.onboarding_secret(oid, f"env:{name}"),
             save=self.state.save)
@@ -843,7 +846,8 @@ class Secretary:
         rec = self.onboardings.active().get(oid)
         if rec is None:
             return "this onboarding isn't active"
-        if name.startswith("env:") and name[4:] not in O.config(self.lab)["keys"]:
+        c = O.config(self.lab)
+        if name.startswith("env:") and name[4:] not in c["keys"] + c["optional_keys"]:
             return f"refused: {name[4:]} isn't on the checklist"
         if self.slack is None:
             return "no Slack: an admin runs lab secret request from the console"
