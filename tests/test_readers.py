@@ -71,3 +71,15 @@ def test_agents_files_are_private_by_default():
         assert "UMask=0077" in unit.read_text()
     from agentic_lab.worker.runs import unit_template
     assert "UMask=0077" in unit_template("worker-a", "lab-worker-a")
+
+
+def test_commands_as_the_agent_start_in_the_root_folder():
+    # the apply runs from a folder the agent can't enter (the admin's home): find then
+    # failed after doing its work, and the deploy said files weren't the agent's own
+    lines = readers_script(["alice"], {"lab-w": "/home/lab-w/work"})
+    as_agent = [ln for ln in lines if "runuser" in ln]
+    assert len(as_agent) == 4
+    for ln in as_agent:
+        assert ln.startswith("(cd / && runuser -u lab-w -- "), ln
+    closed = subprocess.run(["bash", "-c", "cd / && pwd"], capture_output=True, text=True)
+    assert closed.stdout.strip() == "/"

@@ -443,17 +443,20 @@ def readers_script(readers, readable):
             lines.append("echo " + q(f"  {user}: its working folder {work} is not directly "
                                      "in its home: not shared"))
             continue
+        # every command as the agent starts in /: the apply's own folder (often the admin's
+        # home) is closed to it, and find fails on that even when everything else works
+        as_agent = f"cd / && runuser -u {q(user)} --"
         lines += [
             # all inside the home as its owner: root never walks paths the agent owns
-            f"runuser -u {q(user)} -- install -d -m 700 {q(work)} {q(work + '/tmp')}",
+            f"({as_agent} install -d -m 700 {q(work)} {q(work + '/tmp')})",
             # everything in the home but the working folder: the agent's alone
-            f"runuser -u {q(user)} -- find -P {q(home)} -mindepth 1 -maxdepth 1 "
-            f"! -path {q(work)} ! -type l -exec chmod go-rwx {{}} + 2>/dev/null || "
+            f"({as_agent} find -P {q(home)} -mindepth 1 -maxdepth 1 "
+            f"! -path {q(work)} ! -type l -exec chmod go-rwx {{}} +) 2>/dev/null || "
             f"echo {q(f'  {user}: some files in its home are not its own: left as they are')}",
             f"[ -L {q(home)} ] || setfacl -m g:lab-readers:x {q(home)}",
-            f"runuser -u {q(user)} -- setfacl -R -P -m g:lab-readers:rX {q(work)} 2>/dev/null "
+            f"({as_agent} setfacl -R -P -m g:lab-readers:rX {q(work)}) 2>/dev/null "
             f"|| echo {q(f'  {user}: some files in {work} are not its own: not shared')}",
-            f"runuser -u {q(user)} -- setfacl -R -P -d -m g:lab-readers:rX {q(work)} "
+            f"({as_agent} setfacl -R -P -d -m g:lab-readers:rX {q(work)}) "
             "2>/dev/null || true",
         ]
     lines.append('echo "  lab-readers: ${members#,} (they may need to log in again)"')
