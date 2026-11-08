@@ -270,7 +270,43 @@ def test_the_secretarys_snapshot_carries_a_workers_activity():
         def known(self):
             return [w]
 
-        async def call(self, aid, tool, args=None, retries=None):
+        async def call(self, aid, tool, args=None, retries=None, connect_timeout=None):
             return {"tasks": {"done": 2}, "activity": act} if tool == "health_check" else []
     snap = asyncio.run(ST.collect(lb, Workers()))
     assert snap["agents"][w]["activity"] == act
+
+
+def test_a_round_asks_all_machines_at_once_with_a_short_connect_timeout(monkeypatch):
+    """Stopped machines each cost a timeout: asked one after another, a lab with most
+    machines off took minutes per round (and as long to notice a machine that's back,
+    e.g. for the catch-up). All at once, a round costs about one timeout."""
+    import time
+    from agentic_lab.manager.workers import WorkerError
+    from agentic_lab.secretary import status as ST
+    lb = registry.load(EXAMPLE)
+    ws = [a for a, x in lb.agents.items() if x.get("role") == "worker"]
+    ms = [a for a, x in lb.agents.items() if x.get("role") == "manager"]
+    assert ws and ms
+    seen = []
+
+    class Workers:
+        def known(self):
+            return ws
+
+        async def call(self, aid, tool, args=None, retries=None, connect_timeout=None):
+            seen.append(("worker", connect_timeout))
+            await asyncio.sleep(0.3)            # a machine that's off: its connect timeout
+            raise WorkerError(f"{aid} unreachable", no_answer=True)
+
+    async def manager_status(lab, m, token, hours=0, now=False, connect_timeout=None):
+        seen.append(("manager", connect_timeout))
+        await asyncio.sleep(0.3)
+        raise ST.httpx2.ConnectTimeout("off")
+    monkeypatch.setattr(ST, "manager_status", manager_status)
+    t0 = time.monotonic()
+    snap = asyncio.run(ST.collect(lb, Workers(), managers={m: "t" for m in ms}))
+    took = time.monotonic() - t0
+    assert took < 0.3 * 2, took                 # not 0.3 s per machine
+    assert all(not snap["agents"][a]["up"] for a in ws + ms)
+    assert {c for _, c in seen} == {ST.CONNECT_S}
+    assert {k for k, _ in seen} == {"worker", "manager"}
