@@ -17,6 +17,7 @@ import os
 import uvicorn
 import yaml
 
+from .. import agent_notes as AN
 from .. import github as GH
 from ..registry import load as load_lab
 from . import tasks as T
@@ -85,6 +86,7 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
     store = T.TaskStore(os.path.expanduser(f"{STATE}/tasks"))
     from .. import member_env as ME
     env = ME.read(STATE)        # its member's own keys (member_env.py): the lab's below win
+    member_keys = sorted(env)   # named in its system prompt (agent_notes.py)
     seat_token = _read_secret(f"{CONFIG}/claude-oauth-token")
     if seat_token:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat_token
@@ -117,7 +119,8 @@ async def serve(lab_path, agent_id, host, port, model=None, names=()):
     runs = RunStore(os.path.expanduser(f"{STATE}/runs"), workdir, agent_id)
     runner = SdkRunner(agent_id, workdir, settings_for, approver=approver,
                        model=model or a.get("model"), env=env, usage=usage, events=events,
-                       prompt_extra=lambda: GH.instructions(lab, agent_id), runs=runs,
+                       prompt_extra=lambda: (GH.instructions(lab, agent_id)
+                                             + AN.instructions(lab, member_keys)), runs=runs,
                        keep_free_gb=a.get("keep_free_gb", KEEP_FREE_GB), live=Live())
 
     async def guardrails():

@@ -18,6 +18,7 @@ from types import SimpleNamespace
 
 import yaml
 
+from .. import agent_notes as AN
 from .. import github as GH
 from ..broker.service import _env_file
 from ..eventlog import EventLog
@@ -248,6 +249,7 @@ async def serve(lab_path, agent_id, host=None, port=None):
         broker, approver = None, NoChannelApprover()
     from .. import member_env as ME
     env = ME.read(STATE)        # its member's own keys (member_env.py): the lab's below win
+    member_keys = sorted(env)   # named in its system prompt (agent_notes.py)
     seat = _read_secret(f"{CONFIG}/claude-oauth-token")
     if seat:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
@@ -274,7 +276,8 @@ async def serve(lab_path, agent_id, host=None, port=None):
 
     brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
                   approver=approver, model=a.get("model"), env=env, usage=usage, events=events,
-                  prompt_extra=lambda: GH.instructions(lab, agent_id),
+                  prompt_extra=lambda: (GH.instructions(lab, agent_id)
+                                        + AN.instructions(lab, member_keys)),
                   turn_budget_s=60 * a.get("turn_budget_min", TURN_BUDGET_S // 60),
                   live=Live())
     members = {(h or {}).get("slack_user"): hid for hid, h in lab.humans.items()
@@ -359,6 +362,7 @@ async def ask(lab_path, agent_id, human, text, wait_s=900):
         approver = BrokerApprover(broker_cfg["url"], broker_cfg["token"])
     from .. import member_env as ME
     env = ME.read(STATE)        # its member's own keys (member_env.py): the lab's below win
+    member_keys = sorted(env)   # named in its system prompt (agent_notes.py)
     seat = _read_secret(f"{CONFIG}/claude-oauth-token")
     if seat:
         env["CLAUDE_CODE_OAUTH_TOKEN"] = seat
@@ -377,7 +381,8 @@ async def ask(lab_path, agent_id, human, text, wait_s=900):
 
     brain = Brain(lab.display_name(agent_id), lab.name, workdir, settings_for,
                   approver=approver or NoChannelApprover(), model=a.get("model"), env=env,
-                  prompt_extra=lambda: GH.instructions(lab, agent_id),
+                  prompt_extra=lambda: (GH.instructions(lab, agent_id)
+                                        + AN.instructions(lab, member_keys)),
                   turn_budget_s=60 * a.get("turn_budget_min", TURN_BUDGET_S // 60))
     io = ConsoleIO()
     mgr = Manager(lab, agent_id, io, brain, workers, broker, state, memory, workdir)
