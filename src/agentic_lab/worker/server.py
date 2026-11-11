@@ -134,7 +134,8 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
 
     # an idle stop under way: no new tasks until then (time.monotonic()), so none is
     # accepted between the secretary's last look at the queue and the machine going off
-    stopping = {"until": 0.0}
+    # (or a catch-up on boot: "update", the machine missed a deploy and is being updated)
+    stopping = {"until": 0.0, "why": "stop"}
     submitting = threading.Lock()       # a submit and the start of a hold never interleave
 
     @mcp.tool(description="Queue a task (first come, first served). `requester` is the "
@@ -144,6 +145,10 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         c = who(ctx, writes=True)
         with submitting:
             if time.monotonic() < stopping["until"]:
+                if stopping["why"] == "update":
+                    raise ToolError(f"{agent_id}'s machine missed a deploy while it was off "
+                                    "and is being updated: no new tasks for a few minutes. "
+                                    "Submit the task again in 3 minutes.")
                 raise ToolError(f"{agent_id}'s machine is being stopped (idle): no new tasks "
                                 "now. Ask the secretary to power it on again, then submit "
                                 "the task again.")
@@ -237,14 +242,16 @@ def build_mcp(agent_id, store: T.TaskStore, access: Access, guardrails, health=N
         who(ctx)
         return await health_now()
 
-    @mcp.tool(description="For the secretary's idle stop: hold new tasks off for `seconds` "
-              "(0 ends a hold), then report health as health_check does. Every task "
-              "submitted before the hold is in the report; any after it is refused.")
-    async def hold_for_stop(ctx: Context, seconds: float = 300) -> dict:
+    @mcp.tool(description="For the secretary's idle stop (`reason` stop) or a catch-up as "
+              "the machine boots (update): hold new tasks off for `seconds` (0 ends a hold), "
+              "then report health as health_check does. Every task submitted before the "
+              "hold is in the report; any after it is refused.")
+    async def hold_for_stop(ctx: Context, seconds: float = 300, reason: str = "stop") -> dict:
         if not who(ctx).readonly:
             raise ToolError("access denied: only the secretary stops machines")
         with submitting:
             stopping["until"] = time.monotonic() + max(0.0, min(seconds, STOP_HOLD_MAX_S))
+            stopping["why"] = "update" if reason == "update" else "stop"
         return await health_now()
 
     async def health_now():

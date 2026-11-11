@@ -449,6 +449,19 @@ async def _hold(workers, aid, seconds):
     return await workers.call(aid, "health_check", retries=0)
 
 
+async def hold_for_update(workers, aid, seconds):
+    """A worker of a host being caught up as it boots (catchup.on_boot) holds new tasks off,
+    and says why. Such a worker runs an older framework: one from before `reason` is held
+    as for a stop (its refusal then says "being stopped")."""
+    try:
+        return await workers.call(aid, "hold_for_stop",
+                                  {"seconds": seconds, "reason": "update"}, retries=0)
+    except Exception as e:
+        if "reason" not in str(e):
+            raise
+    return await _hold(workers, aid, seconds)
+
+
 async def release(lab, host, workers):
     """The idle stop of `host` is called off or failed: its workers take tasks again."""
     for aid, a in lab.agents.items():
