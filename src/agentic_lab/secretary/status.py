@@ -39,11 +39,14 @@ async def broker_overview(url, token):
         return {"error": str(e)}
 
 
-async def manager_status(lab, manager, token, hours=0, now=False):
+async def manager_status(lab, manager, token, hours=0, now=False, connect_timeout=None):
     """A manager's /v1/status (usage, and events for the last `hours`; with `now`, what
-    it's doing right now)."""
+    it's doing right now). `connect_timeout`: how long its machine may take to answer at
+    all (default: the whole timeout)."""
     name, port = lab.address(manager)
-    async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"}, timeout=10) as c:
+    timeout = httpx2.Timeout(10, connect=connect_timeout or 10)
+    async with httpx2.AsyncClient(headers={"Authorization": f"Bearer {token}"},
+                                  timeout=timeout) as c:
         r = await c.get(f"http://{name}:{port}/v1/status",
                         params={"hours": hours, **({"now": 1} if now else {})})
         r.raise_for_status()
@@ -78,6 +81,7 @@ async def check_seat(lab, human, workers: Workers, managers, own=None):
 
 
 RECENT = 10                 # a worker's latest tasks on the dashboard
+CONNECT_S = 5               # a machine that hasn't answered by then is off (not a slow reply)
 
 
 def task_summary(t):
@@ -107,17 +111,18 @@ async def collect(lab, workers: Workers, broker=None, local_units=None, managers
     if own is not None:
         sec_id, own_usage = own
         agents[sec_id].update(up=True, usage=own_usage.load())
-    for m, token in (managers or {}).items():
+    async def one_manager(m, token):
         try:
-            st = await manager_status(lab, m, token)
+            st = await manager_status(lab, m, token, connect_timeout=CONNECT_S)
             agents[m].update(up=True, usage=st.get("usage"), github=st.get("github") or {},
                              applied=st.get("applied"), activity=st.get("activity"))
         except (httpx2.HTTPError, ValueError) as e:
             agents[m].update(up=False, error=str(e))
-    for w in workers.known():
+
+    async def one_worker(w):
         try:
-            h = await workers.call(w, "health_check", retries=0)
-            tasks = await workers.call(w, "list_tasks", retries=0)
+            h = await workers.call(w, "health_check", retries=0, connect_timeout=CONNECT_S)
+            tasks = await workers.call(w, "list_tasks", retries=0, connect_timeout=CONNECT_S)
             agents[w].update(up=True, gpu=h.get("gpu"), gpus=h.get("gpus"),
                              gpu_processes=h.get("gpu_processes"), queue=h.get("tasks"),
                              keep_awake=h.get("keep_awake"), runs=h.get("runs"),
@@ -127,6 +132,11 @@ async def collect(lab, workers: Workers, broker=None, local_units=None, managers
                              recent=[task_summary(t) for t in (tasks or [])[-RECENT:]][::-1])
         except WorkerError as e:
             agents[w].update(up=False, error=str(e))
+
+    # all at once: a stopped machine costs one connect timeout, not one per machine in a row
+    # (with most machines off, rounds took minutes, and so did noticing a machine that's back)
+    await asyncio.gather(*(one_manager(m, t) for m, t in (managers or {}).items()),
+                         *(one_worker(w) for w in workers.known()))
     for aid, unit in (local_units or {}).items():
         agents.setdefault(aid, {})["service"] = await asyncio.to_thread(_unit_state, unit)
 
