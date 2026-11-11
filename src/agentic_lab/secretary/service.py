@@ -87,6 +87,7 @@ class Secretary:
         self.brain, self.state, self.slack = brain, state, slack
         self._locks = {}
         self.events = None
+        self.on_power_on = None     # host -> what to add to the reply (a catch-up on boot)
         self.home_viewers = set()
         self.dashboard_url = f"http://{lab.address(sec_id_of(lab))[0]}:{DASHBOARD_PORT}/"
         sec = next(a for a, x in lab.agents.items() if x.get("role") == "secretary")
@@ -604,8 +605,15 @@ class Secretary:
             self.events.add("power", f"{host} {action} ({why})", host=host, action=action,
                             member=asked_by, why=why)
         verb = "on" if action == "on" else "off"
+        note = ""
+        hook = getattr(self, "on_power_on", None)
+        if action == "on" and hook is not None:
+            try:
+                note = hook(host) or ""
+            except Exception:
+                log.exception("catch-up on boot of %s", host)
         await self.announce(f":electric_plug: {host} powering {verb} ({why}).")
-        return f"{host}: powering {verb}; it takes a minute or two"
+        return f"{host}: powering {verb}; it takes a minute or two" + (f". {note}" if note else "")
 
     async def member_secret(self, action, name, member, asked_by=None, conv=None):
         """A member's own keys for outside services (member_env.py): `list` (names and
@@ -1224,6 +1232,30 @@ async def serve(lab_path, host, port):
             log.exception("catching up hosts failed")
         await intake_watch()
 
+    booting = {}                    # host -> its catch-up on boot (a task)
+
+    def on_power_on(host):
+        """Powered on by the secretary: if it missed a deploy while off, catch it up as it
+        boots, before it takes work (catchup.on_boot)."""
+        if not lab.data.get("auto_catch_up", True) or (
+                booting.get(host) and not booting[host].done()):
+            return None
+        if not CU.missed(catch, latest["state"] or {}, sec_host, host,
+                         os.path.expanduser(SA.CLONE), member_keys()):
+            return None
+
+        async def boot():
+            r = await CU.on_boot(catch, lab, host,
+                                 lambda aid, s: P.hold_for_update(workers, aid, s),
+                                 lambda: P.release(lab, host, workers),
+                                 lambda: SA.start_apply(catch_up=True),
+                                 commit=(CU.target(latest["state"] or {}) or ("",))[0])
+            log.info("catch-up on boot of %s: %s", host, r)
+        booting[host] = asyncio.create_task(boot())
+        return ("It missed a deploy while it was off: I update it as it starts (a few "
+                "minutes more). Until then its workers refuse new tasks, saying so: send "
+                "the task again once I say it's up.")
+
     def member_keys():
         """{host: the revision of the member keys it should run} (member_env.py)."""
         from .. import member_env as ME
@@ -1298,6 +1330,7 @@ async def serve(lab_path, host, port):
     sec = Secretary(lab, latest, workers, brain,
                     ManagerState(os.path.expanduser(f"{STATE}/chat")))
     sec.events = events
+    sec.on_power_on = on_power_on
     slack_env = _env_file(_read_secret(f"{CONFIG}/slack.env"))
     if slack_env.get("SLACK_BOT_TOKEN") and slack_env.get("SLACK_APP_TOKEN"):
         members = {(h or {}).get("slack_user"): hid for hid, h in lab.humans.items()

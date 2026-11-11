@@ -703,6 +703,14 @@ marks stale hosts ("config N commits behind"), compared with `main` when the lab
 runs something unreviewed. `auto_catch_up: false` in `lab.yaml` turns the catch-up off;
 stale hosts are still shown.
 
+A host the secretary powers on is **caught up as it boots** when it missed a deploy by what
+it ran when last seen (kept while it's off): a manager usually powers a GPU host on for a
+task and off right after it, so it's busy all the time it's up and the waiting above never
+finds it free. The reply to the power-on says so; from their first answer its workers
+refuse new tasks ("being updated: submit again in 3 minutes", the idle stop's hold), and
+the catch-up starts at once; the deploy restarts the workers, which ends the hold. A task
+that got there first leaves it to the usual catch-up.
+
 | Command | Does |
 |---|---|
 | `lab init` | the first `lab.yaml` (and `framework.lock`), with names the admin chose |
@@ -812,6 +820,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-10-22 | **Transparent about the lab, private about the work** (#62): members see machines, states, owners and usage, not each other's instructions, results, files or approvals; anonymous viewers and agents see states and counts; admins everything. `visibility: team` to share work. Files from shared workers: the member's own `tasks/<id>/` only. Supersedes "everything is visible". |
 | 2026-11-01 | **The secretary onboards newcomers** (§4.5): only what they can do without an admin; a Claude agent following the lab's instructions, with a checklist computed in code; secrets stored under their future id before they're in lab.yaml. |
 | 2026-11-08 | **Agents are told the lab's conventions** (`agent_notes` in lab.yaml) **and the names of their member keys**: before, a key arrived silently and an agent learned what it was for only when a member said so in a task. Notes are free text, the same for every agent; per-role notes if a lab ever needs them. |
+| 2026-11-11 | **A host that missed a deploy is caught up as the secretary powers it on**, before it takes work: its workers hold new tasks off until the deploy restarts them. |
 | 2026-10-22 | **Hosts that missed a deploy catch up automatically** (#61), to the commit of `main` the rest of the lab runs: triggered by the secretary, deferred while tasks are active, 3 attempts then admins are told; `auto_catch_up: false` to opt out. |
 
 ## 14. Open questions

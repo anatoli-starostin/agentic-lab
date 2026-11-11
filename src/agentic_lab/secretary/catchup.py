@@ -20,6 +20,12 @@ unreviewed commit is left alone (shown, never rolled back).
     that never reports back is given up after RUN_TIMEOUT_MIN;
   - off with `auto_catch_up: false` in lab.yaml (the web UI still shows stale hosts).
 
+A host powered on by the secretary that missed a deploy, by what it ran when it was last
+seen (`CatchUp.seen`), is caught up as it boots (on_boot): a manager usually powers a GPU
+host on for a task and off right after it, so it's busy all the time it's up, and the
+catch-up above would never reach it. Its workers refuse new tasks from their first answer
+(the hold the idle stop uses, as "being updated") until the deploy restarts them.
+
 Which commit is older is git's answer in the secretary's clone of the config repo. Before
 deciding, the clone is made to know the lab's commit (cloned, or main fetched: `refresh`,
 at most every CHECK_GAP_MIN per commit, #95). If it still can't, nothing is deployed, the
@@ -44,6 +50,9 @@ BUSY_NOTICE_H = 6           # a host busy this long is said (once), and asked le
 BUSY_GAP_MIN = 15           # then
 OUTCOME = re.compile(r"^CATCH-UP (\S+) (\w+)", re.M)     # deploy() prints one per host
 CHECK_GAP_MIN = 10          # between two tries to make the clone know a commit (#95)
+BOOT_WAIT_S = 600           # how long a host powered on to be caught up is waited for
+BOOT_POLL_S = 5             # how often its workers are asked meanwhile
+UPDATE_HOLD_S = 600         # new tasks refused this long (a deploy restarts the worker sooner)
 
 log = logging.getLogger("agentic_lab.secretary.catchup")
 
@@ -198,6 +207,7 @@ class CatchUp:
         self.checked = d.get("checked") or {}      # commit -> {"ok", "last"}: clone knows it?
         self.blocked = d.get("blocked") or {}      # commit -> why the clone can't tell
         self.blocked_said = d.get("blocked_said") or {}    # commit -> told the admins
+        self.seen = d.get("seen") or {}            # host -> what it ran when last up
 
     def save(self):
         os.makedirs(os.path.dirname(self.path), mode=0o700, exist_ok=True)
@@ -207,7 +217,7 @@ class CatchUp:
                        "gave_up": self.gave_up, "last_start": self.last_start,
                        "awaiting": self.awaiting, "busy": self.busy,
                        "checked": self.checked, "blocked": self.blocked,
-                       "blocked_said": self.blocked_said}, f)
+                       "blocked_said": self.blocked_said, "seen": self.seen}, f)
         os.replace(tmp, self.path)
 
     def _attempt(self, host, commit, now):
@@ -269,6 +279,81 @@ async def _refresh(cu, lab, refresh, commit, hosts, announce, now):
     cu.blocked_said.pop(commit, None)       # a later break of it is told again
 
 
+def remember(cu, state, sec_host):
+    """What each host runs, from its agents that are up: kept for when it's off (missed)."""
+    for a in ((state or {}).get("agents") or {}).values():
+        if a.get("up") and a.get("applied") and a.get("host") not in (None, sec_host):
+            cu.seen[a["host"]] = a["applied"]
+
+
+def missed(cu, state, sec_host, host, repo, keys=None):
+    """Did `host` miss a deploy, by what it ran when it was last up? Like behind(): an older
+    reviewed commit of main, or the lab's commit with other member keys."""
+    want, ap = target(state), cu.seen.get(host)
+    if want is None or not ap or host == sec_host or ap.get("unreviewed"):
+        return False
+    return bool(is_ancestor(repo, ap.get("config_commit"), want[0])) or (
+        ap.get("config_commit") == want[0] and keys_differ(ap, host, keys))
+
+
+async def on_boot(cu, lab, host, hold, release, start, commit=None, now=None,
+                  sleep=asyncio.sleep, clock=None):
+    """`host` was just powered on and missed() a deploy: catch it up before it takes work.
+    Its workers are asked every BOOT_POLL_S until they answer, each told to hold new tasks
+    off (`hold(aid, seconds)`, async, -> its health; raises while it isn't up); once all
+    hold and none has work (a task sent before the hold), the catch-up starts at once
+    (`start()`, as in step()) and step() announces the host once it runs `commit`. A deploy
+    restarts the workers, which ends the hold; one that fails leaves it to run out
+    (UPDATE_HOLD_S) and step() to try again. A host without workers takes no tasks: left
+    to step(). Returns: started | not up | busy | failed | no workers | off."""
+    if not lab.data.get("auto_catch_up", True):
+        return "off"
+    clock = clock or (lambda: asyncio.get_running_loop().time())
+    workers = [aid for aid, a in lab.agents.items()
+               if a.get("host") == host and a.get("role") == "worker"]
+    if not workers:
+        return "no workers"
+    end = clock() + BOOT_WAIT_S
+    health, pending = {}, list(workers)
+    while pending:
+        for aid in list(pending):
+            try:
+                health[aid] = await hold(aid, UPDATE_HOLD_S)
+                pending.remove(aid)
+            except Exception:
+                pass                            # not up yet
+        if pending:
+            if clock() >= end:
+                if health:
+                    await release()
+                return "not up"
+            await sleep(BOOT_POLL_S)
+    for aid, h in health.items():
+        if {k: v for k, v in ((h or {}).get("tasks") or {}).items() if k in ACTIVE and v}:
+            await release()                     # a task got there first: step() waits
+            return "busy"
+    while True:
+        if cu.running and host in cu.running.get("hosts", []):
+            return "started"                    # step() got there first
+        try:
+            path = await asyncio.to_thread(start)
+            break
+        except Exception as e:
+            if "already running" in str(e) and clock() < end:
+                await sleep(BOOT_POLL_S)        # another deploy: wait for it
+                continue
+            await release()
+            log.warning("catch-up on boot of %s: %s", host, e)
+            return "failed"
+    # step() leaves it to finish (the deploy lock) and sees the host current after it
+    cu.last_start = (now or _now()).isoformat(timespec="seconds")
+    if commit:
+        cu.awaiting[host] = commit              # step() says it's up once it reports it
+    cu.save()
+    log.info("catch-up on boot of %s: %s", host, path)
+    return "started"
+
+
 async def step(cu, lab, state, sec_host, start, result, announce, repo=None, now=None,
                refresh=None, keys=None):
     """One round. `start()` starts `lab apply-main --catch-up` and returns its log (raises
@@ -282,6 +367,7 @@ async def step(cu, lab, state, sec_host, start, result, announce, repo=None, now
     if want is None:
         return
     commit = want[0]
+    remember(cu, state, sec_host)
     other = differing(state, sec_host, keys=keys)
     if refresh is not None and other and lab.data.get("auto_catch_up", True):
         await _refresh(cu, lab, refresh, commit, sorted(other), announce, now)
