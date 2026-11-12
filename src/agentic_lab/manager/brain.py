@@ -18,6 +18,7 @@ from claude_agent_sdk import (AssistantMessage, ClaudeAgentOptions, ClaudeSDKCli
                               ToolUseBlock, UserMessage)
 
 from ..eventlog import TurnClock, tool_summary
+from .memory import OFF as OFF_MEMORY
 
 from ..policy.confine import approved_input
 from ..policy.grants import Grant
@@ -62,9 +63,11 @@ agents. You talk with lab members in Slack and get work done through worker agen
   you can't see (a message "above", a file posted earlier, another thread), read_channel,
   with download_files for its attachments, before saying you can't see it. If a worker needs one, send_file_to_worker
   first and give the worker its path. Results go back with post_worker_file / post_file.
-- Memory: at the start of a private conversation, `recall` what you know about the member;
-  `remember` durable things worth knowing next time (projects, preferences, decisions).
-  Channel threads have no memory: use only the thread itself.
+- Memory: your memory is Claude Code's (its index, MEMORY.md, is in your context; one file
+  per memory). It's your member's: it's there in their DMs and in their turns in channel
+  threads (on a manager several members share, each has their own). Save what's worth
+  knowing next time: projects, preferences, how they like answers, decisions. Others may
+  read a channel thread: bring up what's in memory there only as the work needs it.
 - Several agents may be in a channel thread. If a message there isn't for you (it's for
   someone else, or needs no answer), reply with exactly <silent> and nothing else.
 - Your Bash commands run in a sandbox: no internet except allowed hosts, writes only in
@@ -222,10 +225,15 @@ class Brain:
                     ". Your session restarts now with the wider sandbox."))
             return PermissionResultDeny(message=d.message)
 
+        memory = getattr(ctx, "memory", None)    # whose memory this turn gets (memory.py)
+        mem_settings, mem_env = (memory.for_turn(ctx.requester, guest) if memory is not None
+                                 else ({}, dict(OFF_MEMORY) if guest else {}))
+
         def options():
             return ClaudeAgentOptions(
                 cwd=self.workdir,
-                settings=json.dumps(self.settings_for([_grant(g) for g in grants])),
+                settings=json.dumps({**self.settings_for([_grant(g) for g in grants]),
+                                     **mem_settings}),
                 setting_sources=[],
                 permission_mode="default",
                 can_use_tool=can_use_tool,
@@ -241,7 +249,7 @@ class Brain:
                                                  else self.prompt_extra))},
                 model=self.model, cli_path=self.cli_path,
                 env={**{k: v for k, v in self.env.items() if not (guest and k in GIT_ENV)},
-                     **NO_BACKGROUND_ENV},
+                     **NO_BACKGROUND_ENV, **mem_env},
                 resume=ctx.conv.session_id)
 
         out = {"reply": None, "last": None}

@@ -265,7 +265,11 @@ async def serve(lab_path, agent_id, host=None, port=None):
         env["TMPDIR"] = tmpdir
     state_root = os.path.expanduser(STATE)
     state = ManagerState(state_root)
-    memory = Memory(os.path.join(state_root, "memory"), shared=a.get("access") == "shared")
+    memory = Memory(os.path.join(state_root, "memory"), shared=a.get("access") == "shared",
+                    workdir=workdir)
+    moved = memory.migrate()            # the lab's old notes, into Claude Code's memory
+    if moved:
+        log.info("moved the old notes %s into the members' memory", ", ".join(moved))
     usage = UsageLog(os.path.join(state_root, "usage.json"))
     events = EventLog(os.path.join(state_root, "events"))
     events.prune()
@@ -373,7 +377,8 @@ async def ask(lab_path, agent_id, human, text, wait_s=900):
     safefs.pin(workdir)         # resolved once: its file operations stay there
     state_root = os.path.expanduser(STATE)
     state = ManagerState(os.path.join(state_root, "cli"))
-    memory = Memory(os.path.join(state_root, "memory"), shared=a.get("access") == "shared")
+    memory = Memory(os.path.join(state_root, "memory"), shared=a.get("access") == "shared",
+                    workdir=workdir)
 
     def settings_for(grants):
         return lab.agent_settings(agent_id, extra_grants=grants,
