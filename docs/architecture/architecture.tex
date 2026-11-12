@@ -255,7 +255,7 @@ services, never by sandboxed agent commands, except GitHub for an agent with a b
       \item \code{\textasciitilde/.config/agentic-lab}: its service's secrets (Claude token,
         Slack tokens, lab tokens, GitHub token), \emph{not readable} by its sandbox;
       \item \code{\textasciitilde/.local/state/agentic-lab}: the service's state (task
-        queue, memory, usage, event log), \emph{not readable} by its sandbox.
+        queue, usage, event log), \emph{not readable} by its sandbox.
     \end{itemize}
   \item \textbf{Claude}: \code{human:} on an agent says whose Claude seat it runs on (a
     \code{claude setup-token} token, valid a year). The token reaches Claude Code as an
@@ -367,10 +367,12 @@ sandbox violations that explain it.
     a dedicated manager, other members are \emph{guests} (\S6.3).
   \item \textbf{Tools}: list workers, submit and follow tasks, pending approvals and notes
     on them, post files, fetch a worker's file into the conversation, send a file to a
-    worker, \code{recall} and \code{remember}.
-  \item \textbf{Memory}: durable notes about members and their work. A dedicated manager has
-    one memory; a shared manager keeps one per member, separated by code (private
-    conversations stay private).
+    worker, read the channel.
+  \item \textbf{Memory}: Claude Code's own (an index, \code{MEMORY.md}, loaded into every
+    session, and a file per memory, which the agent writes itself): members' preferences,
+    projects and decisions. A dedicated manager has one, its member's, in their DMs and their
+    turns in channel threads alike; a shared manager has one per member, chosen by code for
+    each turn (\code{autoMemoryDirectory}); a guest's turn has none.
   \item \textbf{Follow-up}: a background loop posts each task's progress and result in the
     conversation that started it, mentioning the requester.
   \item \textbf{Staying reachable}: a manager runs one turn at a time \emph{per
@@ -406,8 +408,8 @@ Every manager and worker has an \code{access} setting in \code{lab.yaml}: \code{
 \medskip
 \textbf{Guests} of a dedicated manager only talk with it. In a guest's conversation, code
 (not the prompt) takes away every tool: no commands or files, no worker tasks, no GitHub
-(its bot's token is left out), nothing outside the sandbox, and no memory (the member's
-private notes stay private). A guest's turns are cut off after 2 minutes. Asked for real
+(its bot's token is left out), nothing outside the sandbox, and no memory (Claude Code's is
+switched off for the turn: the member's notes stay private). A guest's turns are cut off after 2 minutes. Asked for real
 work, the manager says whose manager it is and points to the guest's own manager or a
 shared one. In the owner's thread, a guest's turn never resumes the owner's session: it
 starts afresh from the thread as everyone sees it, and the owner's next turn gets a short

@@ -17,7 +17,7 @@ from .workers import WorkerError
 
 TOOL_NAMES = ("list_workers", "submit_task", "my_tasks", "task_status", "task_result",
               "cancel_task", "pending_approvals", "add_approval_note", "post_file",
-              "post_worker_file", "send_file_to_worker", "recall", "remember",
+              "post_worker_file", "send_file_to_worker",
               "read_channel")
 LAB_TOOLS = tuple(f"mcp__lab__{n}" for n in TOOL_NAMES)
 
@@ -115,7 +115,7 @@ def visible(ctx, task):
 def build(ctx):
     """`ctx` carries: workers (Workers), broker (BrokerClient or None), state
     (ManagerState), conv (Conversation), requester (human id), private (a DM?), memory
-    (Memory), workdir, slack (poster with `upload(channel, thread_ts, path, title,
+    (Memory: whose memory a turn gets), workdir, slack (poster with `upload(channel, thread_ts, path, title,
     comment)`), describe_workers() -> list."""
 
     @tool("list_workers", "The workers this manager can use, with their status and queue.", {})
@@ -274,16 +274,6 @@ def build(ctx):
             return _err(e)
         return _text(f"sent; on {args['worker']} it is at {r['path']}")
 
-    @tool("recall", "What you remember about the member you're talking with (their projects, "
-          "preferences, ongoing work). Empty in channel threads.", {})
-    async def recall(args):
-        return _text(ctx.memory.recall(ctx.requester, ctx.private))
-
-    @tool("remember", "Remember a durable fact about the member or their work, for later "
-          "conversations with them (not in channel threads).", {"note": str})
-    async def remember(args):
-        return _text(ctx.memory.remember(ctx.requester, ctx.private, args["note"]))
-
     @tool("read_channel", "Read the Slack channel this conversation is in, beyond this "
           "thread: its top level (recent messages, newest last, each with its ts, files and "
           "thread), or one of its threads (`thread`: the ts a listing shows). "
@@ -325,4 +315,4 @@ def build(ctx):
     return create_sdk_mcp_server("lab", tools=[
         list_workers, submit_task, my_tasks, task_status, task_result, cancel_task,
         pending_approvals, add_approval_note, post_file, post_worker_file,
-        send_file_to_worker, recall, remember, read_channel])
+        send_file_to_worker, read_channel])

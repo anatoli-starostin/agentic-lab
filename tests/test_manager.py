@@ -1,5 +1,7 @@
 """The manager: broker integration, memory, visibility, Slack routing, follow-ups, manifests."""
 import asyncio
+import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -8,6 +10,7 @@ import pytest
 from agentic_lab import registry, slack_manifest
 from agentic_lab.broker import core as C
 from agentic_lab.manager import followup
+from agentic_lab.manager.memory import OFF as Memory_OFF
 from agentic_lab.manager.memory import Memory
 from agentic_lab.manager.service import compose
 from agentic_lab.manager.state import ManagerState
@@ -67,16 +70,45 @@ def test_managers_see_and_annotate_their_requests_only(broker):
 
 # ── memory and visibility ────────────────────────────────────────────────────
 
-def test_memory_dedicated_shared_and_threads(tmp_path):
-    shared = Memory(tmp_path / "s", shared=True)
-    shared.remember("alice", True, "works on LUT pooling")
-    assert "LUT pooling" in shared.recall("alice", True)
-    assert "LUT pooling" not in shared.recall("bob", True)             # per member
-    assert "no memory in channel threads" in shared.recall("alice", False)
-    assert "not remembered" in shared.remember("alice", False, "x")
-    dedicated = Memory(tmp_path / "d", shared=False)
-    dedicated.remember("alice", True, "prefers short summaries")
-    assert "short summaries" in dedicated.recall("alice", True)
+def test_memory_is_claude_codes_and_whose_it_is(tmp_path):
+    """A dedicated manager's memory is Claude Code's own folder for its working folder, in
+    its member's DMs and channel threads alike; a shared manager has a folder per member;
+    a guest's turn has none."""
+    home = str(tmp_path / "home")
+    dedicated = Memory(tmp_path / "d", shared=False, workdir="/home/lab-mgr-x/scratch", home=home)
+    assert dedicated.for_turn("alice") == ({}, {})                     # DM or thread: same
+    assert dedicated.for_turn("bob", guest=True) == ({}, Memory_OFF)
+    assert dedicated.folder("alice") == (f"{home}/.claude/projects/"
+                                         "-home-lab-mgr-x-scratch/memory")
+    shared = Memory(tmp_path / "s", shared=True, workdir="/w", home=home)
+    a, _ = shared.for_turn("alice")
+    b, _ = shared.for_turn("bob")
+    assert a["autoMemoryDirectory"] != b["autoMemoryDirectory"]        # per member
+    assert os.path.isdir(a["autoMemoryDirectory"])
+    assert shared.for_turn("../etc") == ({}, Memory_OFF)
+
+
+def test_the_old_notes_move_into_the_members_memory(tmp_path):
+    home = str(tmp_path / "home")
+    old = tmp_path / "d"
+    old.mkdir()
+    (old / "notes.md").write_text("- 2026-11-01: works on LUT pooling\n")
+    m = Memory(old, shared=False, workdir="/w", home=home)
+    d = m.folder("alice")
+    os.makedirs(d)
+    with open(os.path.join(d, "MEMORY.md"), "w") as f:
+        f.write("- [Report format](report.md) — how to write to her")      # no newline
+    assert m.migrate(today="2026-11-12") == ["notes.md"]
+    assert "LUT pooling" in open(os.path.join(d, "lab-notes.md")).read()
+    index = open(os.path.join(d, "MEMORY.md")).read().splitlines()
+    assert index[0].startswith("- [Report format]") and "(lab-notes.md)" in index[1]
+    assert (old / "notes.md.migrated").exists() and m.migrate() == []      # once
+    shared_old = tmp_path / "s"
+    shared_old.mkdir()
+    (shared_old / "member-bob.md").write_text("- prefers tables\n")
+    s = Memory(shared_old, shared=True, workdir="/w", home=home)
+    assert s.migrate() == ["member-bob.md"]
+    assert "tables" in open(os.path.join(s.folder("bob"), "lab-notes.md")).read()
 
 
 def test_task_visibility(tmp_path):
@@ -502,6 +534,7 @@ def test_guest_mode(monkeypatch):
     assert o.mcp_servers == {} and o.allowed_tools == []
     assert {"Bash", "Read", "WebFetch"} <= set(o.disallowed_tools)
     assert "GH_TOKEN" not in o.env and o.env["CLAUDE_CODE_OAUTH_TOKEN"] == "seat"
+    assert o.env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"           # not the owner's memory
     prompt = o.system_prompt["append"]
     assert "Bob" in prompt and "guest" in prompt and "flash-bot" not in prompt
     assert clients[-1].queries[1] == B.GUEST_TIME_UP          # 0.2 s guest limit hit
@@ -513,6 +546,7 @@ def test_guest_mode(monkeypatch):
     asyncio.run(br.turn(ctx(False), "hi"))                    # the owner: everything
     o = clients[-1].options
     assert "lab" in o.mcp_servers and o.env["GH_TOKEN"] == "ghp_x"
+    assert "CLAUDE_CODE_DISABLE_AUTO_MEMORY" not in o.env
     assert "flash-bot" in o.system_prompt["append"]
     # a manager's turn is one process: nothing may run in the background past the reply
     assert o.env["CLAUDE_CODE_DISABLE_BACKGROUND_TASKS"] == "1"
@@ -880,3 +914,33 @@ def test_a_manager_doesnt_sit_waiting_on_long_work():
     from agentic_lab.manager import brain as B
     p = B.system_prompt("Flash", "lab")
     assert "Don't sit waiting on something long" in p and "Give it to a worker" in p
+
+
+def test_a_shared_managers_turn_gets_that_members_memory_folder(tmp_path):
+    from agentic_lab.manager import brain as B
+    clients = []
+
+    class Quick(_FakeClient):
+        receive_response = _quick
+
+    def factory(options):
+        clients.append(Quick(options))
+        return clients[-1]
+    br = B.Brain("Flash", "lab", "/tmp", lambda grants: {"sandbox": {"enabled": True}},
+                 turn_budget_s=300)
+    br.client_factory = factory
+    mem = Memory(tmp_path / "m", shared=True, workdir="/tmp", home=str(tmp_path / "home"))
+    conv = SimpleNamespace(key="c", session_id=None)
+    for who in ("alice", "bob"):
+        ctx = SimpleNamespace(conv=conv, requester=who, memory=mem,
+                              state=SimpleNamespace(save=lambda: None))
+        clients.clear()
+        asyncio.run(br.turn(ctx, "hi"))
+        settings = json.loads(clients[-1].options.settings)
+        assert settings["sandbox"] == {"enabled": True}                # the lab's, kept
+        assert settings["autoMemoryDirectory"] == mem.folder(who)
+
+
+async def _quick(self):
+    from claude_agent_sdk import AssistantMessage, TextBlock
+    yield AssistantMessage(content=[TextBlock(text="ok")], model="m")

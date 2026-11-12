@@ -216,6 +216,12 @@ deployment's own `lab.yaml` (in its private config repository) and secret files.
 - Attached to a human **for tokens**; **access** `dedicated` (its member gets everything;
   other members are **guests**) or `shared` (every member gets everything, with a
   separate memory per member, enforced in code).
+- **Memory** is Claude Code's own: its memory folder, whose index (MEMORY.md) is loaded
+  into every session and which the agent writes itself. The code decides whose a turn gets
+  (manager/memory.py): a dedicated manager's is its member's, in their DMs and their turns
+  in channel threads alike; a shared manager's turn gets the folder of the member talking
+  (`autoMemoryDirectory`); a guest's turn gets none (`CLAUDE_CODE_DISABLE_AUTO_MEMORY`).
+  The lab's earlier notes (`recall`/`remember`, DMs only) were moved into it.
 - **Guests** only talk: questions, explanations, scientific discussion. In a guest's
   conversation code removes every tool (commands, files, worker tasks, GitHub — the bot's
   token is left out — anything outside the sandbox, memory), and turns are cut off after
@@ -821,6 +827,7 @@ host, each agent its own user: `examples/single-vm/lab.yaml`).
 | 2026-11-01 | **The secretary onboards newcomers** (§4.5): only what they can do without an admin; a Claude agent following the lab's instructions, with a checklist computed in code; secrets stored under their future id before they're in lab.yaml. |
 | 2026-11-08 | **Agents are told the lab's conventions** (`agent_notes` in lab.yaml) **and the names of their member keys**: before, a key arrived silently and an agent learned what it was for only when a member said so in a task. Notes are free text, the same for every agent; per-role notes if a lab ever needs them. |
 | 2026-11-11 | **A host that missed a deploy is caught up as the secretary powers it on**, before it takes work: its workers hold new tasks off until the deploy restarts them. |
+| 2026-11-12 | **One memory: Claude Code's.** A manager's memory loads in its member's channel threads too, not in a guest's turn, and per member on a shared manager; the lab's own `recall`/`remember` notes are moved into it. |
 | 2026-10-22 | **Hosts that missed a deploy catch up automatically** (#61), to the commit of `main` the rest of the lab runs: triggered by the secretary, deferred while tasks are active, 3 attempts then admins are told; `auto_catch_up: false` to opt out. |
 
 ## 14. Open questions
