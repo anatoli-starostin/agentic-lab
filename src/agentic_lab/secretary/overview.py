@@ -2,12 +2,14 @@
 and the web UI both render it, so they say the same thing.
 
     host:  {word, level, hint}   running / stopped / starting / stopping / always on /
-                                 unreachable / no agents / power unknown
-    agent: {word, level, hint, reason, since}   up / host stopped / down
+                                 off / unreachable / no agents / power unknown
+    agent: {word, level, hint, reason, since}   up / host stopped / host off / down
 
 `level` (ok / warn / bad / muted) is how each view colours it. An agent that doesn't
 answer is "host stopped" when its host is powered off (expected: the secretary can power it
-on), and "down" with the reason and since when otherwise (a real problem).
+on), "host off" when its host is one its owner switches off (`may_be_off: true`, e.g. a
+home PC: the lab can't power it and not answering is normal), and "down" with the reason and
+since when otherwise (a real problem).
 """
 import datetime as dt
 
@@ -17,6 +19,7 @@ POWER = {"RUNNING": ("running", "ok"), "STOPPED": ("stopped", "muted"),
          "STARTING": ("starting", "warn"), "STOPPING": ("stopping", "warn"),
          "DELETED": ("deleted", "bad")}
 OFF = ("stopped", "stopping", "starting")
+OWNER_OFF = "switched off by its owner (the lab doesn't power it)"
 
 
 def _now():
@@ -38,6 +41,8 @@ def host_status(host, v, lab, agents, sec_host):
         return {"word": "no agents", "level": "muted", "hint": "no power control"}
     if any(a.get("up") for a in here):
         return {"word": "running", "level": "ok", "hint": "no power control"}
+    if (lab.hosts.get(host) or {}).get("may_be_off"):
+        return {"word": "off", "level": "muted", "hint": OWNER_OFF}
     return {"word": "unreachable", "level": "bad",
             "hint": "no power control; its agents don't answer"}
 
@@ -49,6 +54,8 @@ def agent_status(aid, a, host, prev, now, state, lab):
             busy = P.manager_busy(a.get("name") or aid, a, P._pending(state, aid))
             out["hint"] = f"busy: {busy}" if busy else "idle"
         return out
+    if (host.get("status") or {}).get("word") == "off":
+        return {"word": "host off", "level": "muted", "hint": OWNER_OFF}
     if (host.get("status") or {}).get("word") in OFF:
         return {"word": "host stopped", "level": "muted",
                 "hint": "ask the secretary to power it on (its member or an admin)"}
