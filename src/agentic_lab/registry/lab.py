@@ -85,7 +85,9 @@ _HOST = {"kind": (str, True), "provider": (str, False), "instance": (str, False)
          "ssh_user": (str, False),      # who `lab apply` logs in as (default: the admin)
          "idle_stop_with_managers": (bool, False),  # default true; false: managers keep it busy
          # Linux users here who may read its agents' working folders (#43; lab-readers)
-         "readers": (list, False)}
+         "readers": (list, False),
+         # a machine its owner switches off (a home PC): not answering is "off", not a problem
+         "may_be_off": (bool, False)}
 _GITHUB = {"accounts": (dict, True)}
 # a bot account (a GitHub machine user) an agent acts as
 # a GitHub identity: a bot account (a machine user, with a fine-grained token), or a GitHub
@@ -332,6 +334,9 @@ def check(lab: Lab, today: dt.date | None = None):
         if h.get("kind") != "cloud" and stop:
             W(where, "idle_stop_min only applies to cloud hosts (the secretary can't power "
                      "this one)")
+        if h.get("kind") == "cloud" and h.get("may_be_off"):
+            W(where, "may_be_off is for hosts the lab can't power (kind: onprem): a cloud "
+                     "host's power state is known")
         for r in h.get("readers") or []:
             if not isinstance(r, str) or not _UNIX_USER.match(r):
                 E(where, f"readers: {r!r} isn't a Linux user name")

@@ -213,6 +213,10 @@ admin says so explicitly in the chat: "yes, run sudo lab apply". That's expected
      deploy gets it from the next catch-up.
    - **A worker without a GPU** (a CPU VM): set `gpu: false` on its agent, so its sandbox
      doesn't look for one and `lab doctor` doesn't report a missing GPU.
+   - **A machine its owner switches off** (a member's own PC, `kind: onprem`): the lab never
+     powers it, and catch-up deploys it whenever it's back. Set `may_be_off: true` on the
+     host, so the web UI and the Home tab show it as "off" (grey) while it doesn't answer,
+     not "unreachable" (red).
    - **Turn off what the image runs but the lab doesn't need.** Cloud GPU images may run
      services on all interfaces (e.g. `rpcbind` on port 111); sandboxed agents can reach
      every tailnet host, so disable them (`sudo systemctl disable --now rpcbind

@@ -160,6 +160,14 @@ def test_warnings(lab_dir):
     assert not any("on-prem" in w for w in warns)       # a cloud secretary host is fine
 
 
+def test_may_be_off_is_for_hosts_the_lab_cant_power(lab_dir):
+    ok = edit(lab_dir, lambda d: d["hosts"]["nuc-01"].update(may_be_off=True))
+    assert not [i for i in ok if "may_be_off" in i.message]
+    cloud = edit(lab_dir, lambda d: d["hosts"]["nuc-01"].update(
+        kind="cloud", provider="nebius", idle_stop_min=0, may_be_off=True))
+    assert any(i.level == "warning" and "may_be_off" in i.message for i in cloud)
+
+
 def test_dedicated_worker_without_manager_warns(lab_dir):
     def mutate(d):
         d["humans"]["bob"] = {}

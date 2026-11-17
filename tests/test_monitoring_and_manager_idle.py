@@ -57,6 +57,22 @@ def test_a_host_without_power_control_is_judged_by_its_agents():
     assert down["hosts"]["onprem-1"]["status"]["word"] == "unreachable"
 
 
+def test_a_host_its_owner_switches_off_is_off_not_unreachable():
+    lb = lab()
+    w = next(a for a, x in lb.agents.items() if x.get("role") == "worker")
+    lb.agents[w]["host"] = "onprem-1"
+    lb.hosts["onprem-1"]["may_be_off"] = True
+    off = OV.annotate(snapshot(lb, {w: {"up": False, "error": "ConnectTimeout"}}), lb,
+                      sec_host(lb))
+    assert off["hosts"]["onprem-1"]["status"] == {"word": "off", "level": "muted",
+                                                  "hint": OV.OWNER_OFF}
+    st = off["agents"][w]["status"]
+    assert st["word"] == "host off" and st["level"] == "muted"
+    on = OV.annotate(snapshot(lb, {}), lb, sec_host(lb))          # when it's on: as before
+    assert on["hosts"]["onprem-1"]["status"]["word"] == "running"
+    assert on["agents"][w]["status"]["word"] == "up"
+
+
 def test_stopped_is_not_down():
     lb = lab()
     w = next(a for a, x in lb.agents.items() if x.get("role") == "worker")
