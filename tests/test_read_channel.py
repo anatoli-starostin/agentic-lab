@@ -88,7 +88,10 @@ def test_a_slack_failure_leaves_out_the_recent_messages():
     assert seen[0].channel_recent == []
 
 
-def test_read_channel_lists_the_top_level_or_a_thread():
+def test_read_channel_lists_the_top_level_or_a_thread(monkeypatch):
+    # its window ("the last 72 hours") is counted from the clock: hold the clock at NOW, or
+    # the fixed timestamps below fall out of it once real time is 3 days past NOW
+    monkeypatch.setattr("agentic_lab.slackio.time.time", lambda: NOW)
     web = Web(history=[msg(NOW - 3600 * i, "U-EUG", f"m{i}") for i in range(5, 0, -1)]
               + [msg(NOW - 100, "U-EUG", "a thread start", reply_count=3,
                      thread_ts=f"{NOW - 100:.6f}")],
